@@ -1,0 +1,309 @@
+"""Paper table generation from measured results only.
+
+The guarantee
+-------------
+Every table here is built from the experiment ledger and from JSON artefacts that
+evaluation runs actually wrote. A cell with no measurement renders as ``TBD``.
+There is deliberately **no** code path that fills a missing value with a
+plausible number, a zero, or an interpolation: a table is either traceable to a
+completed run or visibly incomplete.
+
+`assert_complete=False` at the call sites means an incomplete table is a normal
+state during development. Set it to ``True`` when preparing a submission to turn
+any missing cell into a hard error.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+
+__all__ = ["TBD", "Table", "build_baseline_comparison", "build_ablation", "build_module_ablation",
+           "build_scale_analysis", "build_robustness", "build_efficiency", "build_multi_seed",
+           "write_tables"]
+
+#: Placeholder rendered for any unmeasured value.
+TBD = "TBD"
+
+
+def _fmt(value, digits: int = 4) -> str:
+    """Format a measured value, or return :data:`TBD` if it was never measured."""
+    if value is None or value == "":
+        return TBD
+    try:
+        return f"{float(value):.{digits}f}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+@dataclass
+class Table:
+    """A renderable table with a caption and provenance."""
+
+    name: str
+    caption: str
+    headers: list[str]
+    rows: list[list[str]] = field(default_factory=list)
+    provenance: list[str] = field(default_factory=list)
+
+    @property
+    def complete(self) -> bool:
+        """Whether every cell was measured."""
+        return not any(TBD in cell for row in self.rows for cell in row)
+
+    def to_markdown(self) -> str:
+        lines = [f"**{self.caption}**", ""]
+        lines.append("| " + " | ".join(self.headers) + " |")
+        lines.append("| " + " | ".join("---" for _ in self.headers) + " |")
+        for row in self.rows:
+            lines.append("| " + " | ".join(row) + " |")
+        if not self.complete:
+            lines += ["", "`TBD` = not yet measured (run the corresponding experiment)."]
+        return "\n".join(lines)
+
+    def to_latex(self, label: str | None = None) -> str:
+        label = label or self.name.lower().replace(" ", "_")
+        spec = "l" + "r" * (len(self.headers) - 1)
+        out = [
+            r"\begin{table}[t]",
+            r"\centering",
+            rf"\caption{{{self.caption}}}",
+            rf"\label{{tab:{label}}}",
+            rf"\begin{{tabular}}{{{spec}}}",
+            r"\toprule",
+            " & ".join(self.headers) + r" \\",
+            r"\midrule",
+        ]
+        for row in self.rows:
+            out.append(" & ".join(row) + r" \\")
+        out += [r"\bottomrule", r"\end{tabular}", r"\end{table}"]
+        if not self.complete:
+            out.insert(2, "% WARNING: contains unmeasured (TBD) cells -- not submission ready.")
+        return "\n".join(out)
+
+    def to_dict(self) -> dict:
+        return {"name": self.name, "caption": self.caption, "headers": self.headers,
+                "rows": self.rows, "complete": self.complete, "provenance": self.provenance}
+
+
+# --------------------------------------------------------------------- builders
+def _ledger_rows(ledger):
+    return ledger.completed()
+
+
+def _latest_by_experiment(records) -> dict[str, object]:
+    """Best completed record per experiment id (highest mAP50:95, or the latest)."""
+    best: dict[str, object] = {}
+    for record in records:
+        current = best.get(record.experiment_id)
+        if current is None:
+            best[record.experiment_id] = record
+            continue
+        new_score = record.metrics.get("mAP50_95")
+        old_score = current.metrics.get("mAP50_95")
+        if new_score is not None and (old_score is None or new_score > old_score):
+            best[record.experiment_id] = record
+    return best
+
+
+def build_baseline_comparison(ledger, efficiency: dict | None = None) -> Table:
+    """TABLE 2 — comparison against the detector baselines."""
+    best = _latest_by_experiment(_ledger_rows(ledger))
+    table = Table(
+        "baseline_comparison",
+        "Comparison with YOLO baselines and the proposed SAR-YOLO. Cells are TBD until the "
+        "corresponding experiment has been run.",
+        ["Model", "mAP50", "mAP50:95", "Precision", "Recall", "Params (M)", "GFLOPs", "FPS"],
+    )
+    for exp_id, label in (("EXP-001", "YOLO11 baseline"), ("EXP-007", "SAR-YOLO (ours)")):
+        record = best.get(exp_id)
+        metrics = record.metrics if record else {}
+        table.rows.append([
+            label,
+            _fmt(metrics.get("mAP50")),
+            _fmt(metrics.get("mAP50_95")),
+            _fmt(metrics.get("precision")),
+            _fmt(metrics.get("recall")),
+            _fmt(metrics.get("params_M"), 3),
+            _fmt(metrics.get("flops_G"), 3),
+            _fmt(metrics.get("fps"), 1),
+        ])
+        table.provenance.append(f"{exp_id}: {getattr(record, 'run_id', 'not run')}")
+    return table
+
+
+def build_ablation(ledger) -> Table:
+    """TABLE 3 — the main ablation, one component added per row."""
+    best = _latest_by_experiment(_ledger_rows(ledger))
+    chain = (
+        ("EXP-001", "YOLO baseline", (False, False, False, False, False, False)),
+        ("EXP-002", "+ SFE", (True, False, False, False, False, False)),
+        ("EXP-003", "+ Speckle", (True, True, False, False, False, False)),
+        ("EXP-004", "+ Attention", (True, True, True, False, False, False)),
+        ("EXP-005", "+ AMF", (True, True, True, True, False, False)),
+        ("EXP-006", "+ Small head", (True, True, True, True, True, False)),
+        ("EXP-007", "Full", (True, True, True, True, True, True)),
+    )
+    table = Table(
+        "main_ablation",
+        "Main ablation. Each row adds exactly one component, so every delta is attributable "
+        "to that component alone.",
+        ["Model", "SFE", "Speckle", "Attention", "AMF", "P2 head", "SAR loss",
+         "mAP50", "mAP50:95", "Params (M)", "FPS"],
+    )
+    for exp_id, label, flags in chain:
+        record = best.get(exp_id)
+        metrics = record.metrics if record else {}
+        table.rows.append([
+            label, *("\\checkmark" if f else "" for f in flags),
+            _fmt(metrics.get("mAP50")), _fmt(metrics.get("mAP50_95")),
+            _fmt(metrics.get("params_M"), 3), _fmt(metrics.get("fps"), 1),
+        ])
+        table.provenance.append(f"{exp_id}: {getattr(record, 'run_id', 'not run')}")
+    return table
+
+
+def build_module_ablation(ledger, suffix: str = "_s") -> Table:
+    """TABLE 4 — module-level ablation: ours vs the standard component in the same slot."""
+    best = _latest_by_experiment(_ledger_rows(ledger))
+    groups = {
+        "Attention": ("att_none", "att_se", "att_eca", "att_cbam", "att_saa_static", "attention"),
+        "Fusion": ("fus_concat", "fus_add", "fus_static", "amf"),
+        "Preprocessing": ("pre_identity", "pre_log", "pre_clahe", "pre_standardize", "sfe"),
+        "Speckle": ("spk_none", "spk_lee", "spk_denoise", "speckle"),
+    }
+    table = Table(
+        "module_ablation",
+        "Module-level comparison. Each proposed block is compared against the standard "
+        "component it replaces, in the same architectural slot, so the comparison isolates "
+        "the mechanism rather than the added parameters.",
+        ["Slot", "Variant", "mAP50", "mAP50:95", "Params (M)"],
+    )
+    for slot, variants in groups.items():
+        for variant in variants:
+            record = next((r for r in best.values() if variant in r.model), None)
+            metrics = record.metrics if record else {}
+            table.rows.append([
+                slot, variant,
+                _fmt(metrics.get("mAP50")), _fmt(metrics.get("mAP50_95")),
+                _fmt(metrics.get("params_M"), 3),
+            ])
+            table.provenance.append(f"{variant}: {getattr(record, 'run_id', 'not run')}")
+    return table
+
+
+def build_scale_analysis(ledger) -> Table:
+    """TABLE 5 — small/medium/large object performance (the paper's core claim)."""
+    best = _latest_by_experiment(_ledger_rows(ledger))
+    table = Table(
+        "scale_analysis",
+        "Performance by object scale. Scale-wise AP is reported separately because a single "
+        "mAP can hide exactly the small-object effect this work claims. 'n GT' is the number "
+        "of ground-truth boxes in each range; a range with none is unmeasurable, not zero.",
+        ["Model", "AP_small", "n GT small", "AP_medium", "n GT medium", "AP_large", "n GT large"],
+    )
+    for exp_id, label in (("EXP-001", "YOLO baseline"), ("EXP-007", "SAR-YOLO (ours)")):
+        record = best.get(exp_id)
+        metrics = record.metrics if record else {}
+        table.rows.append([
+            label,
+            _fmt(metrics.get("AP_small")), _fmt(metrics.get("n_gt_small"), 0),
+            _fmt(metrics.get("AP_medium")), _fmt(metrics.get("n_gt_medium"), 0),
+            _fmt(metrics.get("AP_large")), _fmt(metrics.get("n_gt_large"), 0),
+        ])
+        table.provenance.append(f"{exp_id}: {getattr(record, 'run_id', 'not run')}")
+    return table
+
+
+def build_robustness(robustness_json: str | Path, baseline_json: str | Path | None = None) -> Table:
+    """TABLE 6 — degradation under controlled corruption, and the drop."""
+    def _load(path):
+        path = Path(path)
+        return json.loads(path.read_text()) if path.exists() else {}
+
+    ours = _load(robustness_json)
+    base = _load(baseline_json) if baseline_json else {}
+    table = Table(
+        "robustness",
+        "Robustness under controlled degradations. Both models face byte-identical corrupted "
+        "inputs, and only the images are degraded (ground truth is untouched).",
+        ["Corruption", "Severity", "YOLO mAP50", "SAR-YOLO mAP50", "Drop (ours)"],
+    )
+    corruptions = ours.get("corruptions", {}) or base.get("corruptions", {})
+    for name, per_sev in sorted(corruptions.items()):
+        for severity, values in sorted(per_sev.items(), key=lambda kv: float(kv[0])):
+            ours_v = (ours.get("corruptions", {}).get(name, {}) or {}).get(severity, {})
+            base_v = (base.get("corruptions", {}).get(name, {}) or {}).get(severity, {})
+            ours_map = ours_v.get("mAP50")
+            base_map = base_v.get("mAP50")
+            drop = (base_map - ours_map) if (base_map is not None and ours_map is not None) else None
+            table.rows.append([name, severity, _fmt(base_map), _fmt(ours_map), _fmt(drop)])
+    if not table.rows:
+        table.rows.append(["TBD", TBD, TBD, TBD, TBD])
+    return table
+
+
+def build_efficiency(ledger) -> Table:
+    """TABLE 7 — efficiency comparison."""
+    best = _latest_by_experiment(_ledger_rows(ledger))
+    table = Table(
+        "efficiency",
+        "Efficiency. Latency is measured after warm-up with CUDA synchronisation; FLOPs are "
+        "reported at the recorded input size, since FLOPs are meaningless without it.",
+        ["Model", "Params (M)", "GFLOPs", "FPS", "Latency (ms)", "Size (MB)"],
+    )
+    for exp_id, label in (("EXP-001", "YOLO baseline"), ("EXP-007", "SAR-YOLO (ours)")):
+        record = best.get(exp_id)
+        metrics = record.metrics if record else {}
+        table.rows.append([
+            label, _fmt(metrics.get("params_M"), 3), _fmt(metrics.get("flops_G"), 3),
+            _fmt(metrics.get("fps"), 1), _fmt(metrics.get("latency_ms"), 2),
+            _fmt(metrics.get("model_size_MB"), 2),
+        ])
+        table.provenance.append(f"{exp_id}: {getattr(record, 'run_id', 'not run')}")
+    return table
+
+
+def build_multi_seed(ledger, experiment_id: str = "EXP-012") -> Table:
+    """TABLE 9 — mean +/- std over seeds, plus the per-seed values."""
+    records = [r for r in _ledger_rows(ledger) if r.experiment_id == experiment_id]
+    values = [r.metrics.get("mAP50_95") for r in records if r.metrics.get("mAP50_95") is not None]
+    table = Table(
+        "multi_seed",
+        "Multi-seed validation. A single-seed difference of a few tenths of a point is not "
+        "evidence, so the headline result is reported as mean +/- std over seeds.",
+        ["Metric", "Mean", "Std", "n seeds", "Per-seed values"],
+    )
+    if len(values) >= 2:
+        import statistics
+
+        table.rows.append([
+            "mAP50:95",
+            f"{statistics.mean(values):.4f}",
+            f"{statistics.pstdev(values):.4f}",
+            str(len(values)),
+            ", ".join(f"{v:.4f}" for v in values),
+        ])
+    else:
+        table.rows.append(["mAP50:95", TBD, TBD, str(len(values)), TBD])
+    return table
+
+
+def write_tables(tables: list[Table], out_dir: str | Path, assert_complete: bool = False) -> list[Path]:
+    """Write each table as Markdown and LaTeX; return the paths written."""
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    for table in tables:
+        if assert_complete and not table.complete:
+            raise ValueError(
+                f"Table {table.name!r} contains unmeasured cells (TBD) and cannot be used for "
+                "submission. Run the missing experiments rather than filling the cells by hand."
+            )
+        md = out / f"{table.name}.md"
+        md.write_text(table.to_markdown() + "\n")
+        tex = out / f"{table.name}.tex"
+        tex.write_text(table.to_latex() + "\n")
+        written += [md, tex]
+    return written

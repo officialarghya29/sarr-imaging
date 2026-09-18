@@ -1,0 +1,21 @@
+# HRSID — High-Resolution SAR Images Dataset (pilot tier)
+#
+# `path` may be relative to this file's directory or to the project root; see
+# saryolo.data.yolo.resolve_data_yaml.
+#
+# Prepare the data first:
+#   python scripts/prepare_dataset.py --dataset hrsid --raw <raw dir>
+#
+# LEAKAGE WARNING: HRSID chips are cropped from only 99 parent scenes, so a
+# random chip split leaks near-identical patches across train/test and inflates
+# mAP. Split by scene or verify with saryolo.data.splits.leakage_report before
+# trusting any number produced from this dataset.
+#
+# Official repo: https://github.com/chaozhong2010/HRSID
+path: ../../datasets/processed/hrsid
+train: images/train
+val: images/val
+test: images/test
+nc: 1
+names:
+  - ship

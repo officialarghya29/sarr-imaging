@@ -1,0 +1,19 @@
+# SSDD — SAR Ship Detection Dataset (pilot tier)
+#
+# `path` may be relative to THIS FILE's directory or to the project root; either
+# is accepted and it is made absolute by saryolo.data.yolo.resolve_data_yaml
+# before Ultralytics sees it. This indirection is required because Ultralytics
+# resolves a relative path against its global `datasets_dir` setting (~/datasets),
+# which would break portability between a laptop and a Colab VM.
+#
+# Prepare the data first:
+#   python scripts/prepare_dataset.py --dataset ssdd --raw <raw dir>
+#
+# Official repo/splits: https://github.com/TianwenZhang0825/Official-SSDD
+path: ../../datasets/processed/ssdd
+train: images/train
+val: images/val
+test: images/test
+nc: 1
+names:
+  - ship

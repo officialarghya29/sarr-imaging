@@ -1,0 +1,207 @@
+# SAR-YOLO / p2  -- GENERATED FILE, do not edit by hand.
+# Regenerate with:  python -m saryolo arch --variant p2
+# scale=s  levels=p2-p3-p4-p5  modules=sfe, speckle, attention, fusion, p2_head
+# sar_loss=off
+#
+# NOTE: when this file is loaded, ultralytics derives the compound scale from the
+# FILE NAME (guess_model_scale), overwriting the 'scale' key below. The file must
+# therefore keep its 'yolo11s_' prefix or it will silently build at scale 'n'.
+# EXP-006 + P2 small-object detection head.
+#
+# [from, repeats, module, args]
+nc: 1
+scale: s
+scales:
+  n: [0.5, 0.25, 1024]
+  s: [0.5, 0.5, 1024]
+  m: [0.5, 1.0, 512]
+  l: [1.0, 1.0, 512]
+  x: [1.0, 1.5, 512]
+backbone:
+- - -1
+  - 1
+  - Conv
+  - [64, 3, 2]
+- - -1
+  - 1
+  - Conv
+  - [128, 3, 2]
+- - -1
+  - 2
+  - C3k2
+  - [256, false, 0.25]
+- - -1
+  - 1
+  - SARFeatureEnhancement
+  - [ch, sfe, 3, 8]
+- - -1
+  - 1
+  - Conv
+  - [256, 3, 2]
+- - -1
+  - 2
+  - C3k2
+  - [512, false, 0.25]
+- - -1
+  - 1
+  - Conv
+  - [512, 3, 2]
+- - -1
+  - 2
+  - C3k2
+  - [512, true]
+- - -1
+  - 1
+  - Conv
+  - [1024, 3, 2]
+- - -1
+  - 2
+  - C3k2
+  - [1024, true]
+- - -1
+  - 1
+  - SPPF
+  - [1024, 5]
+- - -1
+  - 2
+  - C2PSA
+  - [1024]
+- - -1
+  - 1
+  - SpeckleAwareFeatureModule
+  - [ch, sfm, 8, 3]
+head:
+- - -1
+  - 1
+  - nn.Upsample
+  - [null, 2, nearest]
+- - [13, 7]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 1
+  - AdaptiveMultiScaleFusion
+  - - ch
+    - [13, 7]
+    - 8
+    - amf
+- - -1
+  - 2
+  - C3k2
+  - [512, false]
+- - -1
+  - 1
+  - nn.Upsample
+  - [null, 2, nearest]
+- - [17, 5]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 1
+  - AdaptiveMultiScaleFusion
+  - - ch
+    - [17, 5]
+    - 8
+    - amf
+- - -1
+  - 2
+  - C3k2
+  - [256, false]
+- - -1
+  - 1
+  - nn.Upsample
+  - [null, 2, nearest]
+- - [21, 3]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 1
+  - AdaptiveMultiScaleFusion
+  - - ch
+    - [21, 3]
+    - 8
+    - amf
+- - -1
+  - 2
+  - C3k2
+  - [128, false]
+- - -1
+  - 1
+  - Conv
+  - [128, 3, 2]
+- - [25, 20]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 1
+  - AdaptiveMultiScaleFusion
+  - - ch
+    - [25, 20]
+    - 8
+    - amf
+- - -1
+  - 2
+  - C3k2
+  - [256, false]
+- - -1
+  - 1
+  - Conv
+  - [256, 3, 2]
+- - [29, 16]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 1
+  - AdaptiveMultiScaleFusion
+  - - ch
+    - [29, 16]
+    - 8
+    - amf
+- - -1
+  - 2
+  - C3k2
+  - [512, false]
+- - -1
+  - 1
+  - Conv
+  - [512, 3, 2]
+- - [33, 12]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 1
+  - AdaptiveMultiScaleFusion
+  - - ch
+    - [33, 12]
+    - 8
+    - amf
+- - -1
+  - 2
+  - C3k2
+  - [1024, true]
+- - 24
+  - 1
+  - SARAdaptiveAttention
+  - [ch, 24, 16, 7, adaptive]
+- - 28
+  - 1
+  - SARAdaptiveAttention
+  - [ch, 28, 16, 7, adaptive]
+- - 32
+  - 1
+  - SARAdaptiveAttention
+  - [ch, 32, 16, 7, adaptive]
+- - 36
+  - 1
+  - SARAdaptiveAttention
+  - [ch, 36, 16, 7, adaptive]
+- - [37, 38, 39, 40]
+  - 1
+  - Detect
+  - [nc]

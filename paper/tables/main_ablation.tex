@@ -1,0 +1,19 @@
+\begin{table}[t]
+\centering
+% WARNING: contains unmeasured (TBD) cells -- not submission ready.
+\caption{Main ablation. Each row adds exactly one component, so every delta is attributable to that component alone.}
+\label{tab:main_ablation}
+\begin{tabular}{lrrrrrrrrrr}
+\toprule
+Model & SFE & Speckle & Attention & AMF & P2 head & SAR loss & mAP50 & mAP50:95 & Params (M) & FPS \\
+\midrule
+YOLO baseline &  &  &  &  &  &  & TBD & TBD & TBD & TBD \\
++ SFE & \checkmark &  &  &  &  &  & TBD & TBD & TBD & TBD \\
++ Speckle & \checkmark & \checkmark &  &  &  &  & TBD & TBD & TBD & TBD \\
++ Attention & \checkmark & \checkmark & \checkmark &  &  &  & TBD & TBD & TBD & TBD \\
++ AMF & \checkmark & \checkmark & \checkmark & \checkmark &  &  & TBD & TBD & TBD & TBD \\
++ Small head & \checkmark & \checkmark & \checkmark & \checkmark & \checkmark &  & TBD & TBD & TBD & TBD \\
+Full & \checkmark & \checkmark & \checkmark & \checkmark & \checkmark & \checkmark & TBD & TBD & TBD & TBD \\
+\bottomrule
+\end{tabular}
+\end{table}

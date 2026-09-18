@@ -1,0 +1,61 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# ---- Datasets (never commit raw SAR data) ----
+datasets/raw/**
+datasets/processed/**
+datasets/splits/**
+!datasets/**/.gitkeep
+!datasets/**/README.md
+
+# ---- Results / artifacts ----
+results/**
+!results/.gitkeep
+runs/
+wandb/
+mlruns/
+dataset_statistics/
+validation_reports/
+*.csv
+# Generated paper tables ARE committed (they show the honest TBD state).
+!paper/tables/*.csv
+
+# ---- Model weights ----
+*.pt
+*.pth
+*.onnx
+*.engine
+*.torchscript
+*.tflite
+*.mlpackage
+*.coreml
+*.h5
+*.pb
+
+# ---- Secrets (NEVER commit tokens) ----
+.env
+.env.*
+*.key
+*.pem
+secrets.json
+kaggle.json
+
+# ---- OS / editors ----
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*~

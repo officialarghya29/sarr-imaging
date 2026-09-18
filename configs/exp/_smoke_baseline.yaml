@@ -1,0 +1,27 @@
+# PIPELINE SMOKE TEST (not a research experiment).
+#
+# Trains the stock YOLO11n baseline for 2 epochs at 128px on synthetic data, to
+# verify that data loading, training, validation, the ledger and metric
+# extraction all work. It is named with a leading underscore so
+# `saryolo.training.config.list_experiments` and the experiment matrix ignore it.
+#
+#   python -m saryolo synth-data --out datasets/processed/synthetic_smoke
+#   python -m saryolo train --exp configs/exp/_smoke_baseline.yaml
+#
+# Any number produced by this config is meaningless as a research result.
+experiment:
+  id: SMOKE-001
+  name: pipeline smoke test (baseline)
+  description: 2 epochs at 128px on synthetic data, CPU-only, to prove the pipeline runs.
+model: ../models/yolo11n_baseline_n.yaml
+dataset: ../datasets/synthetic_smoke.yaml
+train:
+  epochs: 2
+  imgsz: 128
+  batch: 4
+  seed: 0
+  workers: 0
+  patience: 50
+  plots: false
+  cos_lr: true
+notes: Pipeline verification only; synthetic data; not reportable.

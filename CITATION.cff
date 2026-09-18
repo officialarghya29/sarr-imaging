@@ -1,0 +1,29 @@
+cff-version: 1.2.0
+message: "If you use this code or the SAR-YOLO architecture in your research, please cite it as below."
+title: "SAR-YOLO: Speckle-Aware Feature Representation for Robust SAR Object Detection"
+abstract: >-
+  SAR-YOLO is a synthetic aperture radar (SAR) object detection architecture that
+  augments a YOLO baseline with evidence-driven, SAR-specific modules: a SAR
+  Feature Enhancement (SFE) block, a Speckle-Aware Feature Module (SFM), a
+  SAR-Adaptive Attention (SAA) block, Adaptive Multi-Scale Fusion (AMF), and a
+  high-resolution small-object detection head. The repository contains the full
+  reproducible pipeline from dataset validation through ablation, robustness,
+  efficiency, and cross-dataset generalization studies.
+type: software
+license: MIT
+authors:
+  - family-names: Bose
+    given-names: Arghya
+    email: officialarghya29@gmail.com
+repository-code: "https://github.com/officialarghya29/sarr-imaging"
+keywords:
+  - SAR
+  - synthetic aperture radar
+  - object detection
+  - YOLO
+  - speckle noise
+  - small object detection
+  - remote sensing
+  - computer vision
+version: 0.1.0
+date-released: "2026-09-19"

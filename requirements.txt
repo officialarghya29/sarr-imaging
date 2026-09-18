@@ -1,0 +1,37 @@
+# Core
+ultralytics>=8.3.0
+torch>=2.2.0
+torchvision>=0.17.0
+numpy>=1.24.0
+opencv-python>=4.8.0
+Pillow>=10.0.0
+PyYAML>=6.0
+tqdm>=4.66.0
+pandas>=2.0.0
+matplotlib>=3.7.0
+scipy>=1.11.0
+
+# Dataset acquisition / integrity
+requests>=2.31.0
+huggingface_hub>=0.23.0
+
+# Experiment tracking (pick one; all optional)
+tensorboard>=2.15.0
+# wandb>=0.17.0
+# mlflow>=2.14.0
+
+# Analysis / visualization
+seaborn>=0.13.0
+thop>=0.1.1
+fvcore>=0.1.5
+grad-cam>=1.5.0
+
+# Evaluation extras
+pycocotools>=2.0.7
+shapely>=2.0.0
+
+# Dev
+pytest>=8.0.0
+pytest-cov>=5.0.0
+ruff>=0.5.0
+jupyter>=1.0.0

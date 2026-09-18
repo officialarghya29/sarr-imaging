@@ -1,0 +1,117 @@
+# SAR-YOLO / baseline_n  -- GENERATED FILE, do not edit by hand.
+# Regenerate with:  python -m saryolo arch --variant baseline_n
+# scale=n  levels=p3-p4-p5  modules=none (stock YOLO11)
+# sar_loss=off
+#
+# NOTE: when this file is loaded, ultralytics derives the compound scale from the
+# FILE NAME (guess_model_scale), overwriting the 'scale' key below. The file must
+# therefore keep its 'yolo11n_' prefix or it will silently build at scale 'n'.
+# Baseline comparison: YOLO11n.
+#
+# [from, repeats, module, args]
+nc: 1
+scale: n
+scales:
+  n: [0.5, 0.25, 1024]
+  s: [0.5, 0.5, 1024]
+  m: [0.5, 1.0, 512]
+  l: [1.0, 1.0, 512]
+  x: [1.0, 1.5, 512]
+backbone:
+- - -1
+  - 1
+  - Conv
+  - [64, 3, 2]
+- - -1
+  - 1
+  - Conv
+  - [128, 3, 2]
+- - -1
+  - 2
+  - C3k2
+  - [256, false, 0.25]
+- - -1
+  - 1
+  - Conv
+  - [256, 3, 2]
+- - -1
+  - 2
+  - C3k2
+  - [512, false, 0.25]
+- - -1
+  - 1
+  - Conv
+  - [512, 3, 2]
+- - -1
+  - 2
+  - C3k2
+  - [512, true]
+- - -1
+  - 1
+  - Conv
+  - [1024, 3, 2]
+- - -1
+  - 2
+  - C3k2
+  - [1024, true]
+- - -1
+  - 1
+  - SPPF
+  - [1024, 5]
+- - -1
+  - 2
+  - C2PSA
+  - [1024]
+head:
+- - -1
+  - 1
+  - nn.Upsample
+  - [null, 2, nearest]
+- - [11, 6]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 2
+  - C3k2
+  - [512, false]
+- - -1
+  - 1
+  - nn.Upsample
+  - [null, 2, nearest]
+- - [14, 4]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 2
+  - C3k2
+  - [256, false]
+- - -1
+  - 1
+  - Conv
+  - [256, 3, 2]
+- - [17, 13]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 2
+  - C3k2
+  - [512, false]
+- - -1
+  - 1
+  - Conv
+  - [512, 3, 2]
+- - [20, 10]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 2
+  - C3k2
+  - [1024, true]
+- - [16, 19, 22]
+  - 1
+  - Detect
+  - [nc]

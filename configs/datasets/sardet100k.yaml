@@ -1,0 +1,27 @@
+# SARDet-100K — large-scale SAR detection benchmark (benchmark tier)
+#
+# `path` may be relative to this file's directory or to the project root; see
+# saryolo.data.yolo.resolve_data_yaml.
+#
+# This is the target for the paper's headline comparison table: ~116k images and
+# ~245k instances over 6 classes, unified from 10 source datasets.
+#
+# Compute note: it is far too large for a free Colab session. Plan for
+# multi-session training with checkpoint resume (see notebooks/04_*), or Colab Pro.
+#
+# Prepare the data first (large download, see docs/DATASETS.md):
+#   python scripts/prepare_dataset.py --dataset sardet100k --raw <raw dir>
+#
+# Official repo: https://github.com/zcablii/SARDet_100K
+path: ../../datasets/processed/sardet100k
+train: images/train
+val: images/val
+test: images/test
+nc: 6
+names:
+  - ship
+  - aircraft
+  - car
+  - tank
+  - bridge
+  - harbor

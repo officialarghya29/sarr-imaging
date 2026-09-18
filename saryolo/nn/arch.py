@@ -1,0 +1,385 @@
+"""Symbolic architecture builder for SAR-YOLO.
+
+Why a builder instead of hand-written YAML
+------------------------------------------
+Every SAR-YOLO variant differs from the baseline only by *which modules are
+inserted where*. Hand-maintaining ~20 YAML files with explicit, renumbered
+``from`` indices is the single most likely place to introduce a silent wiring
+bug (a wrong index still parses, and just silently degrades accuracy). The
+builder assembles rows symbolically and computes every index, so:
+
+* the baseline it emits is **bit-identical** to stock ``yolo11.yaml`` (asserted
+  in ``tests/test_arch.py`` against the published parameter counts);
+* ablations are expressed as module *subsets*, not as edited copies;
+* the module-level ablation grid (SE / ECA / CBAM / ours, and
+  concat / add / static / ours) is generated from the same code path.
+
+The emitted YAML is what actually gets trained and committed under
+``configs/models/``, so runs remain reproducible even if the builder changes.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+__all__ = ["ModelSpec", "build_yaml_dict", "build_yaml_text", "variant_filename", "SCALES", "VARIANTS"]
+
+#: Compound scaling constants, copied verbatim from ultralytics ``cfg/models/11/yolo11.yaml``.
+SCALES: dict[str, list[float]] = {
+    "n": [0.50, 0.25, 1024],
+    "s": [0.50, 0.50, 1024],
+    "m": [0.50, 1.00, 512],
+    "l": [1.00, 1.00, 512],
+    "x": [1.00, 1.50, 512],
+}
+
+#: Published parameter counts for stock YOLO11, used as a regression guard in tests.
+BASELINE_PARAMS: dict[str, int] = {"n": 2_624_080, "s": 9_458_752}
+
+
+@dataclass
+class ModelSpec:
+    """Declarative description of one SAR-YOLO architecture variant.
+
+    Attributes:
+        name: Variant name, e.g. ``"saryolo_full"``.
+        scale: Compound scale key (``n``/``s``/``m``/``l``/``x``).
+        nc: Number of classes.
+        enhancement: SFE variant; ``None`` disables the module.
+        speckle: SFM variant; ``None`` disables the module.
+        attention: Attention variant inserted before the head; ``None`` disables.
+        fusion: Fusion variant inserted after each ``Concat``; ``None`` disables.
+        levels: Detection levels, a subset of ``("p2", "p3", "p4", "p5")``.
+        sar_loss: Optional Component-7 loss block, emitted as a top-level
+            ``sar_loss`` key. Read by :class:`SARYOLODetectionModel` at criterion
+            construction, which keeps the objective reproducible from the YAML.
+        notes: Free-form provenance note carried into the YAML header.
+    """
+
+    name: str
+    scale: str = "s"
+    nc: int = 1
+    enhancement: str | None = None
+    speckle: str | None = None
+    attention: str | None = None
+    fusion: str | None = None
+    levels: tuple[str, ...] = ("p3", "p4", "p5")
+    sar_loss: dict[str, float] | None = None
+    notes: str = ""
+
+    def __post_init__(self) -> None:
+        if self.scale not in SCALES:
+            raise ValueError(f"scale must be one of {sorted(SCALES)}, got {self.scale!r}")
+        if "p2" in self.levels and self.levels != ("p2", "p3", "p4", "p5"):
+            raise ValueError("When enabled, the P2 level must come with P3, P4 and P5 (got %r)." % (self.levels,))
+        if not self.levels or self.levels[-1] != "p5" or self.levels[0] not in ("p2", "p3"):
+            raise ValueError(f"levels must be a contiguous ('p2'|'p3'),'p4','p5' set, got {self.levels!r}")
+
+    @property
+    def has_p2(self) -> bool:
+        return "p2" in self.levels
+
+    @property
+    def module_names(self) -> list[str]:
+        """Enabled module slugs, in the order the paper's ablation table adds them."""
+        mods = []
+        if self.enhancement:
+            mods.append("sfe")
+        if self.speckle:
+            mods.append("speckle")
+        if self.attention:
+            mods.append("attention")
+        if self.fusion:
+            mods.append("fusion")
+        if self.has_p2:
+            mods.append("p2_head")
+        return mods
+
+
+class _Builder:
+    """Accumulates backbone/head rows while tracking global layer indices.
+
+    ``parse_model`` iterates ``d["backbone"] + d["head"]`` with a single running
+    index ``i``, and channel lookups (``ch[f]``) use that same global numbering,
+    so the counter here must be global rather than per-section.
+    """
+
+    def __init__(self) -> None:
+        self.backbone: list[list[Any]] = []
+        self.head: list[list[Any]] = []
+        self._i = 0
+
+    @property
+    def n_rows(self) -> int:
+        return self._i
+
+    def add(self, section: str, src: int | list[int], repeats: int, module: str, args: list[Any]) -> int:
+        """Append one YAML row and return its global index."""
+        idx = self._i
+        (self.backbone if section == "backbone" else self.head).append([src, repeats, module, args])
+        self._i += 1
+        return idx
+
+
+def variant_filename(spec: ModelSpec | str) -> str:
+    """Canonical YAML file name for a variant.
+
+    The ``yolo11<scale>`` prefix is **required**, not cosmetic. Ultralytics'
+    ``yaml_model_load`` overwrites any ``scale`` key in the YAML body with
+    ``guess_model_scale(path)``, which only recognises the pattern
+    ``yolo(e-)?v?\d+[nslmx]`` in the *file name*. A file named ``baseline_s.yaml``
+    therefore yields an empty scale, and ``parse_model`` silently falls back to
+    the first entry of ``scales`` (``n``) — so a model you believe is YOLO11s is
+    actually built as YOLO11n. Encoding the scale in the file name is the only
+    reliable way to select it when loading from a file.
+
+    See ``tests/test_arch.py::test_variant_filenames_encode_scale``, which pins
+    this against ``guess_model_scale`` itself.
+    """
+    if isinstance(spec, str):
+        spec = VARIANTS[spec]
+    return f"yolo11{spec.scale}_{spec.name}.yaml"
+
+
+def build_yaml_dict(spec: ModelSpec) -> dict[str, Any]:
+    """Build the Ultralytics model dictionary for ``spec``.
+
+    The baseline path (all modules ``None``, ``levels=("p3","p4","p5")``)
+    reproduces stock ``yolo11.yaml`` exactly.
+    """
+    b = _Builder()
+
+    # ------------------------------------------------------------------ backbone
+    b.add("backbone", -1, 1, "Conv", [64, 3, 2])  # P1/2
+    b.add("backbone", -1, 1, "Conv", [128, 3, 2])  # P2/4
+    p2 = b.add("backbone", -1, 2, "C3k2", [256, False, 0.25])
+
+    # Component 1 (SFE): fine-detail enhancement on the highest-resolution retained feature.
+    if spec.enhancement:
+        p2 = b.add("backbone", -1, 1, "SARFeatureEnhancement", ["ch", spec.enhancement, 3, 8])
+
+    b.add("backbone", -1, 1, "Conv", [256, 3, 2])  # P3/8
+    p3: int = b.add("backbone", -1, 2, "C3k2", [512, False, 0.25])
+    b.add("backbone", -1, 1, "Conv", [512, 3, 2])  # P4/16
+    p4 = b.add("backbone", -1, 2, "C3k2", [512, True])
+    b.add("backbone", -1, 1, "Conv", [1024, 3, 2])  # P5/32
+    p5 = b.add("backbone", -1, 2, "C3k2", [1024, True])
+    b.add("backbone", -1, 1, "SPPF", [1024, 5])
+    spp = b.add("backbone", -1, 2, "C2PSA", [1024])
+
+    # Component 2 (SFM): speckle/clutter discrimination where semantics are strongest.
+    if spec.speckle:
+        spp = b.add("backbone", -1, 1, "SpeckleAwareFeatureModule", ["ch", spec.speckle, 8, 3])
+
+    def fuse(src_a: int, src_b: int, c_out: int, c3k: bool) -> int:
+        """Emit ``Upsample/Conv -> Concat -> [fusion] -> C3k2`` and return the output index."""
+        cat = b.add("head", [src_a, src_b], 1, "Concat", [1])
+        if spec.fusion:
+            b.add("head", -1, 1, "AdaptiveMultiScaleFusion", ["ch", [src_a, src_b], 8, spec.fusion])
+        return b.add("head", -1, 2, "C3k2", [c_out, c3k])
+
+    # ------------------------------------------------------------------- top-down
+    up = b.add("head", -1, 1, "nn.Upsample", [None, 2, "nearest"])
+    n_p4_up = fuse(up, p4, 512, False)
+
+    up = b.add("head", -1, 1, "nn.Upsample", [None, 2, "nearest"])
+    n_p3 = fuse(up, p3, 256, False)
+
+    #: Index of the P2 neck output; only materialised when the P2 head is enabled.
+    n_p2: int | None = None
+    if spec.has_p2:
+        up = b.add("head", -1, 1, "nn.Upsample", [None, 2, "nearest"])
+        n_p2 = fuse(up, p2, 128, False)
+
+    # ------------------------------------------------------------------ bottom-up
+    if spec.has_p2:
+        down = b.add("head", -1, 1, "Conv", [128, 3, 2])
+        out_p3 = fuse(down, n_p3, 256, False)
+        down = b.add("head", -1, 1, "Conv", [256, 3, 2])
+        out_p4 = fuse(down, n_p4_up, 512, False)
+        down = b.add("head", -1, 1, "Conv", [512, 3, 2])
+        out_p5 = fuse(down, spp, 1024, True)
+    else:
+        down = b.add("head", -1, 1, "Conv", [256, 3, 2])
+        out_p4 = fuse(down, n_p4_up, 512, False)
+        down = b.add("head", -1, 1, "Conv", [512, 3, 2])
+        out_p5 = fuse(down, spp, 1024, True)
+        out_p3 = n_p3
+
+    # Component 3 (SAA): one attention slot per detection level, immediately pre-head.
+    heads = {"p3": out_p3, "p4": out_p4, "p5": out_p5}
+    if n_p2 is not None:
+        heads["p2"] = n_p2
+    if spec.attention:
+        for lvl in spec.levels:
+            gate = "static" if spec.attention == "saa_static" else "adaptive"
+            # The source index must be passed explicitly: this row's `from` is an
+            # explicit index, so `ch[-1]` would resolve to an unrelated layer.
+            heads[lvl] = b.add(
+                "head", heads[lvl], 1, "SARAdaptiveAttention", ["ch", heads[lvl], 16, 7, gate]
+            )
+
+    b.add("head", [heads[lvl] for lvl in spec.levels], 1, "Detect", ["nc"])
+
+    out: dict[str, Any] = {
+        "nc": spec.nc,
+        # Set explicitly: ultralytics otherwise infers the scale from the *filename*
+        # (guess_model_scale), which would silently fall back to 'n' for a dict.
+        "scale": spec.scale,
+        "scales": {k: list(v) for k, v in SCALES.items()},
+        "backbone": b.backbone,
+        "head": b.head,
+    }
+    if spec.sar_loss:
+        # Emitted after the architecture rows so parse_model ignores it (it only reads
+        # named task keys) while our criterion can still pick it up from model.yaml.
+        out["sar_loss"] = dict(spec.sar_loss)
+    return out
+
+
+def build_yaml_text(spec: ModelSpec) -> str:
+    """Serialise ``spec`` to YAML text, with a provenance header."""
+    import yaml
+
+    mods = ", ".join(spec.module_names) if spec.module_names else "none (stock YOLO11)"
+    header = (
+        f"# SAR-YOLO / {spec.name}  -- GENERATED FILE, do not edit by hand.\n"
+        f"# Regenerate with:  python -m saryolo arch --variant {spec.name}\n"
+        f"# scale={spec.scale}  levels={'-'.join(spec.levels)}  modules={mods}\n"
+        f"# sar_loss={'off' if not spec.sar_loss else spec.sar_loss}\n"
+        f"#\n"
+        f"# NOTE: when this file is loaded, ultralytics derives the compound scale from the\n"
+        f"# FILE NAME (guess_model_scale), overwriting the 'scale' key below. The file must\n"
+        f"# therefore keep its 'yolo11{spec.scale}_' prefix or it will silently build at scale 'n'.\n"
+    )
+    if spec.notes:
+        header += f"# {spec.notes}\n"
+    header += "#\n# [from, repeats, module, args]\n"
+    return header + yaml.safe_dump(build_yaml_dict(spec), sort_keys=False, default_flow_style=None)
+
+
+#: Starting SAR-loss weights for the full model. These are *initial* values to be
+#: tuned by the EXP-008 sweep; they are recorded here so every run is reproducible.
+SAR_LOSS_FULL: dict[str, float] = {
+    "w_sep": 0.2,
+    "w_small": 0.5,
+    "w_smooth": 0.05,
+    "margin": 1.0,
+    "bg_frac": 0.25,
+}
+
+
+# --------------------------------------------------------------------------- variants
+def _v(name: str, **kw) -> ModelSpec:
+    return ModelSpec(name=name, **kw)
+
+
+#: Canonical experiment variants. ``EXP-00x`` ids match ``configs/exp/``.
+VARIANTS: dict[str, ModelSpec] = {
+    # EXP-001 — engineering baseline, must equal stock YOLO11.
+    "baseline": _v("baseline", notes="EXP-001 baseline: stock YOLO11, no SAR modules."),
+    # EXP-002 — Component 1.
+    "sfe": _v("sfe", enhancement="sfe", notes="EXP-002 baseline + SAR Feature Enhancement."),
+    # EXP-003 — Components 1+2.
+    "speckle": _v("speckle", enhancement="sfe", speckle="sfm",
+                  notes="EXP-003 + Speckle-Aware Feature Module."),
+    # EXP-004 — Components 1-3.
+    "attention": _v("attention", enhancement="sfe", speckle="sfm", attention="saa",
+                    notes="EXP-004 + SAR-Adaptive Attention."),
+    # EXP-005 — Components 1-4.
+    "amf": _v("amf", enhancement="sfe", speckle="sfm", attention="saa", fusion="amf",
+              notes="EXP-005 + Adaptive Multi-Scale Fusion."),
+    # EXP-006 — + P2 small-object head.
+    "p2": _v("p2", enhancement="sfe", speckle="sfm", attention="saa", fusion="amf",
+             levels=("p2", "p3", "p4", "p5"), notes="EXP-006 + P2 small-object detection head."),
+    # EXP-007 — full architecture. The SAR loss is switched on in the YAML's sar_loss block.
+    "full": _v("full", enhancement="sfe", speckle="sfm", attention="saa", fusion="amf",
+               levels=("p2", "p3", "p4", "p5"), sar_loss=dict(SAR_LOSS_FULL),
+               notes="EXP-007 FULL SAR-YOLO: all modules + P2 head + SAR-aware loss."),
+    # EXP-007 without the auxiliary objective: isolates the architecture from the loss.
+    "full_noloss": _v("full_noloss", enhancement="sfe", speckle="sfm", attention="saa", fusion="amf",
+                      levels=("p2", "p3", "p4", "p5"),
+                      notes="FULL architecture with the SAR-aware loss switched off (ablation control)."),
+    # --- attention module-level ablation (slot-matched) ---
+    "att_none": _v("att_none", enhancement="sfe", speckle="sfm",
+                   notes="Module ablation: attention slot disabled."),
+    "att_se": _v("att_se", enhancement="sfe", speckle="sfm", attention="se",
+                 notes="Module ablation: SE in the attention slot."),
+    "att_eca": _v("att_eca", enhancement="sfe", speckle="sfm", attention="eca",
+                  notes="Module ablation: ECA in the attention slot."),
+    "att_cbam": _v("att_cbam", enhancement="sfe", speckle="sfm", attention="cbam",
+                   notes="Module ablation: CBAM in the attention slot."),
+    "att_saa_static": _v("att_saa_static", enhancement="sfe", speckle="sfm", attention="saa_static",
+                         notes="Module ablation: ours with static (non-adaptive) branch weights."),
+    # --- fusion module-level ablation ---
+    "fus_concat": _v("fus_concat", enhancement="sfe", speckle="sfm", attention="saa", fusion="concat",
+                     notes="Module ablation: stock Concat in the fusion slot."),
+    "fus_add": _v("fus_add", enhancement="sfe", speckle="sfm", attention="saa", fusion="add",
+                  notes="Module ablation: plain Add in the fusion slot."),
+    "fus_static": _v("fus_static", enhancement="sfe", speckle="sfm", attention="saa", fusion="static",
+                     notes="Module ablation: ours with static (non-adaptive) scale weights."),
+    # --- preprocessing module-level ablation ---
+    "pre_identity": _v("pre_identity", enhancement="identity", speckle="sfm", attention="saa", fusion="amf",
+                       notes="Module ablation: no input enhancement branch."),
+    "pre_log": _v("pre_log", enhancement="log", speckle="sfm", attention="saa", fusion="amf",
+                  notes="Module ablation: log-compression enhancement."),
+    "pre_clahe": _v("pre_clahe", enhancement="clahe", speckle="sfm", attention="saa", fusion="amf",
+                    notes="Module ablation: CLAHE-style enhancement."),
+    "pre_standardize": _v("pre_standardize", enhancement="standardize", speckle="sfm", attention="saa", fusion="amf",
+                          notes="Module ablation: local standardisation enhancement."),
+    # --- speckle module-level ablation ---
+    "spk_none": _v("spk_none", enhancement="sfe", speckle="none", attention="saa", fusion="amf",
+                   notes="Module ablation: no speckle handling."),
+    "spk_lee": _v("spk_lee", enhancement="sfe", speckle="lee", attention="saa", fusion="amf",
+                  notes="Module ablation: classical Lee filter."),
+    "spk_denoise": _v("spk_denoise", enhancement="sfe", speckle="denoise", attention="saa", fusion="amf",
+                      notes="Module ablation: fixed low-pass despeckling."),
+}
+
+#: Baseline comparison variants (EXP-001b): scales of the stock detector.
+for _s in ("n", "s", "m", "l"):
+    VARIANTS[f"baseline_{_s}"] = _v(f"baseline_{_s}", scale=_s, notes=f"Baseline comparison: YOLO11{_s}.")
+
+#: The full model at every scale.
+for _s in SCALES:
+    VARIANTS[f"full_{_s}"] = _v(
+        f"full_{_s}", scale=_s, enhancement="sfe", speckle="sfm", attention="saa", fusion="amf",
+        levels=("p2", "p3", "p4", "p5"), sar_loss=dict(SAR_LOSS_FULL),
+        notes=f"FULL SAR-YOLO at scale {_s}.",
+    )
+
+#: The full architecture at the operating point chosen for the large-scale benchmark.
+for _s in ("s", "m", "l"):
+    VARIANTS[f"full_p35_{_s}"] = _v(
+        f"full_p35_{_s}", scale=_s, enhancement="sfe", speckle="sfm", attention="saa", fusion="amf",
+        sar_loss=dict(SAR_LOSS_FULL), notes=f"FULL SAR-YOLO (P3-P5, no P2 head) at scale {_s}.",
+    )
+
+
+def _main() -> None:
+    """CLI: emit YAML for one variant, or all of them."""
+    import argparse
+    from pathlib import Path
+
+    parser = argparse.ArgumentParser(description="Emit SAR-YOLO model YAML files.")
+    parser.add_argument("--variant", default="all", help="Variant name, or 'all'.")
+    parser.add_argument("--nc", type=int, default=1, help="Number of classes written into the YAML.")
+    parser.add_argument("--out", default="configs/models", help="Output directory.")
+    args = parser.parse_args()
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    names = sorted(VARIANTS) if args.variant == "all" else [args.variant]
+    for name in names:
+        if name not in VARIANTS:
+            raise SystemExit(f"Unknown variant {name!r}. Available: {', '.join(sorted(VARIANTS))}")
+        spec = VARIANTS[name]
+        spec.nc = args.nc
+        path = out / variant_filename(spec)
+        path.write_text(build_yaml_text(spec))
+        print(f"wrote {path}")
+
+
+if __name__ == "__main__":
+    _main()

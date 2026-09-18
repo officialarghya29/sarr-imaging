@@ -1,0 +1,272 @@
+# Method
+
+This document states what each component computes, why it is shaped that way,
+and — for each one — what the ablation that could falsify it looks like.
+
+The design rule throughout: a module is added only if it addresses a *measured*
+SAR problem, and it must be removable so its contribution can be measured alone.
+
+---
+
+## 0. Design constraints that shaped everything
+
+**Constraint 1 — identity at initialisation.** Every module is written as
+
+```
+F' = F + alpha * (g(F) - F),      alpha = tanh(raw),  raw initialised to 0
+```
+
+so `F' == F` exactly, in finite precision, before any training. Consequences:
+
+* a freshly built SAR-YOLO is *numerically identical* to its YOLO baseline
+  (asserted in `tests/test_arch.py` with `max abs diff == 0.0`);
+* any accuracy gain is attributable to learned behaviour rather than to the
+  extra parameters changing the initial function;
+* a module that does not train well degrades gracefully toward the baseline
+  instead of corrupting it.
+
+**Constraint 2 — channel preserving and single-input.** Each module returns the
+same channel count it received and consumes one tensor. This is what allows them
+to be dropped into a YOLO YAML without patching Ultralytics' `parse_model`
+(which resolves an unknown module's output channels as `c2 = ch[f]` and fails
+for multi-input rows). The practical benefit is that the stock parser, model
+summary, FLOPs counter, validator and checkpointing all keep working.
+
+**Constraint 3 — no kernel may see the raw intensity only.** SAR is a
+*statistical* imaging modality. A 3×3 convolution over raw intensities cannot
+distinguish "bright uniform clutter" from "bright structured target", because
+both look like large positive activations. Every module therefore has access to
+local first- and second-order statistics.
+
+---
+
+## Shared primitive: local statistics
+
+For a feature map `F`, with a k×k average pool `A`:
+
+```
+mu  = A(F)                          # local mean     -> slowly varying reflectivity
+var = max(A(F^2) - mu^2, 0)         # local variance -> speckle strength
+sd  = sqrt(var + eps)
+hp  = F - mu                        # high-pass     -> fine structure / speckle
+S   = (F - mu) / sd                 # local contrast normalisation
+```
+
+`S` is the shared SAR-specific primitive. Local contrast normalisation is what
+equalises clutter while preserving compact bright target returns, in the same
+spirit as classical SAR despeckling but as a differentiable feature operator
+rather than a pre-processing filter.
+
+---
+
+## Component 1 — SAR Feature Enhancement (SFE)
+
+**Problem.** SAR returns are speckle-dominated with compressed dynamic range, so
+raw intensity features under-represent target structure. But aggressive
+denoising is the wrong fix: it removes the high-frequency evidence (point
+returns, dihedral edges) that detection depends on.
+
+**Formulation.**
+
+```
+S = (F - mu) / sd
+Z = phi([F ; S ; sd])
+F' = F * gamma + beta + alpha * Z
+```
+
+with per-channel learnable `gamma`, `beta` and the zero-initialised gate `alpha`.
+
+**Why additive rather than filtered.** Enhancement is expressed as a correction
+to the feature, never as a replacement. At init `gamma = 1`, `beta = 0`,
+`alpha = 0`, so SFE is the identity; training can only add information.
+
+**Baselines in the same slot** (`pre_*`): `identity`, `log` (log compression),
+`standardize` (pure local contrast normalisation), `clahe` (a differentiable
+CLAHE analogue with a learnable clip limit). Comparing against these is what
+distinguishes "we do contrast enhancement" from "our particular parameterisation
+of contrast enhancement helps".
+
+---
+
+## Component 2 — Speckle-Aware Feature Module (SFM)
+
+**Problem.** Speckle is *multiplicative* and signal-dependent: it scales with
+local reflectivity. It therefore cannot be removed by a fixed filter without
+also attenuating bright target returns. What a detector actually needs is not a
+denoised feature but the ability to tell a high-variance *target* response from a
+high-variance *speckle* response.
+
+**Formulation.**
+
+```
+N = sigma(psi([F ; hp ; var]))     # per-channel speckle/clutter likelihood in [0,1]
+T = dwconv(F)                      # structure-preserving target extractor
+F' = F + alpha * (T - beta * N * F),      beta = sigmoid(.)
+```
+
+Three deliberate choices:
+
+1. **The suppression term is multiplicative in `F`** (`N * F`, not `N`). Because
+   speckle intensity scales with reflectivity, a constant offset would suppress
+   weak and strong regions by the same absolute amount — which is exactly wrong.
+2. **`beta` is a sigmoid, not free.** It cannot change sign, so the module cannot
+   learn to *amplify* speckle. This keeps the operator interpretable.
+3. **The noise head is initialised to "no noise"** (output bias `-2`), so the
+   residual starts as a pure target extractor.
+
+**Baselines in the same slot** (`spk_*`): `none`, `lee` (the classical adaptive
+Lee filter, `k = var/(var + noise_var)`), `denoise` (fixed low-pass blend).
+
+---
+
+## Component 3 — SAR-Adaptive Attention (SAA)
+
+**Problem.** SE, ECA and CBAM fuse their branches with *fixed* weights, identical
+for every input. In SAR the right emphasis varies with the imaging regime: a
+low-SNR scene needs more spatial/contrast weighting, a bright-clutter scene needs
+more channel selectivity. A fixed fusion cannot express that.
+
+**Formulation.**
+
+```
+d = Descriptor(F) = [avg_c F ; max_c F ; std_c F]
+a = sigma(MLP_c(d))                        # channel attention        (B, C, 1, 1)
+s = sigma(conv([mean_c F ; max_c F ; var_c ; sd_c]))   # spatial attention (B, 1, H, W)
+l = sigma(psi([ |S|_c ; |hp|_c ]))         # local-contrast evidence  (B, 1, H, W)
+w = softmax(MLP_w(d))                      # per-sample branch weights (B, 3)
+M = w0*a + w1*s + w2*l
+F' = F + alpha * (F * M - F)
+```
+
+Two properties distinguish this from "CBAM with extra steps":
+
+* **`std_c` in the descriptor.** Speckle strength is a second-order statistic; a
+  descriptor of only mean and max cannot separate uniform clutter from a
+  high-variance target region.
+* **Input-dependent branch weighting.** `w` is predicted per sample, so the
+  network can switch regime per image.
+
+**The falsifying ablation.** `att_saa_static` is the *identical* block with `w`
+replaced by learned constants shared across the batch. If it matches `att_saa`,
+the adaptivity claim is unsupported and must be dropped. `att_se`, `att_eca` and
+`att_cbam` provide the standard-component comparison in the same slot.
+
+---
+
+## Component 4 — Adaptive Multi-Scale Fusion (AMF)
+
+**Problem.** SAR targets span a wide scale range within one scene. A standard
+PAN-FPN `Concat` gives every input level the same fixed influence, so a small,
+speckle-obscured target can be swamped by a large high-energy neighbour.
+
+**Formulation.** AMF is inserted immediately after each neck `Concat`. Let the
+concatenated channels split into groups `F_1..F_G`, one per fused scale:
+
+```
+d_g = Descriptor(F_g)
+w   = softmax(MLP([d_1 ; ... ; d_G]))          # per-sample, per-scale weights
+F~  = [ w_1 F_1 ; ... ; w_G F_G ]
+M   = sigma(dwconv(psi(F~)))                    # cross-scale channel gating
+F'  = F + alpha * (F~ * M - F)
+```
+
+**Group sizes are resolved at build time** from the parser's channel list, so
+the split is correct for any width/scale multiplier — and the module *validates*
+that the groups sum to its input width, so a stale configuration fails loudly
+instead of silently mis-weighting.
+
+**Baselines in the same slot** (`fus_*`):
+
+* `concat` — stock behaviour (the block returns its input);
+* `add` — projected additive fusion. A plain sum is **not defined** here because
+  PAN-FPN branches have unequal widths (the top-down branch is wider than the
+  backbone branch), so each branch is 1×1-projected to a shared width, summed,
+  and projected back. This is how residual `Add` fusion is implemented whenever
+  widths differ, and it is documented as such rather than presented as a plain sum;
+* `static` — the proposed block with input-independent learned scale weights.
+  **This is the falsifying run for the adaptivity claim.**
+
+---
+
+## Component 5 — P2 small-object detection head
+
+Adds a stride-4 detection level, extending the neck downward:
+
+```
+P3_out --upsample--> Concat(P2) --> C3k2 --> P2_out          (P2/4)
+P2_out --stride-2--> Concat(P3_out) --> C3k2 --> P3'         (P3/8)
+```
+
+**Only justified by evidence.** `saryolo.data.statistics` reports the COCO
+size distribution. If `small` does not dominate, this head should be dropped —
+it costs the most compute of any component (roughly 2.5× the baseline's GFLOPs
+at 640px) for the least certain benefit. `tests/test_data.py` pins the size-bin
+thresholds to `32^2` / `96^2` in **area**, because binning linear sizes against
+32/96 misclassifies a 40×40 object as "large" and would wrongly justify this head.
+
+---
+
+## Component 7 — SAR-aware loss
+
+Kept auxiliary and switchable. With every weight at 0 the objective is
+numerically identical to stock `v8DetectionLoss` (the loss vector simply carries
+a fourth zero entry), which is what makes the `+SAR loss` ablation row a
+measurement of the loss rather than of a changed training regime.
+
+```
+L_total = L_box + L_cls + L_dfl
+        + w_sep    * L_sep        # target/background separation
+        + w_small  * L_small      # small-object confidence emphasis
+        + w_smooth * L_smooth     # background speckle regularisation
+```
+
+**`L_sep` — target/background separation.**
+SAR scenes are overwhelmingly background. A plain BCE can reduce its loss by
+shrinking *all* foreground confidence, which costs recall on weak, low-contrast
+targets. So instead:
+
+```
+L_sep = relu(margin - ( mean_conf(foreground) - mean_conf(hardest background anchors) ))
+```
+
+using the top `bg_frac` background anchors by score, so the model is rewarded for
+*separating* target from clutter rather than for being uniformly unconfident.
+
+**`L_small`.** Small targets occupy few anchors, so their gradient contribution
+is diluted across the batch. This adds an extra confidence objective restricted
+to anchors assigned to COCO-small ground-truth boxes — the loss-level counterpart
+of the P2 head.
+
+**`L_smooth`.** Speckle creates isolated high-variance background responses. This
+penalises total variation of the *background-masked* mean score map at every
+level, suppressing scattered activations while leaving foreground untouched.
+
+All three terms are computed from quantities the baseline criterion already
+produces (`fg_mask`, `target_bboxes`, `target_gt_idx`, `preds["scores"]`), so
+they cost no extra assignment pass. The weights live in the model YAML's
+`sar_loss` block, so a run is reproducible from the committed YAML, and an
+unknown key raises rather than being silently ignored.
+
+---
+
+## Evaluation protocol
+
+* **mAP50 / mAP50:95** via a self-contained COCO-protocol implementation
+  (`saryolo.evaluation.metrics`), with deviations from pycocotools documented in
+  the module docstring.
+* **Scale-wise AP** (`AP_small` / `AP_medium` / `AP_large`) reported separately,
+  because a single mAP can hide exactly the effect being claimed. An area range
+  with no ground truth returns `None`, never `0.0` — otherwise a dataset with no
+  large objects would appear to show the model failing on large objects.
+* **Robustness** under controlled, deterministic degradations (multiplicative
+  Gamma speckle, contrast compression, blur, resolution loss, injected clutter),
+  with the baseline and proposed model facing byte-identical inputs. Only images
+  are degraded; ground truth is untouched, because a physical degradation changes
+  the sensor signal, not where the targets are.
+* **Efficiency** with a stated protocol: latency measured after warm-up with CUDA
+  synchronisation, FLOPs at a recorded input size, peak memory around a
+  forward+backward step.
+* **Cross-dataset** evaluation that *refuses to run* on incompatible label
+  spaces instead of reporting a meaningless low mAP.
+* **Multi-seed** runs (EXP-012) reported as mean ± std, because a single-seed
+  difference of a few tenths of a point is not evidence.
