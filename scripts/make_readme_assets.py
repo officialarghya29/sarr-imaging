@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import textwrap
 import warnings
 from collections import Counter
 from pathlib import Path
@@ -40,14 +41,14 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt  # noqa: E402
 import torch  # noqa: E402
-from matplotlib.patches import FancyBboxPatch  # noqa: E402
+from matplotlib.patches import FancyBboxPatch, Patch  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import saryolo  # noqa: E402,F401  (importing registers the custom modules)
 from saryolo.data.registry import DATASETS, RECOMMENDED_ORDER, get_dataset  # noqa: E402
-from saryolo.nn.arch import VARIANTS, ModelSpec, build_yaml_dict  # noqa: E402
+from saryolo.nn.arch import VARIANTS, build_yaml_dict  # noqa: E402
 from saryolo.tracking.ledger import ExperimentLedger  # noqa: E402
 
 ASSETS = ROOT / "docs" / "assets"
@@ -79,27 +80,65 @@ plt.rcParams.update(
         "axes.titlesize": 15,
         "axes.titleweight": "bold",
         "figure.dpi": 110,
+        # Deterministic SVG element ids. Without a fixed salt matplotlib hashes
+        # object ids into random-looking ids, so every regeneration produces a
+        # thousand-line diff even when not a single number changed -- which hides
+        # the real changes in the history.
+        "svg.hashsalt": "saryolo",
     }
 )
 
 
-def _style(ax, title: str, subtitle: str | None = None) -> None:
-    """Apply the house style and an optional subtitle to an axes."""
-    ax.set_title(title, color=TEXT, pad=20 if subtitle else 10, loc="left")
-    if subtitle:
-        ax.text(0.0, 1.015, subtitle, transform=ax.transAxes, color=MUTED, fontsize=9.5, va="bottom")
-    ax.grid(axis="y", color=GRID, linestyle="--", linewidth=0.7, alpha=0.7)
+def _header(ax, title: str, subtitle: str | None, title_size: float = 16) -> None:
+    """Draw a left-aligned title and multi-line subtitle above an axes.
+
+    The offsets are given in *points*, not axes fractions, and the title's offset
+    is derived from the subtitle's line count. That is what stops the two from
+    colliding: a three-line subtitle grows upward by a known number of points, so
+    the title is placed above it rather than at a fixed guess. Positioning these
+    by axes fraction is exactly what made the longer captions overlap the titles.
+    """
+    lines = subtitle.splitlines() if subtitle else []
+    ax.annotate(
+        title,
+        xy=(0, 1), xycoords="axes fraction",
+        xytext=(0, 14 + 12.5 * len(lines)), textcoords="offset points",
+        ha="left", va="bottom", fontsize=title_size, fontweight="bold", color=TEXT,
+    )
+    if lines:
+        ax.annotate(
+            subtitle,
+            xy=(0, 1), xycoords="axes fraction",
+            xytext=(0, 7), textcoords="offset points",
+            ha="left", va="bottom", fontsize=9.5, color=MUTED, linespacing=1.45,
+        )
+
+
+def _style(ax, title: str, subtitle: str | None = None, grid_axis: str = "y") -> None:
+    """Apply the house style and an optional subtitle to an axes.
+
+    Args:
+        grid_axis: Which axis carries the grid lines. Vertical bars need
+            horizontal grid lines (``"y"``); horizontal bars need vertical ones
+            (``"x"``). Getting this wrong draws grid lines along the bars instead
+            of across them, which reads as visual clutter.
+    """
+    ax.grid(axis=grid_axis, color=GRID, linestyle="--", linewidth=0.7, alpha=0.7)
     ax.set_axisbelow(True)
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
     for side in ("left", "bottom"):
         ax.spines[side].set_color(GRID)
+    _header(ax, title, subtitle)
 
 
 def _save(fig, name: str) -> Path:
     ASSETS.mkdir(parents=True, exist_ok=True)
     path = ASSETS / name
-    fig.savefig(path, format="svg", bbox_inches="tight", pad_inches=0.3)
+    # metadata={"Date": None} drops the <dc:date> stamp, the other half of the
+    # non-determinism. Together with svg.hashsalt this makes an unchanged chart
+    # byte-identical across runs, so a diff here always means a real change.
+    fig.savefig(path, format="svg", bbox_inches="tight", pad_inches=0.3, metadata={"Date": None})
     plt.close(fig)
     print(f"  wrote {path.relative_to(ROOT)}")
     return path
@@ -274,11 +313,18 @@ def build_facts() -> dict:
 
     # Distinct EXP-00x ids: several files legitimately share an id (seed replicates).
     exp_ids = sorted(p.stem.split("_")[0] for p in (ROOT / "configs" / "exp").glob("EXP-*.yaml"))
+    known = set(exp_ids)
     ledger = ExperimentLedger(ROOT / "results")
+    completed = {r.experiment_id for r in ledger.completed()}
     facts["experiments"] = {
-        "total": len(set(exp_ids)),
+        "total": len(known),
         "config_files": len(exp_ids),
-        "with_results": sorted({r.experiment_id for r in ledger.completed()}),
+        # Restricted to the committed experiment ids on purpose: the synthetic
+        # SMOKE-* runs also land in the ledger, and they must never be mistaken for
+        # a paper experiment that produced a number.
+        "with_results": sorted(completed & known),
+        "ledger_runs": len(ledger.load()),
+        "non_experiment_runs": sorted(completed - known),
     }
 
     print("Collecting tests ...")
@@ -299,13 +345,13 @@ def build_facts() -> dict:
 # --------------------------------------------------------------------- charts
 def chart_ladder_params(facts: dict) -> None:
     """Grouped bars: parameters of each ablation-ladder step, scale n vs s."""
-    fig, ax = plt.subplots(figsize=(10.8, 5.4))
+    fig, ax = plt.subplots(figsize=(14.5, 8.2))
     xs = range(len(LADDER))
     w = 0.38
     for offset, scale, color in ((-w / 2, "n", CYAN), (w / 2, "s", MAGENTA)):
         vals = [facts["zoo"][f"{n}_{scale}"]["params_M"] for n in LADDER]
         bars = ax.bar([x + offset for x in xs], vals, w, label=f"YOLO11-{scale}", color=color, alpha=0.9)
-        for bar, v in zip(bars, vals):
+        for bar, v in zip(bars, vals, strict=True):
             ax.text(bar.get_x() + bar.get_width() / 2, v * 1.02, f"{v:.2f}",
                     ha="center", va="bottom", fontsize=8.5, color=color)
     for scale, color in (("n", CYAN), ("s", MAGENTA)):
@@ -327,6 +373,72 @@ def chart_ladder_params(facts: dict) -> None:
     _save(fig, "ladder_params.svg")
 
 
+def _text_box(artist, fig) -> tuple[float, float, float, float]:
+    """Window extent of a Text artist, in device pixels."""
+    box = artist.get_window_extent(renderer=fig.canvas.get_renderer())
+    return (box.x0, box.y0, box.x1, box.y1)
+
+
+def _boxes_intersect(a, b, pad: float = 2.0) -> bool:
+    """True when two rectangles (in pixels) touch, allowing a small padding."""
+    return not (a[2] + pad < b[0] or b[2] + pad < a[0] or a[3] + pad < b[1] or b[3] + pad < a[1])
+
+
+#: Candidate label placements in points, relative to the marker. Tried in order.
+#: The vertical options are spread widely because the crowded cluster of points in
+#: the accuracy/cost chart spans a few percent of the x axis, so labels can only be
+#: separated vertically; the horizontal flip is the fallback.
+_LABEL_CANDIDATES: tuple[tuple[float, float], ...] = (
+    (13, 17), (13, -25), (13, 50), (13, -58), (13, 84), (13, -92),
+    (-13, 17), (-13, -25), (-13, 50), (-13, -58),
+)
+
+
+def _label_points(ax, fig, points, labels, colors, fontsize: float = 10.5) -> None:
+    """Annotate scatter points with labels that do not overlap anything.
+
+    A fixed offset is not enough for this chart, and the reason is a property of
+    the experiment rather than of the drawing code: the ladder deliberately
+    contains near-coincident points. The baseline and +SFE differ by 0.1%, and
+    +P2 head and FULL are *identical* because the SAR-aware loss adds no
+    parameters. One shared offset stacked those labels almost exactly on top of
+    each other.
+
+    Each candidate placement is measured against the boxes already on the figure
+    (tick labels, caption, previously placed labels) and the first clear one wins.
+    """
+    fig.canvas.draw()
+    taken = [
+        box
+        for artist in fig.findobj(plt.Text)
+        if artist.get_text().strip() and artist.get_visible()
+        for box in [_text_box(artist, fig)]
+    ]
+
+    for (x, y), label, color in zip(points, labels, colors, strict=True):
+        chosen = None
+        for dx, dy in _LABEL_CANDIDATES:
+            artist = ax.annotate(
+                label, (x, y), textcoords="offset points", xytext=(dx, dy),
+                fontsize=fontsize, color=color, ha="left" if dx > 0 else "right", va="center",
+            )
+            fig.canvas.draw()
+            box = _text_box(artist, fig)
+            if not any(_boxes_intersect(box, other) for other in taken):
+                chosen = box
+                break
+            artist.remove()
+        if chosen is None:
+            # Every candidate collided: keep the first rather than drop the label,
+            # since an unlabelled point is worse than a crowded one.
+            dx, dy = _LABEL_CANDIDATES[0]
+            artist = ax.annotate(label, (x, y), textcoords="offset points", xytext=(dx, dy),
+                                 fontsize=fontsize, color=color, ha="left", va="center")
+            fig.canvas.draw()
+            chosen = _text_box(artist, fig)
+        taken.append(chosen)
+
+
 def chart_accuracy_cost(facts: dict) -> None:
     """Scatter of parameters vs GFLOPs for the ladder at scale s."""
     pts = [
@@ -334,68 +446,90 @@ def chart_accuracy_cost(facts: dict) -> None:
         for n in LADDER
         if "flops_G" in facts["zoo"].get(f"{n}_s", {})
     ]
-    fig, ax = plt.subplots(figsize=(9.8, 5.6))
+    fig, ax = plt.subplots(figsize=(13.5, 8.4))
     cmap = plt.get_cmap("cool")
-    for i, (fx, py, label, name) in enumerate(pts):
-        color = cmap(i / max(len(pts) - 1, 1))
-        ax.scatter(fx, py, s=200, color=color, edgecolor=BG, linewidth=1.6, zorder=3)
-        dy = 12 if name in ("amf", "p2") else -18
-        ax.annotate(label.replace("\n", " "), (fx, py), textcoords="offset points",
-                    xytext=(11, dy), fontsize=9.5, color=TEXT)
+    for i, (fx, py, _label, _name) in enumerate(pts):
+        ax.scatter(fx, py, s=210, color=cmap(i / max(len(pts) - 1, 1)),
+                   edgecolor=BG, linewidth=1.6, zorder=3)
     ax.plot([p[0] for p in pts], [p[1] for p in pts], color=GRID, linewidth=1.2, zorder=1)
-    ax.set_xlabel("GFLOPs @ 640$^2$  (compute per image)")
+    ax.set_xlabel("GFLOPs @ 640\u00b2  (compute per image)")
     ax.set_ylabel("Parameters (millions)")
+    # Explicit limits keep the leftmost x tick away from the lowest y tick, which
+    # otherwise collide in the bottom-left corner.
+    ax.set_xlim(min(p[0] for p in pts) - 3.0, max(p[0] for p in pts) + 1.5)
+    ax.set_ylim(min(p[1] for p in pts) - 1.2, max(p[1] for p in pts) + 1.7)
     _style(
         ax,
         "Where the extra compute actually goes",
         "Both axes are profiled, not estimated. Curve of the ladder: the multi-scale fusion and "
         "the P2 head dominate,\nso each must earn its place in EXP-005 and EXP-006 before the "
-        "FULL model is ever trained.",
+        "FULL model is ever trained.\nThe baseline/+SFE and +P2/FULL pairs nearly coincide -- "
+        "that is the point, not a plotting error.",
+    )
+    # Placed after the caption so the header boxes are already on the figure and
+    # count as obstacles when the labels look for somewhere to sit.
+    _label_points(
+        ax, fig,
+        [(p[0], p[1]) for p in pts],
+        [p[2].replace("\n", " ") for p in pts],
+        [cmap(i / max(len(pts) - 1, 1)) for i in range(len(pts))],
     )
     _save(fig, "accuracy_cost.svg")
 
 
 def chart_slot_ablations(facts: dict) -> None:
     """Parameter cost of every alternative inside each module slot."""
-    fig, axes = plt.subplots(2, 2, figsize=(13, 8.2))
-    for ax, group in zip(axes.ravel(), SLOT_SETS):
-        title, _ = SLOT_SETS[group]
+    # A 2x2 grid with generous spacing: each panel carries its own two-line caption
+    # in the title, which is what used to collide with the panel above it.
+    fig, axes = plt.subplots(2, 2, figsize=(17.5, 13.5))
+    fig.subplots_adjust(left=0.13, right=0.97, top=0.80, bottom=0.07, hspace=0.42, wspace=0.34)
+    for ax, group in zip(axes.ravel(), SLOT_SETS, strict=True):
+        title, arms = SLOT_SETS[group]
         rows = facts["slots"][group]
         labels = [r["label"] for r in rows]
         vals = [r["params_M"] for r in rows]
         colors = [MAGENTA if r["ours"] else CYAN for r in rows]
-        bars = ax.barh(labels, vals, color=colors, alpha=0.9)
-        for bar, v, r in zip(bars, vals, rows):
-            ax.text(v * 1.02, bar.get_y() + bar.get_height() / 2, f"{v:.3f}M",
-                    va="center", fontsize=8.5, color=MUTED)
+        bars = ax.barh(labels, vals, color=colors, alpha=0.9, height=0.62)
+        for bar, v in zip(bars, vals, strict=True):
+            ax.text(v * 1.015, bar.get_y() + bar.get_height() / 2, f"{v:.3f}M",
+                    va="center", fontsize=10, color=MUTED)
+        # The spread goes in the caption rather than floating over the bars, where it
+        # used to sit on top of the longest one.
         span = max(vals) - min(vals)
-        ax.set_xlim(0, max(vals) * 1.26)
-        ax.set_title(title, fontsize=11, color=TEXT, loc="left")
+        ax.set_xlim(0, max(vals) * 1.30)
+        ax.set_ylim(-0.7, len(rows) - 0.3)
+        ax.tick_params(labelsize=11)
         ax.grid(axis="x", color=GRID, linestyle="--", linewidth=0.7, alpha=0.7)
         ax.set_axisbelow(True)
         for side in ("top", "right"):
             ax.spines[side].set_visible(False)
         for side in ("left", "bottom"):
             ax.spines[side].set_color(GRID)
-        ax.tick_params(labelsize=9)
-        ax.text(0.99, 0.04, f"spread: {span:.3f}M", transform=ax.transAxes,
-                ha="right", fontsize=8.5, color=MUTED)
-    fig.suptitle("Every component is compared inside the same slot, at equal budget",
-                 color=TEXT, fontsize=15.5, fontweight="bold", x=0.006, ha="left", y=1.05)
-    fig.text(0.006, 1.008,
-             "The claim is never \"attention helps\". It is \"our attention beats SE, ECA and CBAM "
-             "when each sits in the identical\nslot on the identical backbone\". Each group holds "
-             "every other component fixed; only the named slot varies.\nMagenta = proposed. "
-             "Where the spread is ~0 (Components 1 and 2's classical arms) the comparison is "
-             "about accuracy, not size.",
-             color=MUTED, fontsize=9.5, ha="left", va="top")
+        _header(
+            ax,
+            title,
+            f"{len(arms)} arms · spread across arms: {span:.3f}M",
+            title_size=13,
+        )
+    fig.suptitle(
+        "Every component is compared inside the same slot, at equal budget",
+        color=TEXT, fontsize=19, fontweight="bold", x=0.02, ha="left", y=0.965,
+    )
+    fig.text(
+        0.02, 0.935,
+        "The claim is never \"attention helps\". It is \"our attention beats SE, ECA and CBAM when "
+        "each sits in the identical slot on the identical backbone\".\nEach group holds every other "
+        "component fixed; only the named slot varies. Magenta = proposed.\nWhere the spread is ~0 "
+        "(Components 1 and 2's classical arms) the comparison is about accuracy, not size.",
+        color=MUTED, fontsize=11.5, ha="left", va="top", linespacing=1.5,
+    )
     _save(fig, "slot_ablations.svg")
 
 
 def chart_identity(facts: dict) -> None:
     """Visualise the measured identity-at-initialisation property."""
     rows = facts["identity"]
-    fig, ax = plt.subplots(figsize=(11, 3.9))
+    fig, ax = plt.subplots(figsize=(14.5, 7.4))
     for i, r in enumerate(rows):
         y = len(rows) - i
         ok = r["identical"]
@@ -421,29 +555,59 @@ def chart_identity(facts: dict) -> None:
     _save(fig, "identity_property.svg")
 
 
+def _two_line(label: str, width: int = 34) -> str:
+    """Wrap a dataset title onto at most two lines, breaking at the em dash.
+
+    Long one-line tick labels are the main reason a horizontal bar chart looks
+    cramped: they eat the left margin and push the bars into the caption.
+    """
+    head, _, tail = label.partition(" \u2014 ")
+    if tail:
+        return f"{head.strip()}\n{textwrap.fill(tail.strip(), width)}"
+    return textwrap.fill(label.strip(), width)
+
+
 def chart_datasets(facts: dict) -> None:
     """Dataset landscape: images per dataset, coloured by tier."""
     keys = list(RECOMMENDED_ORDER)
     vals = [facts["datasets"][k]["images"] for k in keys]
-    labels = [facts["datasets"][k]["title"] for k in keys]
+    labels = [_two_line(facts["datasets"][k]["title"]) for k in keys]
     colors = [GREEN if facts["datasets"][k]["tier"] == "pilot" else VIOLET for k in keys]
 
-    fig, ax = plt.subplots(figsize=(10.8, 4.8))
-    bars = ax.barh(labels, vals, color=colors, alpha=0.9)
+    fig, ax = plt.subplots(figsize=(16.5, 8.6))
+    bars = ax.barh(labels, vals, color=colors, alpha=0.9, height=0.6)
     ax.set_xscale("log")
-    for bar, v, k in zip(bars, vals, keys):
-        ax.text(v * 1.18, bar.get_y() + bar.get_height() / 2,
-                f"{v:,} imgs  ·  {facts['datasets'][k]['classes']} cls  ·  {facts['datasets'][k]['format']}",
-                va="center", fontsize=8.8, color=MUTED)
-    ax.set_xlabel("Images (log scale)")
-    ax.set_xlim(1, max(vals) * 60)
+
+    # All annotations sit in one aligned column to the right of the longest bar,
+    # instead of hanging off each bar's end where long text runs into the axis.
+    text_x = max(vals) * 2.4
+    for bar, v, k in zip(bars, vals, keys, strict=True):
+        ax.text(text_x, bar.get_y() + bar.get_height() / 2,
+                f"{v:,} images   ·   {facts['datasets'][k]['classes']} "
+                f"class{'es' if facts['datasets'][k]['classes'] > 1 else ''} "
+                f"   ·   {facts['datasets'][k]['format'].upper()} "
+                f"   ·   {facts['datasets'][k]['imgsz']}px input",
+                va="center", ha="left", fontsize=11.5, color=MUTED)
+
+    ax.set_xlabel("Images (log scale)", fontsize=12)
+    ax.set_xlim(1, max(vals) * 130)
+    ax.set_ylim(-0.7, len(keys) - 0.3)
+    ax.tick_params(labelsize=12)
+    ax.axvline(max(vals), color=VIOLET, linestyle=":", linewidth=1, alpha=0.5)
+    ax.legend(
+        handles=[
+            Patch(facecolor=GREEN, alpha=0.9, label="pilot tier \u2014 fast iteration"),
+            Patch(facecolor=VIOLET, alpha=0.9, label="benchmark tier \u2014 final numbers"),
+        ],
+        frameon=False, labelcolor=TEXT, fontsize=11.5, loc="lower right",
+    )
     _style(
         ax,
         "The SAR data landscape, and why we start small",
-        "Green = pilot tier (fast iteration, proves the pipeline end to end). Violet = benchmark "
-        "tier (final reported\nnumbers). Development order is decided by cost, so a wiring bug "
-        "surfaces on a 1,160-image dataset instead of a\n116k-image one. Counts are indicative; "
-        "docs/DATASETS.md records what must be verified per release.",
+        "Development order is decided by cost: a wiring bug should surface on a 1,160-image \n"
+        "pilot dataset, not after hours on the 116k-image benchmark. Counts are indicative \u2014 \n"
+        "docs/DATASETS.md records exactly what must be verified against each official release.",
+        grid_axis="x",
     )
     _save(fig, "datasets.svg")
 
@@ -453,7 +617,7 @@ def chart_coverage(facts: dict) -> None:
     ids = sorted(p.stem.split("_")[0] for p in (ROOT / "configs" / "exp").glob("EXP-*.yaml"))
     done = set(facts["experiments"]["with_results"])
 
-    fig, ax = plt.subplots(figsize=(11, 4.4))
+    fig, ax = plt.subplots(figsize=(15.5, 9.2))
     for i, eid in enumerate(ids):
         y = len(ids) - i - 1
         status = eid in done
@@ -480,19 +644,23 @@ def chart_tests(facts: dict) -> None:
     labels = [Path(k).name for k in by_file]
     vals = list(by_file.values())
     colors = [CYAN, MAGENTA, AMBER, GREEN, VIOLET][: len(vals)]
-    fig, ax = plt.subplots(figsize=(10.8, 4.6))
+    fig, ax = plt.subplots(figsize=(14.5, 7.4))
     bars = ax.barh(labels, vals, color=colors, alpha=0.9)
-    for bar, v in zip(bars, vals):
+    for bar, v in zip(bars, vals, strict=True):
         ax.text(v + 0.15, bar.get_y() + bar.get_height() / 2, str(v),
                 va="center", fontsize=10, color=TEXT, fontweight="bold")
     ax.set_xlabel("Tests")
     ax.set_xlim(0, max(vals) * 1.2)
+    ax.margins(y=0.14)
     _style(
         ax,
-        f"Guarding the science: {facts['tests']['total']} tests across {len(vals)} modules",
-        "These are correctness tests, not accuracy claims. They pin the baseline to published "
-        "parameter counts, prove\nmodule identity at init, validate the COCO matcher against "
-        "hand-computed cases, and assert that no table can\nemit an unmeasured number.",
+        title=f"Guarding the science: {facts['tests']['total']} tests across {len(vals)} modules",
+        subtitle=(
+            "These are correctness tests, not accuracy claims. They pin the baseline to published "
+            "parameter counts, prove\nmodule identity at init, validate the COCO matcher against "
+            "hand-computed cases, and assert that no table can\nemit an unmeasured number."
+        ),
+        grid_axis="x",
     )
     _save(fig, "tests.svg")
 

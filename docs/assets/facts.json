@@ -275,16 +275,21 @@
   "experiments": {
     "total": 12,
     "config_files": 14,
-    "with_results": []
+    "with_results": [],
+    "ledger_runs": 4,
+    "non_experiment_runs": [
+      "SMOKE-001",
+      "SMOKE-002"
+    ]
   },
   "tests": {
-    "total": 56,
+    "total": 66,
     "by_file": {
       "tests/test_arch.py": 15,
-      "tests/test_data.py": 12,
+      "tests/test_data.py": 19,
       "tests/test_losses.py": 10,
       "tests/test_metrics.py": 9,
-      "tests/test_repo.py": 10
+      "tests/test_repo.py": 13
     }
   }
 }

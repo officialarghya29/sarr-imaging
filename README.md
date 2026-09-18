@@ -1,20 +1,17 @@
-<div align="center">
-
 # SAR-YOLO
 
 ### Speckle-aware object detection for synthetic aperture radar
 
 *Four modules, each derived from a failure mode of SAR imagery — and each one ablatable.*
 
-![license](https://img.shields.io/badge/license-MIT-22d3ee?style=flat-square)
-![python](https://img.shields.io/badge/python-3.10%2B-f472b6?style=flat-square)
-![ultralytics](https://img.shields.io/badge/ultralytics-8.4.155-a78bfa?style=flat-square)
-![tests](https://img.shields.io/badge/tests-56%20passing-34d399?style=flat-square)
-![variants](https://img.shields.io/badge/architectures-35%20wired-22d3ee?style=flat-square)
-![experiments](https://img.shields.io/badge/experiments-12%20ready-f472b6?style=flat-square)
-![results](https://img.shields.io/badge/accuracy%20results-none%20fabricated-fbbf24?style=flat-square)
-
-</div>
+| Status | |
+| --- | --- |
+| **Licence** | MIT for the code — datasets are never redistributed |
+| **Stack** | Python 3.10+ · Ultralytics 8.4.155 · PyTorch 2.x |
+| **Architectures** | 35 variants wired; every one builds and runs a forward pass |
+| **Experiments** | 12 configured; each reproducible from a committed YAML |
+| **Tests** | 66 passing — no dataset download and no GPU needed |
+| **Accuracy results** | none yet — not one number in this repository is fabricated |
 
 ---
 
@@ -23,7 +20,7 @@
 | | |
 | --- | --- |
 | **What this is** | A complete, reproducible research pipeline for SAR object detection: dataset audit → baseline → four SAR-specific modules → ablations → robustness → efficiency → cross-dataset → paper. |
-| **What is proven** | The infrastructure. 56 tests pass; the baseline reproduces stock YOLO11 exactly; every module is measurably an identity function at initialisation; both models train end to end. |
+| **What is proven** | The infrastructure. 66 tests pass; the baseline reproduces stock YOLO11 exactly; every module is measurably an identity function at initialisation; both models train end to end. |
 | **What is *not* proven** | Accuracy. **No model has been trained on a real SAR dataset in this repository.** There is no result table here with numbers in it, and the table generators refuse to print one. |
 | **Why that's the point** | A detector paper is only as strong as its ablations. If the machinery that produces those ablations cannot be trusted, every number downstream is unverifiable. Build the instrument first. |
 
@@ -37,33 +34,44 @@ You cannot design a SAR detector by reading about RGB detectors. Radar images ar
 
 ### 1. Speckle is *multiplicative* noise
 
-A SAR pixel is not a photograph of a surface — it is the coherent sum of returns from many scatterers inside one resolution cell. Those returns add as complex numbers, so random phase differences cause **constructive and destructive interference**. The observed intensity is
+A SAR pixel is not a photograph of a surface — it is the coherent sum of returns from many scatterers inside one resolution cell. Those returns add as complex numbers, so random phase differences cause **constructive and destructive interference**. The observed intensity is a *product* of signal and noise:
 
-$$ I = R \cdot S, \qquad S \sim \text{speckle} $$
+```text
+I = R · S                        R = backscatter reflectivity (what we want)
+                                 S = speckle field (what we get instead)
+```
 
-where $R$ is the physical backscatter reflectivity we actually want. For fully developed speckle the single-look intensity is negative-exponential:
+For fully developed speckle the single-look intensity follows a negative-exponential law:
 
-$$ p_I(I) = \frac{1}{\langle I \rangle}\exp\!\left(-\frac{I}{\langle I \rangle}\right) $$
+```text
+p(I) = (1 / ⟨I⟩) · exp( −I / ⟨I⟩ )
+```
 
-so its standard deviation **equals its mean**. The standard metric is the *equivalent number of looks*:
+so its standard deviation **equals its mean**. The standard measure of how much speckle remains is the *equivalent number of looks*:
 
-$$ \text{ENL} = \frac{\langle I \rangle^2}{\operatorname{Var}(I)} = L $$
+```text
+ENL = ⟨I⟩² / Var(I) = L          L = number of independent looks
+```
 
-Multi-looking $L$ independent looks reduces the relative fluctuation by $1/\sqrt{L}$ — never eliminates it.
+Multi-looking over *L* independent looks reduces the relative fluctuation by 1/√L — and never eliminates it.
 
 **Why this breaks a CNN.** Nearly every convention in a modern detector implicitly assumes *additive, signal-independent* noise: batch normalisation, L2 losses, and the very idea that a fixed threshold separates object from background. Speckle is multiplicative, so the noise magnitude scales with the signal. A bright target is *noisier* than the dark sea around it. This is the opposite of the low-light intuition, and it is the reason a natural-image pretrained backbone arrives with the wrong prior.
 
-**The classical fix, and its cost.** A log transform makes the noise additive:
+**The classical fix, and its cost.** A log transform turns the product into a sum:
 
-$$ \log I = \log R + \log S, \qquad \operatorname{Var}(\log S) = \psi'(L) \;\; \text{(trigamma)} $$
+```text
+log I = log R + log S            Var(log S) = ψ′(L)     (trigamma function)
+```
 
-variance no longer depends on the mean. But $\log$ also compresses dynamic range — exactly the high-reflectance contrast that distinguishes a ship from its wake. **So there is a real trade-off: variance stabilisation versus target contrast.** That trade-off is the scientific content of Component 1 and Component 2, and it is why both are ablated rather than assumed.
+The variance no longer depends on the mean, which is exactly what a convolutional stack would like. But the log transform also *compresses dynamic range* — precisely the high-reflectance contrast that separates a ship from its wake. **So there is a real trade-off: variance stabilisation versus target contrast.** That trade-off is the scientific content of Component 1 and Component 2, and it is why both are ablated rather than assumed.
 
 ### 2. The objects are tiny, and "tiny" is a *resolution* problem
 
-Detection difficulty is not about pixel count — it is about how many *feature cells* an object occupies. For stride $s$ and object width $w$ px:
+Detection difficulty is not about pixel count — it is about how many *feature cells* an object occupies. For stride *s* and object width *w* pixels:
 
-$$ \text{cells} = \left\lceil \frac{w}{s} \right\rceil $$
+```text
+cells = ⌈ w / s ⌉                a 16px object at stride 32 spans half a cell
+```
 
 | Object width | stride 8 (P3) | stride 16 (P4) | stride 32 (P5) |
 | ---: | ---: | ---: | ---: |
@@ -71,7 +79,7 @@ $$ \text{cells} = \left\lceil \frac{w}{s} \right\rceil $$
 | 32 px | 4 cells | 2 cells | 1 cell |
 | 64 px | 8 cells | 4 cells | 2 cells |
 
-The COCO convention calls anything with area $\le 32^2$ px² "small". A 16×16 px ship therefore lands on **one or fewer** P4/P5 cells. There is nothing for a deep head to classify. This is the entire justification for Component 5 — and it is why the P2 level is a *hypothesis to test* (EXP-006) rather than a default.
+The COCO convention calls anything with area ≤ 32² px² "small". A 16×16 px ship therefore lands on **one or fewer** P4/P5 cells. There is nothing for a deep head to classify. This is the entire justification for Component 5 — and it is why the P2 level is a *hypothesis to test* (EXP-006) rather than a default.
 
 ### 3. Clutter wins the gradient argument
 
@@ -81,9 +89,12 @@ Hence attention is not a decorative add-on here: re-weighting locations changes 
 
 ### 4. How the score is computed
 
-$$ \text{AP} = \int_0^1 p(r)\,dr, \qquad \text{mAP} = \frac{1}{|\mathcal{T}|}\sum_{\tau \in \mathcal{T}} \text{AP}_\tau, \qquad \mathcal{T} = \{0.50, 0.55, \dots, 0.95\} $$
+```text
+AP  = ∫₀¹ p(r) dr                        area under the precision–recall curve
+mAP = (1 / |T|) · Σ over τ ∈ T of AP_τ   T = { 0.50, 0.55, …, 0.95 }
+```
 
-Area under the precision–recall curve, averaged over ten IoU thresholds — and reported separately for small, medium and large objects, because a single mAP can hide the entire effect being claimed. That scale-wise decomposition is implemented in [`saryolo/evaluation/metrics.py`](saryolo/evaluation/metrics.py).
+Averaged over ten IoU thresholds — and reported separately for small, medium and large objects, because a single mAP can hide the entire effect being claimed. That scale-wise decomposition is implemented in [`saryolo/evaluation/metrics.py`](saryolo/evaluation/metrics.py).
 
 ---
 
@@ -102,26 +113,37 @@ Each component exists to answer one row of this table. No component exists becau
 
 Component 6 (oriented boxes) is deliberately **not implemented**. Orientation only helps if annotations carry meaningful rotation — true for `SRSDD-v1.0` (six fine-grained ship classes) and `SAR-Ship-Dataset`, but not for SSDD/HRSID. The DOTA converter exists; the head does not, and will only be added if that experiment is actually run.
 
-```mermaid
-flowchart TD
-    A[SAR image] --> B["YOLO11 backbone"]
-    B --> C["P2/4 — Component 1: SFE"]
-    B --> D["P5/32 — Component 2: SFM"]
-    D --> E["PAN-FPN neck"]
-    E --> F["each Concat — Component 4: AMF"]
-    F --> G["per level — Component 3: SAA"]
-    G --> H["Detect P2 · P3 · P4 · P5<br/>Component 5: P2 head"]
-    H --> I["Component 7: SAR-aware loss<br/>separation + small-object + speckle reg."]
-    I --> J[Predictions]
-
-    style A fill:#0a0e17,stroke:#22d3ee,color:#e6edf7
-    style C fill:#111827,stroke:#34d399,color:#e6edf7
-    style D fill:#111827,stroke:#34d399,color:#e6edf7
-    style F fill:#111827,stroke:#34d399,color:#e6edf7
-    style G fill:#111827,stroke:#34d399,color:#e6edf7
-    style H fill:#111827,stroke:#34d399,color:#e6edf7
-    style I fill:#111827,stroke:#f472b6,color:#e6edf7
-    style J fill:#0a0e17,stroke:#22d3ee,color:#e6edf7
+```text
+SAR image
+   │
+   ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│ YOLO11 backbone                                                      │
+│   P2/4  ──► Component 1: SAR Feature Enhancement            (SFE)    │
+│   P3/8, P4/16, P5/32, SPPF/C2PSA                                     │
+│   P5/32 ──► Component 2: Speckle-Aware Feature Module       (SFM)    │
+└──────────────────────────────────────────────────────────────────────┘
+   │
+   ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│ PAN-FPN neck                                                         │
+│   after every Concat ──► Component 4: Adaptive Multi-Scale  (AMF)    │
+│                          Fusion                                      │
+└──────────────────────────────────────────────────────────────────────┘
+   │
+   ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│ per level ──► Component 3: SAR-Adaptive Attention           (SAA)    │
+│               → Detect(P2, P3, P4, P5)  Component 5: P2 head         │
+└──────────────────────────────────────────────────────────────────────┘
+   │
+   ▼
+Component 7: SAR-aware loss
+             target/background separation + small-object term +
+             background speckle regularisation
+   │
+   ▼
+Predictions
 ```
 
 Full mathematics, derivations and pseudocode: [`docs/METHOD.md`](docs/METHOD.md).
@@ -130,19 +152,15 @@ Full mathematics, derivations and pseudocode: [`docs/METHOD.md`](docs/METHOD.md)
 
 ## Part III · The instrument
 
-<div align="center">
-<img src="docs/assets/identity_property.svg" width="100%">
-</div>
+![Measured identity-at-initialisation property for all four modules](docs/assets/identity_property.svg)
 
 ### The single guarantee the whole paper rests on
 
-Every module is initialised so that $f(x) = x$ **exactly** — not approximately. Zero-initialised output projections and zero gates make each module a no-op at step 0, so a freshly built SAR-YOLO is *numerically identical* to its baseline.
+Every module is initialised so that `f(x) = x` **exactly** — not approximately. Zero-initialised output projections and zero gates make each module a no-op at step 0, so a freshly built SAR-YOLO is *numerically identical* to its baseline.
 
 This matters more than it sounds. Without it, a "module helps" result is confounded with "the extra layers happened to change the initial function". With it, a measured difference has exactly one available explanation: the module **learned** something. The values above are measured live by [`scripts/make_readme_assets.py`](scripts/make_readme_assets.py), and pinned by `tests/test_arch.py`.
 
-<div align="center">
-<img src="docs/assets/ladder_params.svg" width="100%">
-</div>
+![Measured parameter cost of every module in the ablation ladder](docs/assets/ladder_params.svg)
 
 Reading the chart:
 
@@ -150,9 +168,7 @@ Reading the chart:
 - **+P2 head and FULL have identical bars.** The SAR-aware loss is an *objective*, not a layer. Component 7 costs **zero** parameters. That is precisely what makes it a clean ablation (EXP-008) — the architecture is frozen and only the training signal changes.
 - **AMF and the P2 head dominate the cost.** Together they account for most of the added compute, which is why each must earn its place in EXP-005 and EXP-006 before the FULL model is ever trained.
 
-<div align="center">
-<img src="docs/assets/accuracy_cost.svg" width="100%">
-</div>
+![Parameters versus GFLOPs for each ladder step](docs/assets/accuracy_cost.svg)
 
 ### Measured cost of every variant (scale `s`, one-class head)
 
@@ -168,9 +184,7 @@ Reading the chart:
 
 The story the table tells is uncomfortable and useful: **the two cheapest modules carry the physical insight, and the two most expensive carry the resolution.** If EXP-006 shows the P2 head does not move AP_small, the model drops back to 35 GFLOPs and a much stronger efficiency claim — for free.
 
-<div align="center">
-<img src="docs/assets/slot_ablations.svg" width="100%">
-</div>
+![Slot-matched module ablations: attention, fusion, speckle and enhancement](docs/assets/slot_ablations.svg)
 
 ### Slot-matched comparison — the only fair way to claim novelty
 
@@ -191,9 +205,7 @@ The claim is never *"attention helps"*. It is *"our block beats SE, ECA and CBAM
 
 Two facts worth stating plainly. **The classical arms are parameter-free**, so the proposed SFM cannot justify itself on elegance — only on measured accuracy. And the adaptive vs. static rows are the load-bearing experiments: if `att_saa_static` matches `att_saa`, the adaptivity claim is unsupported and the paper must say so.
 
-<div align="center">
-<img src="docs/assets/tests.svg" width="100%">
-</div>
+![Test-suite composition across the repository's modules](docs/assets/tests.svg)
 
 ---
 
@@ -213,12 +225,14 @@ Two facts worth stating plainly. **The classical arms are parameter-free**, so t
 | Baseline + FULL train end to end on CPU | both complete, ledger written | `_smoke_*` configs |
 | COCO matcher agrees with hand-computed cases | pass | `tests/test_metrics.py` |
 | No table can emit an unmeasured number | pass | `tests/test_repo.py` |
+| Oriented (9-field) labels are diagnosed, not dropped | reported as `oriented_labels` | `test_validator_diagnoses_oriented_labels_...` |
+| A dataset cannot validate clean while its boxes are unreadable | pass | same test |
+| Malformed VOC XML cannot abort a batch conversion | counted as `skipped_annotations` | `test_voc_converter_survives_malformed_annotations` |
+| Every registry dataset ships a matching data config | pass | `test_every_registry_dataset_has_a_matching_data_config` |
 
 ### What is not yet measured
 
-<div align="center">
-<img src="docs/assets/coverage.svg" width="100%">
-</div>
+![Experiment coverage: wired and reproducible, but not yet measured](docs/assets/coverage.svg)
 
 Every experiment below is **code-complete and reproducible from a committed config**. None has produced an accuracy number, because none has been run on a GPU against a real dataset.
 
@@ -238,9 +252,7 @@ Every experiment below is **code-complete and reproducible from a committed conf
 
 ## Part V · Data
 
-<div align="center">
-<img src="docs/assets/datasets.svg" width="100%">
-</div>
+![The public SAR dataset landscape with pilot and benchmark tiers](docs/assets/datasets.svg)
 
 | Order | Dataset | Images | Classes | Format | Input | Tier | Role |
 | ---: | --- | ---: | ---: | --- | ---: | --- | --- |
@@ -253,6 +265,8 @@ Every experiment below is **code-complete and reproducible from a committed conf
 **Why cheapest-first.** Development order is decided by cost, so a wiring bug surfaces on a 1,160-image dataset in minutes rather than on a 116k-image one after hours. The rule that matters more than speed: *understand the data before building the model.*
 
 **Two notes before quoting these numbers.** SRSDD-v1.0 is widely cited as having **seven** ship categories; the dataset paper states **six** (ore-oil, bulk-cargo, fishing, law-enforcement, dredger, container) over 2,884 instances cut from 30 panoramic Gaofen-3 tiles. And image counts differ between the official release and the common cropped distributions — `docs/DATASETS.md` records exactly what must be verified per release.
+
+The oriented-label trap is caught automatically rather than discovered after a wasted GPU run. Because both SRSDD-v1.0 and SAR-Ship-Dataset convert to **9-field** YOLO-OBB rows (class + 8 corners) while the detection models consume **5-field** rows, `check-data` reports an `oriented_labels` error and refuses to validate such a dataset clean — instead of calling every row "malformed", or profiling the dataset as a perfectly good one containing zero objects.
 
 Details, licences, citations and download routes: [`docs/DATASETS.md`](docs/DATASETS.md). **No dataset is redistributed here** — MIT covers the code only.
 
@@ -273,7 +287,7 @@ The brief that motivated this project named the failure mode to avoid: `YOLO + C
 
 ## Part VII · Quickstart
 
-Reproduce every verified claim locally — **no dataset download, no GPU** (`pytest tests/ -q` → 56 passed):
+Reproduce every verified claim locally — **no dataset download, no GPU** (`pytest tests/ -q` → 66 passed):
 
 ```bash
 uv venv .venv --python 3.12
@@ -281,13 +295,14 @@ uv pip install --python .venv/bin/python torch torchvision --index-url https://d
 uv pip install --python .venv/bin/python ultralytics pytest
 source .venv/bin/activate
 
-pytest tests/ -q                                          # 56 tests
+pytest tests/ -q                                          # 66 tests
 python -m saryolo arch --variant all --nc 1               # emit 35 model YAMLs
 python -m saryolo synth-data --out datasets/processed/synthetic_smoke
 python -m saryolo train --exp configs/exp/_smoke_baseline.yaml
 python -m saryolo train --exp configs/exp/_smoke_full.yaml
 python -m saryolo ledger
 python scripts/make_readme_assets.py                      # regenerate this page's charts
+python scripts/check_chart_layout.py                      # lint those charts for text collisions
 ```
 
 > The `_smoke_*.yaml` configs use **synthetic Gamma-speckle** data. They exist to catch wiring bugs in seconds instead of after an hour of GPU time. Any number they produce is meaningless as a research result.
@@ -362,9 +377,10 @@ saryolo/
 └── cli.py                 python -m saryolo <command>
 
 configs/    datasets/ · models/ (35 generated) · exp/ (EXP-001…012)
-scripts/    prepare_dataset · make_exp_configs · train_all_experiments · make_readme_assets
+scripts/    prepare_dataset · make_exp_configs · train_all_experiments
+            make_readme_assets (builds this page's charts) · check_chart_layout
 notebooks/  Colab: dataset prep · train + ablate · benchmark + paper
-tests/      56 tests across arch parity, identity, metrics, losses, data, repo
+tests/      66 tests across arch parity, identity, metrics, losses, data, repo
 docs/       DATASETS.md · METHOD.md · assets/ (generated charts)
 ```
 

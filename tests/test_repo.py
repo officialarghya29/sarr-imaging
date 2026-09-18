@@ -78,7 +78,7 @@ def test_generated_model_yamls_match_the_builder():
 
 def test_model_yamls_are_not_hand_edited_out_of_sync():
     """A YAML whose body differs from the builder's output means someone edited it by hand."""
-    for name, spec in sorted(VARIANTS.items()):
+    for _name, spec in sorted(VARIANTS.items()):
         path = MODELS_DIR / variant_filename(spec)
         if not path.exists():
             continue
@@ -139,6 +139,67 @@ def test_readme_generated_charts_exist():
     charts = sorted((REPO_ROOT / "docs" / "assets").glob("*.svg"))
     assert len(charts) >= 7, f"expected the full chart set, found {[p.name for p in charts]}"
     assert (REPO_ROOT / "docs" / "assets" / "facts.json").exists()
+
+
+def test_readme_charts_have_no_text_collisions():
+    """Charts must be readable, not merely valid.
+
+    A caption that overlaps a title, or an axis label sitting on top of a data
+    label, still renders as a perfectly valid SVG -- so nothing else in this suite
+    can detect it, and the problem only becomes visible to a reader. This runs the
+    layout checker, which measures the text bounding boxes matplotlib actually
+    computed rather than trusting the source.
+    """
+    import subprocess
+    import sys
+
+    proc = subprocess.run(
+        [sys.executable, str(REPO_ROOT / "scripts" / "check_chart_layout.py")],
+        cwd=REPO_ROOT, capture_output=True, text=True,
+    )
+    assert proc.returncode == 0, (
+        "chart layout problems detected:\n" + (proc.stdout or "") + (proc.stderr or "")
+    )
+
+
+def test_generated_charts_are_reproducible():
+    """A chart must not change when nothing changed.
+
+    Matplotlib stamps a creation date into SVG output by default, so every
+    regeneration of an unchanged chart produced a real diff. That buries genuine
+    changes in noise and makes it impossible to tell whether a committed figure
+    still corresponds to the code that produced it.
+    """
+    charts = sorted((REPO_ROOT / "docs" / "assets").glob("*.svg"))
+    assert charts
+    stamped = [p.name for p in charts if "<dc:date>" in p.read_text()]
+    assert not stamped, (
+        f"{stamped} carry a creation timestamp; pass metadata={{'Date': None}} to savefig "
+        "and set rcParams['svg.hashsalt'] so regenerating an unchanged chart is byte-identical"
+    )
+
+
+def test_every_registry_dataset_has_a_matching_data_config():
+    """A dataset the registry advertises must ship a data config that agrees with it.
+
+    Drift here is silent and expensive: the registry, the README table and
+    docs/DATASETS.md all list the dataset, the code happily returns its classes,
+    and the failure only appears as a confusing "dataset not found" once someone
+    actually tries to train on it. Class ids must also match, since a reordered
+    name list silently relabels every annotation.
+    """
+    from saryolo.data.registry import DATASETS
+
+    for key, spec in sorted(DATASETS.items()):
+        path = REPO_ROOT / "configs" / "datasets" / f"{key}.yaml"
+        assert path.exists(), f"{key}: missing {path.relative_to(REPO_ROOT)}"
+        data = yaml.safe_load(path.read_text())
+        assert data["nc"] == len(spec.classes), (
+            f"{key}: data config declares nc={data['nc']} but the registry has {len(spec.classes)} classes"
+        )
+        assert list(data["names"]) == list(spec.classes), (
+            f"{key}: class names/order differ from the registry ({list(data['names'])} vs {list(spec.classes)})"
+        )
 
 
 @pytest.mark.parametrize("exp_id", ["EXP-001", "EXP-007"])
