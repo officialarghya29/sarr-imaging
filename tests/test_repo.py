@@ -115,6 +115,32 @@ def test_experiment_configs_declare_a_seed():
         assert isinstance(cfg.seed, int)
 
 
+def test_readme_references_only_existing_assets():
+    """Every image and local link in the README must resolve.
+
+    A broken chart path is invisible in a diff and only shows up as a torn image
+    on the project page, which is a bad first impression for a README that is the
+    entry point to the research.
+    """
+    import re
+
+    readme = (REPO_ROOT / "README.md").read_text()
+    referenced = set(
+        re.findall(r"<img\s+src=\"([^\"]+)\"", readme)
+        + re.findall(r"\]\((?!https?://|#)([^)]+)\)", readme)
+    )
+    assert referenced, "README references no assets; did the chart links get dropped?"
+    missing = sorted(ref for ref in referenced if not (REPO_ROOT / ref).exists())
+    assert not missing, f"README points at files that do not exist: {missing}"
+
+
+def test_readme_generated_charts_exist():
+    """The generated figures must be committed, not just produced locally."""
+    charts = sorted((REPO_ROOT / "docs" / "assets").glob("*.svg"))
+    assert len(charts) >= 7, f"expected the full chart set, found {[p.name for p in charts]}"
+    assert (REPO_ROOT / "docs" / "assets" / "facts.json").exists()
+
+
 @pytest.mark.parametrize("exp_id", ["EXP-001", "EXP-007"])
 def test_core_experiments_exist(exp_id):
     """The two experiments every table depends on must be present."""

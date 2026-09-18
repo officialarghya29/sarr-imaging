@@ -36,9 +36,20 @@ def test_registry_entries_are_complete():
 
 
 def test_recommended_order_is_cheapest_first():
-    """Development order must start with the smallest dataset (the project rule)."""
-    sizes = [get_dataset(name).approx_images for name in RECOMMENDED_ORDER]
-    assert sizes == sorted(sizes), "RECOMMENDED_ORDER should be ascending in dataset size"
+    """Development order must be pilot-tier first, then ascending in size.
+
+    Both halves matter: the project rule is to prove the pipeline on a pilot
+    dataset before spending GPU time on a benchmark, and within a tier each step
+    should cost more than the last.
+    """
+    specs = [get_dataset(name) for name in RECOMMENDED_ORDER]
+    tiers = [spec.tier for spec in specs]
+    assert tiers == sorted(tiers, key={"pilot": 0, "benchmark": 1}.get), (
+        f"all pilot-tier datasets must come before benchmark ones, got {tiers}"
+    )
+    for tier in ("pilot", "benchmark"):
+        sizes = [spec.approx_images for spec in specs if spec.tier == tier]
+        assert sizes == sorted(sizes), f"{tier} datasets should be ascending in size, got {sizes}"
 
 
 # -------------------------------------------------------------------------- validator

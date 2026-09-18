@@ -92,7 +92,12 @@ DATASETS: dict[str, DatasetSpec] = {
         recommended_imgsz=800,
         tier="pilot",
         notes=(
-            "5604 images from 99 Sentinel-1/2/TerraSAR-X scenes with COCO annotations. "
+            "5604 images from 99 Sentinel-1, TerraSAR-X and Gaofen-3 scenes, with COCO "
+            "annotations. "
+            "The paper also filtered out 400 crops of pure background and ships them "
+            "separately: these carry no positives and are the intended probe for false "
+            "alarms, so use them for the clutter/false-positive arm of the robustness "
+            "sweep (EXP-009) rather than discarding them. "
             "IMPORTANT: images are cropped from a small number of large scenes, so random "
             "splitting leaks near-identical patches across train/test. Prefer splitting by "
             "scene, and always run the leakage check in saryolo.data.splits."
@@ -119,6 +124,32 @@ DATASETS: dict[str, DatasetSpec] = {
         ),
         hf_repos=("benjamin-paine/sardet-100k", "ywyiing/SARDet-100K", "likyoo/SARDet-100K"),
     ),
+    "srsdd": DatasetSpec(
+        name="srsdd",
+        title="SRSDD-v1.0 — SAR Rotated Ship Detection Dataset",
+        classes=("ore-oil", "bulk-cargo", "fishing", "law-enforcement", "dredger", "container"),
+        source="https://github.com/HeuristicLU/SRSDD-V1.0",
+        annotation_format="dota",
+        license="Research use; see the official repository",
+        citation="Lei et al., SRSDD-v1.0: A High-Resolution SAR Rotation Ship Detection Dataset, Remote Sensing 13(24), 2021",
+        approx_images=1022,
+        recommended_imgsz=1024,
+        tier="benchmark",
+        notes=(
+            "Rotated, fine-grained ship detection: 2,884 instances over SIX categories "
+            "(ore-oil, bulk-cargo, fishing, law-enforcement, dredger, container), cut "
+            "from 30 panoramic Gaofen-3 port tiles at 1 m resolution. "
+            "This is the dataset on which the oriented-detection study (Component 6) "
+            "belongs: it is the only supported dataset carrying both orientation and a "
+            "fine-grained taxonomy, so 'does orientation help?' and 'does the attention "
+            "slot help fine-grained recognition?' both become answerable. "
+            "NOTE: the image count here is the number of 1024x1024 crops in the common "
+            "distribution and the official release is 30 panoramic tiles -- verify both "
+            "the crop count and the instance count against the official release before "
+            "quoting them. Be aware that the class count is frequently misreported as "
+            "seven; the paper states six."
+        ),
+    ),
     "sar_ship": DatasetSpec(
         name="sar_ship",
         title="SAR-Ship-Dataset",
@@ -138,10 +169,11 @@ DATASETS: dict[str, DatasetSpec] = {
     ),
 }
 
-#: Cheapest-first order: prove the pipeline on a small dataset, then scale up.
-#: Ordered by approximate image count so each step costs more than the last;
-#: `tests/test_data.py::test_recommended_order_is_cheapest_first` enforces this.
-RECOMMENDED_ORDER: tuple[str, ...] = ("ssdd", "hrsid", "sar_ship", "sardet100k")
+#: Cheapest-first order: prove the pipeline on pilot datasets, then scale up.
+#: Sorted by (tier, image count): all pilot-tier datasets before any benchmark,
+#: and within a tier the smaller one first, so each step costs more than the last.
+#: `tests/test_data.py::test_recommended_order_is_cheapest_first` enforces both.
+RECOMMENDED_ORDER: tuple[str, ...] = ("ssdd", "hrsid", "srsdd", "sar_ship", "sardet100k")
 
 
 def get_dataset(name: str) -> DatasetSpec:

@@ -181,11 +181,16 @@ def _cmd_bench(args) -> int:
     """Architecture-level params/FLOPs benchmark; needs no training and no GPU."""
     from saryolo.evaluation.efficiency import profile_yaml
 
+    from saryolo.nn.arch import VARIANTS, variant_filename
+
     rows = []
     for variant in args.variants:
+        # Accept a variant key ('full_s'), a plain name ('full'), or an explicit path.
         path = Path(args.models) / f"{variant}.yaml"
+        if not path.exists() and variant in VARIANTS:
+            path = Path(args.models) / variant_filename(VARIANTS[variant])
         if not path.exists():
-            candidates = sorted(Path(args.models).glob(f"{variant}*.yaml"))
+            candidates = sorted(Path(args.models).glob(f"*{variant}*.yaml"))
             if not candidates:
                 print(f"skip {variant}: no yaml under {args.models}")
                 continue

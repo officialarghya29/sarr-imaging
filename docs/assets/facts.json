@@ -1,0 +1,290 @@
+{
+  "variants": 35,
+  "zoo": {
+    "baseline_n": {
+      "variant": "baseline",
+      "scale": "n",
+      "params_M": 2.590035
+    },
+    "sfe_n": {
+      "variant": "sfe",
+      "scale": "n",
+      "params_M": 2.592356
+    },
+    "speckle_n": {
+      "variant": "speckle",
+      "scale": "n",
+      "params_M": 2.703078
+    },
+    "attention_n": {
+      "variant": "attention",
+      "scale": "n",
+      "params_M": 2.74747
+    },
+    "amf_n": {
+      "variant": "amf",
+      "scale": "n",
+      "params_M": 3.70493
+    },
+    "p2_n": {
+      "variant": "p2",
+      "scale": "n",
+      "params_M": 3.846901
+    },
+    "full_n": {
+      "variant": "full",
+      "scale": "n",
+      "params_M": 3.846901
+    },
+    "baseline_s": {
+      "variant": "baseline",
+      "scale": "s",
+      "params_M": 9.428179,
+      "flops_G": 21.6664576
+    },
+    "sfe_s": {
+      "variant": "sfe",
+      "scale": "s",
+      "params_M": 9.436916,
+      "flops_G": 22.245470208
+    },
+    "speckle_s": {
+      "variant": "speckle",
+      "scale": "s",
+      "params_M": 9.873398,
+      "flops_G": 22.60297728
+    },
+    "attention_s": {
+      "variant": "attention",
+      "scale": "s",
+      "params_M": 10.037434,
+      "flops_G": 22.699303248
+    },
+    "amf_s": {
+      "variant": "amf",
+      "scale": "s",
+      "params_M": 13.839574,
+      "flops_G": 35.2148004
+    },
+    "p2_s": {
+      "variant": "p2",
+      "scale": "s",
+      "params_M": 14.237229,
+      "flops_G": 50.572854536
+    },
+    "full_s": {
+      "variant": "full",
+      "scale": "s",
+      "params_M": 14.237229,
+      "flops_G": 50.572854536
+    }
+  },
+  "slots": {
+    "attention": [
+      {
+        "variant": "att_none",
+        "label": "no attention",
+        "ours": false,
+        "params_M": 9.873398
+      },
+      {
+        "variant": "att_se",
+        "label": "SE",
+        "ours": false,
+        "params_M": 10.037434
+      },
+      {
+        "variant": "att_eca",
+        "label": "ECA",
+        "ours": false,
+        "params_M": 10.037434
+      },
+      {
+        "variant": "att_cbam",
+        "label": "CBAM",
+        "ours": false,
+        "params_M": 10.037434
+      },
+      {
+        "variant": "att_saa_static",
+        "label": "ours, static gate",
+        "ours": true,
+        "params_M": 9.972698
+      },
+      {
+        "variant": "attention",
+        "label": "ours, adaptive gate",
+        "ours": true,
+        "params_M": 10.037434
+      }
+    ],
+    "fusion": [
+      {
+        "variant": "fus_concat",
+        "label": "Concat",
+        "ours": false,
+        "params_M": 10.037434
+      },
+      {
+        "variant": "fus_add",
+        "label": "Add (projected)",
+        "ours": false,
+        "params_M": 11.626682
+      },
+      {
+        "variant": "fus_static",
+        "label": "ours, static weights",
+        "ours": true,
+        "params_M": 13.242694
+      },
+      {
+        "variant": "amf",
+        "label": "ours, adaptive weights",
+        "ours": true,
+        "params_M": 13.839574
+      }
+    ],
+    "speckle": [
+      {
+        "variant": "spk_none",
+        "label": "no handling",
+        "ours": false,
+        "params_M": 13.403092
+      },
+      {
+        "variant": "spk_lee",
+        "label": "Lee filter",
+        "ours": false,
+        "params_M": 13.403092
+      },
+      {
+        "variant": "spk_denoise",
+        "label": "fixed low-pass",
+        "ours": false,
+        "params_M": 13.403092
+      },
+      {
+        "variant": "amf",
+        "label": "ours, SFM",
+        "ours": true,
+        "params_M": 13.839574
+      }
+    ],
+    "enhancement": [
+      {
+        "variant": "pre_identity",
+        "label": "identity (none)",
+        "ours": false,
+        "params_M": 13.830837
+      },
+      {
+        "variant": "pre_log",
+        "label": "log compression",
+        "ours": false,
+        "params_M": 13.830837
+      },
+      {
+        "variant": "pre_clahe",
+        "label": "CLAHE",
+        "ours": false,
+        "params_M": 13.831094
+      },
+      {
+        "variant": "pre_standardize",
+        "label": "local standardisation",
+        "ours": false,
+        "params_M": 13.830837
+      },
+      {
+        "variant": "amf",
+        "label": "ours, SFE",
+        "ours": true,
+        "params_M": 13.839574
+      }
+    ]
+  },
+  "identity": [
+    {
+      "short": "SFE",
+      "label": "Component 1 - feature enhancement",
+      "max_abs_deviation": 0.0,
+      "identical": true
+    },
+    {
+      "short": "SFM",
+      "label": "Component 2 - speckle-aware",
+      "max_abs_deviation": 0.0,
+      "identical": true
+    },
+    {
+      "short": "SAA",
+      "label": "Component 3 - adaptive attention",
+      "max_abs_deviation": 0.0,
+      "identical": true
+    },
+    {
+      "short": "AMF",
+      "label": "Component 4 - multi-scale fusion",
+      "max_abs_deviation": 0.0,
+      "identical": true
+    }
+  ],
+  "datasets": {
+    "ssdd": {
+      "title": "SSDD \u2014 SAR Ship Detection Dataset",
+      "images": 1160,
+      "classes": 1,
+      "tier": "pilot",
+      "imgsz": 512,
+      "format": "voc"
+    },
+    "hrsid": {
+      "title": "HRSID \u2014 High-Resolution SAR Images Dataset",
+      "images": 5604,
+      "classes": 1,
+      "tier": "pilot",
+      "imgsz": 800,
+      "format": "coco"
+    },
+    "srsdd": {
+      "title": "SRSDD-v1.0 \u2014 SAR Rotated Ship Detection Dataset",
+      "images": 1022,
+      "classes": 6,
+      "tier": "benchmark",
+      "imgsz": 1024,
+      "format": "dota"
+    },
+    "sar_ship": {
+      "title": "SAR-Ship-Dataset",
+      "images": 43819,
+      "classes": 1,
+      "tier": "benchmark",
+      "imgsz": 512,
+      "format": "dota"
+    },
+    "sardet100k": {
+      "title": "SARDet-100K",
+      "images": 116598,
+      "classes": 6,
+      "tier": "benchmark",
+      "imgsz": 800,
+      "format": "coco"
+    }
+  },
+  "dataset_count": 5,
+  "experiments": {
+    "total": 12,
+    "config_files": 14,
+    "with_results": []
+  },
+  "tests": {
+    "total": 56,
+    "by_file": {
+      "tests/test_arch.py": 15,
+      "tests/test_data.py": 12,
+      "tests/test_losses.py": 10,
+      "tests/test_metrics.py": 9,
+      "tests/test_repo.py": 10
+    }
+  }
+}
