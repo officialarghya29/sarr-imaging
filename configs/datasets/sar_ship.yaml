@@ -1,0 +1,32 @@
+# SAR-Ship-Dataset (benchmark tier)
+#
+# `path` may be relative to THIS FILE's directory or to the project root; either
+# is accepted and it is made absolute by saryolo.data.yolo.resolve_data_yaml
+# before Ultralytics sees it. This indirection is required because Ultralytics
+# resolves a relative path against its global `datasets_dir` setting (~/datasets),
+# which would break portability between a laptop and a Colab VM.
+#
+# Prepare the data first:
+#   python scripts/prepare_dataset.py --dataset sar_ship --raw <raw dir>
+#
+# Official repo: https://github.com/CAESAR-Radi/SAR-Ship-Dataset
+#
+# ============================================================================
+# WARNING — ORIENTED LABELS, NOT DETECTION LABELS
+# ============================================================================
+# DOTA format in, so the converter emits YOLO-OBB labels (eight normalised
+# corner coordinates). The detection models in configs/models/ expect the
+# five-column `class cx cy w h` form and will not train correctly on this
+# dataset as converted. See the same warning in configs/datasets/srsdd.yaml.
+#
+# Leakage warning: the ~43k chips derive from a limited number of Sentinel-1 /
+# Gaofen-3 acquisitions, so a random chip-level split leaks near-identical
+# patches across train and test. Run saryolo.data.splits.leakage_report and
+# prefer a scene-grouped split before trusting any mAP measured on it.
+path: ../../datasets/processed/sar_ship
+train: images/train
+val: images/val
+test: images/test
+nc: 1
+names:
+  - ship

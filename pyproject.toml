@@ -38,8 +38,11 @@ saryolo = "saryolo.cli:main"
 [tool.setuptools.packages.find]
 include = ["saryolo*"]
 
-[tool.setuptools.package-data]
-saryolo = ["configs/**/*.yaml"]
+# NOTE: no package-data entry for YAML. The model YAMLs (`configs/models/`) and
+# data configs (`configs/datasets/`) live at the repository root and are consumed
+# by the CLI relative to the working directory, not bundled into the wheel -- the
+# previous `saryolo = ["configs/**/*.yaml"]` entry pointed at a path that does not
+# exist and silently shipped nothing.
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

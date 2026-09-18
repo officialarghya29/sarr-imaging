@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from .config import ExperimentConfig, list_experiments, load_experiment
-from .trainer import SARYOLO, SARYOLOTrainer, load_model, resolve_model_class
 from .runner import run_experiment
+from .trainer import SARYOLO, SARYOLOTrainer, load_model, resolve_model_class
 
 __all__ = [
     "SARYOLO",

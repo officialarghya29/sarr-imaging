@@ -155,7 +155,7 @@ class AdaptiveMultiScaleFusion(nn.Module):
             # Each branch projected to a shared width, summed, then projected back to the
             # concatenated width so the block stays channel-preserving.
             chunks = self._split(x)
-            summed = sum(proj(chunk) for proj, chunk in zip(self.proj_in, chunks))
+            summed = sum(proj(chunk) for proj, chunk in zip(self.proj_in, chunks, strict=True))
             return self.proj_out(summed)
 
         fused = self._reweight(x)

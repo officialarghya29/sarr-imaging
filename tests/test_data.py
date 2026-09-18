@@ -15,7 +15,16 @@ from saryolo.data.registry import DATASETS, RECOMMENDED_ORDER, get_dataset
 from saryolo.data.statistics import COCO_SIZE_BINS, profile_dataset
 from saryolo.data.synth import make_synthetic_dataset
 from saryolo.data.validate import validate_yolo_dataset
-from saryolo.data.yolo import load_data_config, project_root, resolve_data_yaml, split_dirs
+from saryolo.data.yolo import (
+    label_row_kind,
+    load_data_config,
+    project_root,
+    resolve_data_yaml,
+    split_dirs,
+)
+
+#: A valid YOLO-OBB row: class id followed by 8 normalised corner coordinates.
+OBB_ROW = "0 0.1 0.1 0.9 0.1 0.9 0.9 0.1 0.9\n"
 
 
 @pytest.fixture(scope="module")
@@ -101,6 +110,45 @@ def test_validator_catches_zero_area_and_out_of_range(tmp_path):
     assert "box_outside_image" in kinds
 
 
+@pytest.mark.parametrize(
+    ("row", "expected"),
+    [
+        (["0", "0.5", "0.5", "0.2", "0.2"], "detection"),
+        (["0", "0.1", "0.1", "0.9", "0.1", "0.9", "0.9", "0.1", "0.9"], "oriented"),
+        (["0", "0.5", "0.5", "0.2"], "malformed"),
+        (["garbage"], "malformed"),
+    ],
+)
+def test_label_row_kind(row, expected):
+    """Five fields is detection, nine is oriented, anything else is malformed."""
+    assert label_row_kind(row) == expected
+
+
+def test_validator_diagnoses_oriented_labels_instead_of_calling_them_malformed(tmp_path):
+    """A 9-field row is valid YOLO-OBB, not a broken detection label.
+
+    Two silent failure modes are being guarded against. Reporting it as
+    "malformed" buries the one actionable fact under thousands of identical
+    errors, and dropping it entirely would let an oriented dataset validate as a
+    perfectly good detection dataset while containing no usable boxes.
+    """
+    images, labels = tmp_path / "images", tmp_path / "labels"
+    images.mkdir()
+    labels.mkdir()
+    import cv2
+
+    cv2.imwrite(str(images / "a.png"), np.zeros((32, 32), dtype=np.uint8))
+    (labels / "a.txt").write_text(OBB_ROW)
+
+    report = validate_yolo_dataset(images, labels, class_names=["target"])
+    kinds = {i.kind for i in report.issues}
+    assert report.oriented_label_rows == 1
+    assert "oriented_labels" in kinds
+    assert "malformed_row" not in kinds, "oriented rows must not be reported as malformed"
+    assert not report.ok, "an oriented dataset must not validate clean"
+    assert report.n_boxes == 0
+
+
 def test_validator_flags_orphan_labels(tmp_path):
     images, labels = tmp_path / "images", tmp_path / "labels"
     images.mkdir()
@@ -134,12 +182,92 @@ def test_statistics_classify_small_objects_correctly(synthetic):
     assert stats.size_distribution.get("large", 0) == 0, "small synthetic targets were binned as large"
 
 
+def test_statistics_does_not_silently_drop_oriented_labels(tmp_path):
+    """An oriented dataset must not profile as a clean dataset with zero objects."""
+    images, labels = tmp_path / "images", tmp_path / "labels"
+    images.mkdir()
+    labels.mkdir()
+    import cv2
+
+    cv2.imwrite(str(images / "a.png"), np.zeros((32, 32), dtype=np.uint8))
+    (labels / "a.txt").write_text(OBB_ROW)
+
+    stats = profile_dataset(images, labels, ["target"], intensity_sample=1)
+    assert stats.num_boxes == 0
+    assert stats.oriented_label_rows == 1
+    assert "YOLO-OBB" in stats.summary(), "the profile must say why it found no boxes"
+    assert stats.to_dict()["oriented_label_rows"] == 1
+
+
 def test_statistics_reports_sar_difficulty_proxies(synthetic):
     stats = profile_dataset(
         synthetic / "images" / "train", synthetic / "labels" / "train", ["target"], intensity_sample=4
     )
     assert stats.local_contrast["mean"] > 0
     assert stats.target_background_ratio["mean"] > 1.0, "synthetic targets are brighter than background"
+
+
+# ------------------------------------------------------------------------ converters
+VALID_VOC_XML = """<annotation>
+  <filename>good.jpg</filename>
+  <size><width>64</width><height>64</height><depth>1</depth></size>
+  <object>
+    <name>ship</name>
+    <bndbox><xmin>8</xmin><ymin>8</ymin><xmax>32</xmax><ymax>32</ymax></bndbox>
+  </object>
+</annotation>"""
+
+#: A truncated download: the <size> block never made it into the file.
+VOC_XML_NO_SIZE = """<annotation>
+  <filename>nosize.jpg</filename>
+  <object><name>ship</name><bndbox><xmin>8</xmin><ymin>8</ymin></bndbox></object>
+</annotation>"""
+
+#: <size> is fine but the bounding box is incomplete.
+VOC_XML_TRUNCATED_BOX = """<annotation>
+  <filename>truncated.jpg</filename>
+  <size><width>64</width><height>64</height><depth>1</depth></size>
+  <object><name>ship</name><bndbox><xmin>8</xmin><ymin>8</ymin></bndbox></object>
+</annotation>"""
+
+
+def test_voc_converter_survives_malformed_annotations(tmp_path):
+    """A broken XML file must not abort a batch conversion.
+
+    Real VOC downloads contain truncated annotations, and the converter runs over
+    tens of thousands of files: raising part-way through used to discard every
+    conversion already performed and surface an opaque 'NoneType has no attribute
+    findtext' instead of naming the offending file.
+    """
+    import cv2
+
+    from saryolo.data.convert import voc_to_yolo
+
+    voc = tmp_path / "voc"
+    (voc / "Annotations").mkdir(parents=True)
+    (voc / "JPEGImages").mkdir(parents=True)
+    for stem in ("good", "nosize", "truncated"):
+        cv2.imwrite(str(voc / "JPEGImages" / f"{stem}.jpg"), np.zeros((64, 64), dtype=np.uint8))
+    (voc / "Annotations" / "good.xml").write_text(VALID_VOC_XML)
+    (voc / "Annotations" / "nosize.xml").write_text(VOC_XML_NO_SIZE)
+    (voc / "Annotations" / "truncated.xml").write_text(VOC_XML_TRUNCATED_BOX)
+
+    out = tmp_path / "out"
+    result = voc_to_yolo(voc, out, mode="copy")
+
+    assert result["splits"]["train"]["images"] == 1, "the valid annotation must still convert"
+    assert result["skipped_annotations"] == 2
+    assert any("nosize.xml" in ex for ex in result["skipped_examples"])
+    # An image whose every box failed must not be written as a background image.
+    assert not (out / "labels" / "train" / "truncated.txt").exists()
+    assert not (out / "images" / "train" / "truncated.jpg").exists()
+    assert any("truncated.xml" in ex for ex in result["skipped_examples"])
+    assert (out / "labels" / "train" / "good.txt").exists()
+    label = (out / "labels" / "train" / "good.txt").read_text().split()
+    assert len(label) == 5, f"expected 'class cx cy w h', got {label}"
+    # centre (20, 20) of 64x64, size 24x24 -> normalised
+    assert float(label[1]) == pytest.approx(20 / 64, abs=1e-4)
+    assert float(label[3]) == pytest.approx(24 / 64, abs=1e-4)
 
 
 # ------------------------------------------------------------------------ data config
@@ -156,7 +284,7 @@ def test_relative_path_resolves_without_touching_ultralytics_settings(tmp_path):
     cfg_dir.mkdir(parents=True)
     cfg = cfg_dir / "demo.yaml"
     cfg.write_text(
-        f"path: ../../processed/demo\ntrain: images/val\nval: images/val\nnc: 1\nnames: [x]\n"
+        "path: ../../processed/demo\ntrain: images/val\nval: images/val\nnc: 1\nnames: [x]\n"
     )
     resolved = resolve_data_yaml(cfg, root=tmp_path, out_dir=tmp_path / "resolved")
     root, loaded = load_data_config(resolved)

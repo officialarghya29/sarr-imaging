@@ -313,7 +313,7 @@ def compute_ap(
     for iou_thr in iou_thresholds:
         class_scores: dict[int, list[tuple[float, int]]] = {c: [] for c in range(nc)}
         n_pos: dict[int, float] = {c: 0.0 for c in range(nc)}
-        for image, payload in by_image.items():
+        for payload in by_image.values():
             image_dets = payload.get("det", [])
             image_gts = payload.get("gt", [])
             for c in range(nc):
@@ -322,7 +322,7 @@ def compute_ap(
                 lo, hi = area_range
                 n_pos[c] += sum(1 for g in c_gts if lo <= g.area < hi)
                 tp, fp = _match_image(c_dets, c_gts, iou_thr, area_range)
-                for det, is_tp, is_fp in zip(c_dets, tp, fp):
+                for det, is_tp, is_fp in zip(c_dets, tp, fp, strict=True):
                     if is_tp or is_fp:
                         class_scores[c].append((det.score, int(is_tp)))
         iou_aps = []

@@ -198,7 +198,7 @@ def test_models_output_identically_to_baseline_at_init():
         f"stock layer count differs: baseline {len(ref_stock)} vs SAR-YOLO {len(got_stock)}"
     )
     with torch.no_grad():
-        for ref_layer, got_layer in zip(ref_stock, got_stock):
+        for ref_layer, got_layer in zip(ref_stock, got_stock, strict=True):
             assert type(ref_layer) is type(got_layer), (type(ref_layer), type(got_layer))
             got_layer.load_state_dict(ref_layer.state_dict())
 

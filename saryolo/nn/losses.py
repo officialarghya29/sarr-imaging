@@ -36,9 +36,7 @@ so they add no extra assignment pass and negligible cost.
 from __future__ import annotations
 
 import torch
-from torch import nn
 from torch.nn import functional as F
-
 from ultralytics.utils.loss import E2ELoss, v8DetectionLoss
 
 __all__ = ["SARAwareDetectionLoss", "SAR_LOSS_DEFAULTS", "build_criterion"]

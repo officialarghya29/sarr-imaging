@@ -7,6 +7,7 @@ Ultralytics derives label paths from image paths by replacing ``/images/`` with
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
 import yaml
@@ -18,7 +19,42 @@ __all__ = [
     "resolve_data_yaml",
     "load_data_config",
     "split_dirs",
+    "label_row_kind",
+    "DETECTION_FIELDS",
+    "OBB_FIELDS",
 ]
+
+#: A YOLO detection label row is ``class cx cy w h``.
+DETECTION_FIELDS = 5
+
+#: A YOLO-OBB label row is ``class x1 y1 x2 y2 x3 y3 x4 y4``.
+OBB_FIELDS = 9
+
+
+def label_row_kind(row: Sequence[str]) -> str:
+    """Classify one YOLO label row.
+
+    Both five-field detection rows and nine-field oriented rows are *valid* YOLO
+    formats, so they must not be conflated. Treating a nine-field row as generic
+    input is actively harmful in two ways, and both are silent:
+
+    * a validator reports thousands of meaningless "malformed row" errors instead
+      of the one actionable fact ("this dataset is oriented");
+    * a profiler drops every row and reports a well-formed dataset containing
+      **zero objects**, which then makes every downstream architecture decision
+      ("is the P2 head justified?") meaningless.
+
+    Args:
+        row: Whitespace-split fields of one label line.
+
+    Returns:
+        ``"detection"``, ``"oriented"`` or ``"malformed"``.
+    """
+    if len(row) == DETECTION_FIELDS:
+        return "detection"
+    if len(row) == OBB_FIELDS:
+        return "oriented"
+    return "malformed"
 
 #: Files that mark the project root when walking upwards.
 _ROOT_MARKERS = ("pyproject.toml", ".git", "CITATION.cff")

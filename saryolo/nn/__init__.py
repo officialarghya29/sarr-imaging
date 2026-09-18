@@ -12,6 +12,7 @@ from .arch import ModelSpec, build_yaml_dict, build_yaml_text
 from .losses import SAR_LOSS_DEFAULTS, SARAwareDetectionLoss, build_criterion
 from .model import SARYOLODetectionModel
 from .modules import (
+    AdaptiveMultiScaleFusion,
     CBAMAttention,
     ECAAttention,
     IdentityAttention,
@@ -19,7 +20,6 @@ from .modules import (
     SARFeatureEnhancement,
     SEAttention,
     SpeckleAwareFeatureModule,
-    AdaptiveMultiScaleFusion,
 )
 from .register import (
     allowlist_safe_load,

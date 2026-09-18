@@ -211,7 +211,7 @@ class SARAdaptiveAttention(_ResidualAttention):
         # matching the shape of the channel/spatial branch maps it is fused with.
         structure = (x - mu) / sd
         contrast = torch.cat((structure.abs().mean(1, keepdim=True), hp.abs().mean(1, keepdim=True)), dim=1)
-        l = torch.sigmoid(self.contrast_branch(contrast))
+        local_map = torch.sigmoid(self.contrast_branch(contrast))
 
         # adaptive branch weighting
         if self.gate_mode == "adaptive":
@@ -220,7 +220,7 @@ class SARAdaptiveAttention(_ResidualAttention):
             w = torch.softmax(self.static_logits, dim=0).view(1, 3).expand(b, 3)
         w = w.view(b, 3, 1, 1)
 
-        m = w[:, 0:1] * a + w[:, 1:2] * s + w[:, 2:3] * l
+        m = w[:, 0:1] * a + w[:, 1:2] * s + w[:, 2:3] * local_map
         return m
 
     def extra_repr(self) -> str:

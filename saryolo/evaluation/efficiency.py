@@ -125,7 +125,6 @@ def model_size_mb(weights: str | Path) -> float | None:
 
 def profile_model(weights: str | Path, imgsz: int = 640, device: str | None = None, latency: bool = True) -> dict:
     """Full efficiency profile for a checkpoint."""
-    import torch
 
     from saryolo.training.trainer import load_model
 

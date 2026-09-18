@@ -20,7 +20,7 @@ The emitted YAML is what actually gets trained and committed under
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 __all__ = ["ModelSpec", "build_yaml_dict", "build_yaml_text", "variant_filename", "SCALES", "VARIANTS"]
@@ -72,7 +72,7 @@ class ModelSpec:
         if self.scale not in SCALES:
             raise ValueError(f"scale must be one of {sorted(SCALES)}, got {self.scale!r}")
         if "p2" in self.levels and self.levels != ("p2", "p3", "p4", "p5"):
-            raise ValueError("When enabled, the P2 level must come with P3, P4 and P5 (got %r)." % (self.levels,))
+            raise ValueError(f"When enabled, the P2 level must come with P3, P4 and P5 (got {self.levels!r}).")
         if not self.levels or self.levels[-1] != "p5" or self.levels[0] not in ("p2", "p3"):
             raise ValueError(f"levels must be a contiguous ('p2'|'p3'),'p4','p5' set, got {self.levels!r}")
 
@@ -123,7 +123,7 @@ class _Builder:
 
 
 def variant_filename(spec: ModelSpec | str) -> str:
-    """Canonical YAML file name for a variant.
+    r"""Canonical YAML file name for a variant.
 
     The ``yolo11<scale>`` prefix is **required**, not cosmetic. Ultralytics'
     ``yaml_model_load`` overwrites any ``scale`` key in the YAML body with
@@ -164,7 +164,9 @@ def build_yaml_dict(spec: ModelSpec) -> dict[str, Any]:
     b.add("backbone", -1, 1, "Conv", [512, 3, 2])  # P4/16
     p4 = b.add("backbone", -1, 2, "C3k2", [512, True])
     b.add("backbone", -1, 1, "Conv", [1024, 3, 2])  # P5/32
-    p5 = b.add("backbone", -1, 2, "C3k2", [1024, True])
+    # The P5 C3k2 is consumed positionally by SPPF (via `-1`) and, unlike P2-P4, is
+    # never referenced as a lateral link, so it needs no index binding here.
+    b.add("backbone", -1, 2, "C3k2", [1024, True])
     b.add("backbone", -1, 1, "SPPF", [1024, 5])
     spp = b.add("backbone", -1, 2, "C2PSA", [1024])
 
@@ -174,7 +176,8 @@ def build_yaml_dict(spec: ModelSpec) -> dict[str, Any]:
 
     def fuse(src_a: int, src_b: int, c_out: int, c3k: bool) -> int:
         """Emit ``Upsample/Conv -> Concat -> [fusion] -> C3k2`` and return the output index."""
-        cat = b.add("head", [src_a, src_b], 1, "Concat", [1])
+        # The fusion block reads the Concat output via `-1`, so no index binding is needed.
+        b.add("head", [src_a, src_b], 1, "Concat", [1])
         if spec.fusion:
             b.add("head", -1, 1, "AdaptiveMultiScaleFusion", ["ch", [src_a, src_b], 8, spec.fusion])
         return b.add("head", -1, 2, "C3k2", [c_out, c3k])

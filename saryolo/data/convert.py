@@ -145,6 +145,23 @@ def coco_to_yolo(
     }
 
 
+def _find_float(node, path: str) -> float | None:
+    """Read a float from an XML sub-element, or ``None`` if absent or unparseable.
+
+    ``Element.findtext`` returns ``None`` for a missing element and the raw string
+    for a present one, so both cases must be handled before ``float()`` is applied.
+    Real VOC annotations do contain missing ``<size>`` blocks and truncated
+    ``<bndbox>`` elements.
+    """
+    text = node.findtext(path)
+    if text is None:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
 def voc_to_yolo(
     voc_root: str | Path,
     out_dir: str | Path,
@@ -177,6 +194,9 @@ def voc_to_yolo(
     class_names: list[str] = []
     counts: dict[str, Counter] = {}
     unlisted: list[str] = []
+    # Malformed annotations are counted and skipped, never allowed to abort the batch:
+    # a single bad XML file in a 100k-image download must not discard the work already done.
+    skipped: list[tuple[str, str]] = []
 
     for xml_path in xml_files:
         root = ET.parse(xml_path).getroot()
@@ -188,7 +208,13 @@ def voc_to_yolo(
                 continue
             src = candidates[0]
         size = root.find("size")
-        w, h = float(size.findtext("width")), float(size.findtext("height"))
+        w = _find_float(size, "width") if size is not None else None
+        h = _find_float(size, "height") if size is not None else None
+        if not w or not h:
+            # Without a valid <size> the normalised coordinates are undefined, so
+            # these boxes cannot be converted correctly -- report, do not guess.
+            skipped.append((xml_path.name, "missing or invalid <size>"))
+            continue
         if has_official:
             # An official split was supplied: an entry outside it belongs to a split we were
             # not given. Skipping is safer than silently dumping it into train.
@@ -200,14 +226,20 @@ def voc_to_yolo(
             split = "train"
 
         rows = []
+        n_objects = 0
+        n_malformed = 0
         for obj in root.findall("object"):
+            n_objects += 1
             name = (obj.findtext("name") or "").strip()
             if name not in class_names:
                 class_names.append(name)
             cid = class_names.index(name)
             box = obj.find("bndbox")
-            x1, y1 = float(box.findtext("xmin")), float(box.findtext("ymin"))
-            x2, y2 = float(box.findtext("xmax")), float(box.findtext("ymax"))
+            x1, y1 = (_find_float(box, "xmin"), _find_float(box, "ymin")) if box is not None else (None, None)
+            x2, y2 = (_find_float(box, "xmax"), _find_float(box, "ymax")) if box is not None else (None, None)
+            if None in (x1, y1, x2, y2):
+                n_malformed += 1
+                continue
             bw, bh = x2 - x1, y2 - y1
             if bw <= 0 or bh <= 0:
                 continue
@@ -216,15 +248,32 @@ def voc_to_yolo(
                 f"{cid} {min(max(cx, 0.0), 1.0):.6f} {min(max(cy, 0.0), 1.0):.6f} "
                 f"{min(bw / w, 1.0):.6f} {min(bh / h, 1.0):.6f}"
             )
+        if n_malformed:
+            why = f"{n_malformed} of {n_objects} boxes malformed"
+            if n_malformed == n_objects:
+                # An annotation whose every box failed to parse is NOT a background
+                # image. Emitting it with an empty label file would quietly teach the
+                # detector that a ship-bearing image contains no ships.
+                skipped.append((xml_path.name, f"all {n_objects} boxes malformed; image not written"))
+                continue
+            skipped.append((xml_path.name, f"partial: {why}"))
+
         link_or_copy(src, out_dir / "images" / split / src.name, mode)
         _write_label(out_dir / "labels" / split / f"{src.stem}.txt", rows)
         counts.setdefault(split, Counter())["images"] += 1
         counts[split]["boxes"] += len(rows)
 
-    result = {"classes": class_names, "splits": {k: dict(v) for k, v in sorted(counts.items())}}
+    result: dict = {"classes": class_names, "splits": {k: dict(v) for k, v in sorted(counts.items())}}
     if unlisted:
         result["unlisted_images"] = len(unlisted)
         result["unlisted_examples"] = unlisted[:5]
+    if skipped:
+        result["skipped_annotations"] = len(skipped)
+        result["skipped_examples"] = [f"{name}: {why}" for name, why in skipped[:5]]
+        result["note"] = (
+            "skipped annotations are images that were NOT written; a partial entry means "
+            "some boxes in that file were dropped while the rest were kept."
+        )
     return result
 
 
@@ -259,7 +308,7 @@ def dota_to_yolo_obb(dota_dir: str | Path, out_dir: str | Path, mode: str = "sym
             coords = [float(v) for v in parts[:8]]
             xs, ys = coords[0::2], coords[1::2]
             norm = []
-            for x, y in zip(xs, ys):
+            for x, y in zip(xs, ys, strict=True):
                 norm.extend((min(max(x / w, 0.0), 1.0), min(max(y / h, 0.0), 1.0)))
             rows.append(f"{class_names.index(name)} " + " ".join(f"{v:.6f}" for v in norm))
         split = "train"

@@ -18,7 +18,6 @@ from typing import Any
 
 from ultralytics.models.yolo.detect import DetectionTrainer
 from ultralytics.models.yolo.model import YOLO
-from ultralytics.nn.tasks import DetectionModel
 from ultralytics.utils import RANK
 
 from saryolo.nn.model import SARYOLODetectionModel

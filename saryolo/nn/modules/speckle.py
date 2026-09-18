@@ -35,10 +35,9 @@ against, in the same architectural slot: ``"none"`` (no handling), ``"lee"``
 from __future__ import annotations
 
 import torch
-import torch.nn.functional as F
 from torch import nn
 
-from ._common import DWConvBNAct, ConvBNAct, LocalStats, ZeroGate, resolve_c1
+from ._common import ConvBNAct, DWConvBNAct, LocalStats, ZeroGate, resolve_c1
 
 __all__ = ["SpeckleAwareFeatureModule"]
 

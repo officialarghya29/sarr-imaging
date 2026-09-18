@@ -129,9 +129,11 @@ def analyse_failures(
     for g in gts:
         by_image_gt.setdefault(g.image, []).append(g)
 
-    threshold = None
-    if contrast_by_image and len(contrast_by_image) > 3:
-        threshold = float(np.quantile(list(contrast_by_image.values()), contrast_quantile))
+    # Held in one place so the guard below cannot drift out of step with the
+    # threshold: reading `contrast_by_image.get(...)` while relying on a *different*
+    # variable to prove it is not None is a crash waiting for a future edit.
+    contrast = contrast_by_image or {}
+    threshold = float(np.quantile(list(contrast.values()), contrast_quantile)) if len(contrast) > 3 else None
 
     for image in set(by_image_pred) | set(by_image_gt):
         image_preds = sorted(by_image_pred.get(image, []), key=lambda d: -d.score)
@@ -156,7 +158,7 @@ def analyse_failures(
                 kind = "clutter_confusion" if image_gts[best_j].area > 4 * small_area else "localization_error"
                 summary.add(FailureCase(image, kind, det.cls, best_iou, det.score, det.xyxy))
             else:
-                low_contrast = threshold is not None and contrast_by_image.get(image, 1.0) <= threshold
+                low_contrast = threshold is not None and contrast.get(image, 1.0) <= threshold
                 kind = "clutter_false_positive" if low_contrast else "false_positive"
                 summary.add(FailureCase(image, kind, det.cls, best_iou, det.score, det.xyxy))
 

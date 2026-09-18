@@ -8,7 +8,6 @@ writes measured metrics afterwards.
 from __future__ import annotations
 
 import csv
-import json
 import time
 from pathlib import Path
 

@@ -19,11 +19,13 @@ Writes JSON plus figures to ``dataset_statistics/``.
 from __future__ import annotations
 
 import json
-from collections import Counter, defaultdict
+from collections import Counter
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import numpy as np
+
+from .yolo import label_row_kind
 
 __all__ = ["DatasetStatistics", "profile_dataset", "COCO_SIZE_BINS"]
 
@@ -41,6 +43,10 @@ class DatasetStatistics:
     split: str = ""
     num_images: int = 0
     num_boxes: int = 0
+    #: Rows in YOLO-OBB form (class + 8 corners) that could not contribute to the
+    #: box statistics. Surfaced explicitly because otherwise an oriented dataset
+    #: profiles cleanly as a dataset with zero objects.
+    oriented_label_rows: int = 0
     class_names: list[str] = field(default_factory=list)
     boxes_per_class: dict[str, int] = field(default_factory=dict)
     images_per_class: dict[str, int] = field(default_factory=dict)
@@ -68,6 +74,12 @@ class DatasetStatistics:
             f"  size bins: {self.size_distribution}",
             f"  mean local contrast: {self.local_contrast.get('mean', 0):.4f}",
         ]
+        if self.oriented_label_rows:
+            lines.append(
+                f"  WARNING: {self.oriented_label_rows} label rows are YOLO-OBB (class + 8 "
+                "corners) and were excluded. This profile does NOT describe an "
+                "axis-aligned detection dataset -- do not base architecture decisions on it."
+            )
         return "\n".join(lines)
 
     def to_dict(self) -> dict:
@@ -128,8 +140,9 @@ def profile_dataset(
     counts: Counter = Counter()
     image_counts: Counter = Counter()
     per_image: list[int] = []
-    widths, heights, aspects, sizes = [], [], [], []
+    widths, heights, aspects = [], [], []
     sizes_px: list[float] = []
+    oriented_rows = 0
     size_bins: Counter = Counter()
     image_sizes: Counter = Counter()
     density = np.zeros((10, 10), dtype=np.float64)
@@ -148,7 +161,13 @@ def profile_dataset(
                 h, w = img.shape[:2]
                 image_sizes[f"{w}x{h}"] += 1
         for row in rows:
-            if len(row) != 5:
+            kind = label_row_kind(row)
+            if kind == "oriented":
+                # Counted, never silently dropped: an oriented dataset must not
+                # profile as a clean detection dataset with zero objects.
+                oriented_rows += 1
+                continue
+            if kind != "detection":
                 continue
             try:
                 cid = int(float(row[0]))
@@ -176,6 +195,7 @@ def profile_dataset(
     stats.boxes_per_class = dict(sorted(counts.items()))
     stats.images_per_class = dict(sorted(image_counts.items()))
     stats.boxes_per_image = _stats([float(v) for v in per_image])
+    stats.oriented_label_rows = oriented_rows
     stats.image_sizes = dict(sorted(image_sizes.items(), key=lambda kv: -kv[1])[:10])
     stats.box_width_px = _stats(widths)
     stats.box_height_px = _stats(heights)
@@ -201,7 +221,7 @@ def profile_dataset(
         if label_path.exists():
             h, w = arr.shape
             for row in (line.split() for line in label_path.read_text().splitlines() if line.strip()):
-                if len(row) != 5:
+                if label_row_kind(row) != "detection":
                     continue
                 cx, cy, bw, bh = (float(v) for v in row[1:])
                 x1, y1 = int((cx - bw / 2) * w), int((cy - bh / 2) * h)

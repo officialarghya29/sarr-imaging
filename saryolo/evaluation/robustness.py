@@ -22,7 +22,7 @@ Design choices that keep the comparison fair
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -134,8 +134,9 @@ def build_corrupted_split(
     Returns:
         Path to the corrupted images directory (labels sit alongside).
     """
-    import cv2
     import os
+
+    import cv2
 
     images_dir, out_root = Path(images_dir), Path(out_root)
     dest = out_root / name / str(severity) / "images" / "val"

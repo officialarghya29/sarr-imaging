@@ -1,0 +1,47 @@
+# SRSDD-v1.0 — SAR Rotation Ship Detection Dataset (benchmark tier)
+#
+# `path` may be relative to THIS FILE's directory or to the project root; either
+# is accepted and it is made absolute by saryolo.data.yolo.resolve_data_yaml
+# before Ultralytics sees it. This indirection is required because Ultralytics
+# resolves a relative path against its global `datasets_dir` setting (~/datasets),
+# which would break portability between a laptop and a Colab VM.
+#
+# Prepare the data first:
+#   python scripts/prepare_dataset.py --dataset srsdd --raw <raw dir>
+#
+# Official repo: https://github.com/HeuristicLU/SRSDD-V1.0
+#
+# ============================================================================
+# WARNING — ORIENTED LABELS, NOT DETECTION LABELS
+# ============================================================================
+# This is a DOTA-format dataset, so `saryolo.data.convert.dota_to_yolo_obb`
+# writes YOLO-OBB labels: `class cx cy w h` becomes
+# `class x1 y1 x2 y2 x3 y3 x4 y4` (eight normalised corner coordinates).
+#
+# The detection models in configs/models/ consume FIVE-column labels. Training
+# one of them against this dataset therefore does not do what you want: the
+# label rows do not match and the run either errors or silently trains against
+# garbage targets. Before using SRSDD, pick one:
+#
+#   (a) run the oriented-detection study (Component 6), which is the intended
+#       use and is NOT yet implemented, or
+#   (b) add an axis-aligned conversion that takes the OBB min-area rectangle.
+#
+# The config is committed anyway so the dataset is discoverable and the class
+# taxonomy is recorded in one place; see docs/DATASETS.md section 3.
+#
+# Two numbers are frequently misreported: the paper states SIX categories (not
+# seven), over 2,884 instances cut from 30 panoramic Gaofen-3 port tiles. The
+# ~1,022 figure is the count of 1024x1024 crops in the common distribution.
+path: ../../datasets/processed/srsdd
+train: images/train
+val: images/val
+test: images/test
+nc: 6
+names:
+  - ore-oil
+  - bulk-cargo
+  - fishing
+  - law-enforcement
+  - dredger
+  - container

@@ -232,7 +232,7 @@ def build_robustness(robustness_json: str | Path, baseline_json: str | Path | No
     )
     corruptions = ours.get("corruptions", {}) or base.get("corruptions", {})
     for name, per_sev in sorted(corruptions.items()):
-        for severity, values in sorted(per_sev.items(), key=lambda kv: float(kv[0])):
+        for severity in sorted(per_sev, key=float):
             ours_v = (ours.get("corruptions", {}).get(name, {}) or {}).get(severity, {})
             base_v = (base.get("corruptions", {}).get(name, {}) or {}).get(severity, {})
             ours_map = ours_v.get("mAP50")

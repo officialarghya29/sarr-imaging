@@ -180,7 +180,6 @@ def _cmd_cross_dataset(args) -> int:
 def _cmd_bench(args) -> int:
     """Architecture-level params/FLOPs benchmark; needs no training and no GPU."""
     from saryolo.evaluation.efficiency import profile_yaml
-
     from saryolo.nn.arch import VARIANTS, variant_filename
 
     rows = []

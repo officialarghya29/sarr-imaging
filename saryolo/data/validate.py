@@ -24,6 +24,8 @@ from pathlib import Path
 
 import numpy as np
 
+from .yolo import label_row_kind
+
 __all__ = ["ValidationReport", "Issue", "validate_yolo_dataset", "write_report"]
 
 IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff")
@@ -50,6 +52,9 @@ class ValidationReport:
     n_images: int = 0
     n_labels: int = 0
     n_boxes: int = 0
+    #: Label rows in YOLO-OBB form (class + 8 corners). They are counted, never
+    #: dropped, so an oriented dataset cannot masquerade as a valid 5-column one.
+    oriented_label_rows: int = 0
     classes_present: dict[str, int] = field(default_factory=dict)
     issues: list[Issue] = field(default_factory=list)
     duplicate_groups: list[list[str]] = field(default_factory=list)
@@ -74,6 +79,11 @@ class ValidationReport:
             f"  classes: {dict(sorted(self.classes_present.items()))}",
             f"  errors: {len(self.errors)}   warnings: {len(self.warnings)}",
         ]
+        if self.oriented_label_rows:
+            lines.append(
+                f"  ORIENTED LABELS: {self.oriented_label_rows} rows use the YOLO-OBB form "
+                "(class + 8 corners); they are excluded from the box counts below."
+            )
         if self.duplicate_groups:
             lines.append(f"  duplicate groups: {len(self.duplicate_groups)}")
         by_kind = Counter(i.kind for i in self.issues)
@@ -204,7 +214,14 @@ def validate_yolo_dataset(
         if len(rows) > limits.get("max_boxes", 10_000):
             report.issues.append(Issue("too_many_boxes", "warning", str(label_path), f"{len(rows)} rows"))
         for row_idx, row in enumerate(rows):
-            if len(row) != 5:
+            kind = label_row_kind(row)
+            if kind == "oriented":
+                # Valid YOLO, but not what this pipeline consumes. Counted and
+                # reported once below rather than per row, which would bury the
+                # real message under thousands of identical findings.
+                report.oriented_label_rows += 1
+                continue
+            if kind == "malformed":
                 report.issues.append(Issue("malformed_row", "error", str(label_path), f"line {row_idx + 1}: {len(row)} fields"))
                 continue
             try:
@@ -229,6 +246,19 @@ def validate_yolo_dataset(
             report.n_boxes += 1
             key = class_names[cid] if class_names and 0 <= cid < len(class_names) else str(cid)
             report.classes_present[key] = report.classes_present.get(key, 0) + 1
+
+    if report.oriented_label_rows:
+        report.issues.append(
+            Issue(
+                "oriented_labels",
+                "error",
+                report.root,
+                f"{report.oriented_label_rows} label rows use the YOLO-OBB form (class + 8 corner "
+                "coordinates) and were excluded from the box counts. The detection pipeline "
+                "expects 'class cx cy w h': convert to axis-aligned boxes, or run the oriented "
+                "study (Component 6). See configs/datasets/srsdd.yaml.",
+            )
+        )
 
     # Label files with no matching image would silently disappear from training.
     for stem in sorted(label_stems - image_stems):

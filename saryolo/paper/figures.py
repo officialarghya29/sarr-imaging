@@ -105,7 +105,7 @@ def plot_accuracy_efficiency(points: dict[str, dict], out_path: str | Path, dpi:
               ("flops_G", "GFLOPs", "lower is better"))
     plotted = False
     fig, axes = plt.subplots(1, 3, figsize=(13, 3.8))
-    for ax, (key, xlabel, note) in zip(axes, panels):
+    for ax, (key, xlabel, note) in zip(axes, panels, strict=True):
         for label, values in points.items():
             if values.get("mAP50_95") is None or values.get(key) is None:
                 continue
@@ -140,7 +140,7 @@ def plot_ablation_bars(ablation: dict[str, float], out_path: str | Path, baselin
     if baseline_key and baseline_key in ablation and ablation[baseline_key] is not None:
         base = float(ablation[baseline_key])
         ax.axhline(base, color="#e6550d", linestyle="--", linewidth=1, label=f"baseline ({base:.4f})")
-        for bar, value in zip(bars, values):
+        for bar, value in zip(bars, values, strict=True):
             ax.annotate(f"{value - base:+.4f}", (bar.get_x() + bar.get_width() / 2, value),
                         textcoords="offset points", xytext=(0, 4), ha="center", fontsize=8)
         ax.legend()
@@ -170,7 +170,7 @@ def plot_scale_ap(models: dict[str, dict], out_path: str | Path, dpi: int = 200)
         values = [models[label].get(f"AP_{r}") for r in ranges]
         heights = [float(v) if v is not None else 0.0 for v in values]
         bars = ax.bar(x + i * width, heights, width, label=label)
-        for bar, value in zip(bars, values):
+        for bar, value in zip(bars, values, strict=True):
             if value is None:
                 # An unmeasurable range is marked, not drawn as a zero-height bar
                 # that a reader would interpret as a real score.

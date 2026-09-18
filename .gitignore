@@ -13,6 +13,10 @@ env/
 .ruff_cache/
 .ipynb_checkpoints/
 
+# Generated data configs record absolute, machine-specific paths. The committed
+# configs/datasets/*.yaml use relative paths and stay portable -- keep it that way.
+configs/datasets/generated/
+
 # ---- Datasets (never commit raw SAR data) ----
 datasets/raw/**
 datasets/processed/**
