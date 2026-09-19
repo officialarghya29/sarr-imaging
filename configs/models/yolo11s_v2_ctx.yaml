@@ -1,12 +1,12 @@
-# SAR-YOLO / v2_full_s  -- GENERATED FILE, do not edit by hand.
-# Regenerate with:  python -m saryolo arch --variant v2_full_s
-# scale=s  levels=p2-p3-p4-p5  modules=sfe, speckle, frequency, fusion, prior, attention, context, refine, p2_head
+# SAR-YOLO / v2_ctx  -- GENERATED FILE, do not edit by hand.
+# Regenerate with:  python -m saryolo arch --variant v2_ctx
+# scale=s  levels=p2-p3-p4-p5  modules=sfe, speckle, frequency, fusion, prior, attention, context, p2_head
 # sar_loss={'w_sep': 0.2, 'w_small': 0.5, 'w_smooth': 0.05, 'margin': 1.0, 'bg_frac': 0.25}
 #
 # NOTE: when this file is loaded, ultralytics derives the compound scale from the
 # FILE NAME (guess_model_scale), overwriting the 'scale' key below. The file must
 # therefore keep its 'yolo11s_' prefix or it will silently build at scale 'n'.
-# v2 full model at scale s.
+# EXP-016 + context aggregation (Component 10).
 #
 # [from, repeats, module, args]
 nc: 1
@@ -201,59 +201,43 @@ head:
   - 1
   - ContextAggregation
   - [ch, 39, multi, 8]
-- - 40
-  - 1
-  - TargetAwareRefinement
-  - [ch, 40, deform, 3, 0.5]
 - - 29
   - 1
   - TargetPriorModulation
   - [ch, 29, learned, 3, 8]
-- - 42
+- - 41
   - 1
   - SARAdaptiveAttention
-  - [ch, 42, 16, 7, adaptive]
-- - 43
+  - [ch, 41, 16, 7, adaptive]
+- - 42
   - 1
   - ContextAggregation
-  - [ch, 43, multi, 8]
-- - 44
-  - 1
-  - TargetAwareRefinement
-  - [ch, 44, deform, 3, 0.5]
+  - [ch, 42, multi, 8]
 - - 33
   - 1
   - TargetPriorModulation
   - [ch, 33, learned, 3, 8]
-- - 46
+- - 44
   - 1
   - SARAdaptiveAttention
-  - [ch, 46, 16, 7, adaptive]
-- - 47
+  - [ch, 44, 16, 7, adaptive]
+- - 45
   - 1
   - ContextAggregation
-  - [ch, 47, multi, 8]
-- - 48
-  - 1
-  - TargetAwareRefinement
-  - [ch, 48, deform, 3, 0.5]
+  - [ch, 45, multi, 8]
 - - 37
   - 1
   - TargetPriorModulation
   - [ch, 37, learned, 3, 8]
-- - 50
+- - 47
   - 1
   - SARAdaptiveAttention
-  - [ch, 50, 16, 7, adaptive]
-- - 51
+  - [ch, 47, 16, 7, adaptive]
+- - 48
   - 1
   - ContextAggregation
-  - [ch, 51, multi, 8]
-- - 52
-  - 1
-  - TargetAwareRefinement
-  - [ch, 52, deform, 3, 0.5]
-- - [41, 45, 49, 53]
+  - [ch, 48, multi, 8]
+- - [40, 43, 46, 49]
   - 1
   - Detect
   - [nc]

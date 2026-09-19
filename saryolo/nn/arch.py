@@ -56,6 +56,11 @@ class ModelSpec:
         attention: Attention variant inserted before the head; ``None`` disables.
         context: CAG variant, inserted per detection level after attention;
             ``None`` disables.
+        refinement: TADR variant, inserted per detection level last, immediately
+            pre-head; ``None`` disables. Placed after the prior on purpose: the
+            deformable offsets are then predicted from an already prior-modulated
+            feature, which is what makes the arm "target-aware" without duplicating
+            the prior's evidence network.
         fusion: Fusion variant inserted after each ``Concat``; ``None`` disables.
         levels: Detection levels, a subset of ``("p2", "p3", "p4", "p5")``.
         sar_loss: Optional Component-7 loss block, emitted as a top-level
@@ -73,6 +78,7 @@ class ModelSpec:
     prior: str | None = None
     attention: str | None = None
     context: str | None = None
+    refinement: str | None = None
     fusion: str | None = None
     levels: tuple[str, ...] = ("p3", "p4", "p5")
     sar_loss: dict[str, float] | None = None
@@ -108,6 +114,8 @@ class ModelSpec:
             mods.append("attention")
         if self.context:
             mods.append("context")
+        if self.refinement:
+            mods.append("refine")
         if self.has_p2:
             mods.append("p2_head")
         return mods
@@ -234,10 +242,11 @@ def build_yaml_dict(spec: ModelSpec) -> dict[str, Any]:
         out_p3 = n_p3
 
     # Per-level research slots, immediately pre-head, in the order they act on the feature:
-    #   Component 8 (TPM) -> Component 3 (SAA) -> Component 10 (CAG)
-    # The prior comes first so attention and context both operate on target-modulated
-    # features. Every slot passes its source index explicitly: these rows use an explicit
-    # `from`, so `ch[-1]` would resolve to an unrelated layer and silently mis-wire.
+    #   Component 8 (TPM) -> Component 3 (SAA) -> Component 10 (CAG) -> Component 11 (TADR)
+    # The prior comes first so attention, context and deformation all operate on
+    # target-modulated features. Every slot passes its source index explicitly: these rows
+    # use an explicit `from`, so `ch[-1]` would resolve to an unrelated layer and silently
+    # mis-wire.
     heads = {"p3": out_p3, "p4": out_p4, "p5": out_p5}
     if n_p2 is not None:
         heads["p2"] = n_p2
@@ -254,6 +263,10 @@ def build_yaml_dict(spec: ModelSpec) -> dict[str, Any]:
         if spec.context:
             heads[lvl] = b.add(
                 "head", heads[lvl], 1, "ContextAggregation", ["ch", heads[lvl], spec.context, 8]
+            )
+        if spec.refinement:
+            heads[lvl] = b.add(
+                "head", heads[lvl], 1, "TargetAwareRefinement", ["ch", heads[lvl], spec.refinement, 3, 0.5]
             )
 
     b.add("head", [heads[lvl] for lvl in spec.levels], 1, "Detect", ["nc"])
@@ -375,7 +388,7 @@ VARIANTS: dict[str, ModelSpec] = {
 
 # ------------------------------------------------------------------- v2 components
 #: Configuration of the full v2 model: the v1 full model plus the target-prior,
-#: spatial-frequency and context components.
+#: spatial-frequency, context and refinement components.
 V2_FULL: dict[str, Any] = {
     "enhancement": "sfe",
     "speckle": "sfm_clutter",
@@ -383,6 +396,7 @@ V2_FULL: dict[str, Any] = {
     "prior": "learned",
     "attention": "saa",
     "context": "multi",
+    "refinement": "deform",
     "fusion": "amf",
     "levels": ("p2", "p3", "p4", "p5"),
 }
@@ -405,13 +419,16 @@ def _v2(name: str, scale: str = "s", notes: str = "", **overrides: Any) -> Model
 #: and referenced by the paper tables, and rewriting their meaning would break the
 #: traceability between a published number and the run that produced it.
 VARIANTS.update({
-    "v2_clutter": _v2("v2_clutter", frequency=None, prior=None, context=None,
+    "v2_clutter": _v2("v2_clutter", frequency=None, prior=None, context=None, refinement=None,
                       notes="EXP-013 v1 FULL + clutter-aware three-branch SFM."),
-    "v2_prior": _v2("v2_prior", frequency=None, context=None,
+    "v2_prior": _v2("v2_prior", frequency=None, context=None, refinement=None,
                     notes="EXP-014 + target prior modulation (Component 8)."),
-    "v2_freq": _v2("v2_freq", context=None,
+    "v2_freq": _v2("v2_freq", context=None, refinement=None,
                    notes="EXP-015 + spatial-frequency representation (Component 9)."),
-    "v2_full": _v2("v2_full", notes="EXP-016 FULL v2: v1 + clutter + prior + frequency + context (Components 1-10)."),
+    "v2_ctx": _v2("v2_ctx", refinement=None,
+                  notes="EXP-016 + context aggregation (Component 10)."),
+    "v2_full": _v2("v2_full",
+                   notes="EXP-017 FULL v2: v1 + clutter + prior + frequency + context + refinement (Components 1-11)."),
 
     # --- removal ablation (SEC. 23 of the brief): drop one component from the full model.
     # These differ from the slot studies below in that the *module is absent*, so they
@@ -425,6 +442,8 @@ VARIANTS.update({
                      notes="Removal ablation: v2 without the spatial-frequency branch."),
     "v2_noctx": _v2("v2_noctx", context=None,
                     notes="Removal ablation: v2 without context aggregation."),
+    "v2_norefine": _v2("v2_norefine", refinement=None,
+                       notes="Removal ablation: v2 without target-aware deformable refinement."),
 
     # --- Component 5 slot study. Every arm keeps the module in the graph and holds every
     # other slot at its v2 setting, so the arms differ only in how the prior is produced.
@@ -445,6 +464,16 @@ VARIANTS.update({
     "cx_none": _v2("cx_none", context="none", notes="CAG slot: context disabled."),
     "cx_local": _v2("cx_local", context="local", notes="CAG slot: local (dilated) context only."),
     "cx_regional": _v2("cx_regional", context="regional", notes="CAG slot: regional context only."),
+
+    # --- Component 11 slot study. `local` is the capacity control for `deform`: it has
+    # the same sub-network and no offsets, so `deform - local` isolates *deformation*
+    # rather than the extra convolution. `static` isolates content-adaptive sampling from
+    # learned-but-fixed sampling.
+    "rf_none": _v2("rf_none", refinement="none", notes="TADR slot: refinement disabled."),
+    "rf_local": _v2("rf_local", refinement="local",
+                    notes="TADR slot: capacity control -- same network, no offsets."),
+    "rf_static": _v2("rf_static", refinement="static",
+                     notes="TADR slot: learned but input-independent offsets."),
 })
 
 #: v2 at the scales used for the main benchmark, plus `n` for the CPU pipeline smoke test

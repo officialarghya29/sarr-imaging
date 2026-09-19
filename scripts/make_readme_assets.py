@@ -205,6 +205,7 @@ def measure_identity() -> list[dict]:
         ("TPM", "Component 8 - target prior", M.TargetPriorModulation(c)),
         ("SFR", "Component 9 - spatial-frequency", M.SpatialFrequencyRepresentation(c)),
         ("CAG", "Component 10 - context aggregation", M.ContextAggregation(c)),
+        ("TADR", "Component 11 - deformable refinement", M.TargetAwareRefinement(c)),
     ]
     rows = []
     for short, label, module in cases:
@@ -220,7 +221,7 @@ def measure_identity() -> list[dict]:
 #: change on the speckle slot rather than an added module, which is why it is labelled
 #: "+clutter" and not "+SFM2").
 LADDER = ("baseline", "sfe", "speckle", "attention", "amf", "p2", "full",
-          "v2_clutter", "v2_prior", "v2_freq", "v2_full")
+          "v2_clutter", "v2_prior", "v2_freq", "v2_ctx", "v2_full")
 LADDER_LABELS = {
     "baseline": "YOLO11\nbaseline",
     "sfe": "+SFE",
@@ -231,7 +232,9 @@ LADDER_LABELS = {
     "full": "FULL v1\n+SAR loss",
     "v2_clutter": "+clutter",
     "v2_prior": "+prior",
-    "v2_freq": "+freq",        "v2_full": "FULL v2\n+context",  # Components 1-10
+    "v2_freq": "+freq",
+    "v2_ctx": "+context",
+    "v2_full": "FULL v2\n+refine",  # Components 1-11
 }
 
 #: Controlled module-level ablations.
@@ -314,6 +317,15 @@ SLOT_SETS_V2: dict[str, tuple[str, list[tuple[str, str, bool]]]] = {
             ("v2_full", "ours, both extents", True),
         ],
     ),
+    "refinement": (
+        "Component 11 - refinement slot   (held fixed: full v2 setting)",
+        [
+            ("rf_none", "no refinement", False),
+            ("rf_local", "local, no offsets (control)", False),
+            ("rf_static", "learned offsets, fixed", False),
+            ("v2_full", "ours, input-adaptive offsets", True),
+        ],
+    ),
     "removal": (
         "Removal ablation   (v2 full minus one component)",
         [
@@ -321,6 +333,7 @@ SLOT_SETS_V2: dict[str, tuple[str, list[tuple[str, str, bool]]]] = {
             ("v2_noprior", "- target prior", False),
             ("v2_nofreq", "- spatial-frequency", False),
             ("v2_noctx", "- context", False),
+            ("v2_norefine", "- refinement", False),
             ("v2_full", "full v2", True),
         ],
     ),

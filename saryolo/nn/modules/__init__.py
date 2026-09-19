@@ -33,6 +33,7 @@ from .context import ContextAggregation
 from .enhancement import SARFeatureEnhancement
 from .frequency import SpatialFrequencyRepresentation
 from .fusion import AdaptiveMultiScaleFusion
+from .refinement import TargetAwareRefinement
 from .speckle import SpeckleAwareFeatureModule
 from .target_prior import TargetPriorModulation
 
@@ -45,6 +46,7 @@ __all__ = [
     "TargetPriorModulation",
     "SpatialFrequencyRepresentation",
     "ContextAggregation",
+    "TargetAwareRefinement",
     # Attention baselines / registry
     "IdentityAttention",
     "SEAttention",
@@ -65,6 +67,7 @@ CUSTOM_MODULES = {
     "TargetPriorModulation": TargetPriorModulation,
     "SpatialFrequencyRepresentation": SpatialFrequencyRepresentation,
     "ContextAggregation": ContextAggregation,
+    "TargetAwareRefinement": TargetAwareRefinement,
     "IdentityAttention": IdentityAttention,
     "SEAttention": SEAttention,
     "ECAAttention": ECAAttention,

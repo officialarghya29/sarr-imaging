@@ -1,6 +1,6 @@
 # SAR-YOLO / v2_nofreq  -- GENERATED FILE, do not edit by hand.
 # Regenerate with:  python -m saryolo arch --variant v2_nofreq
-# scale=s  levels=p2-p3-p4-p5  modules=sfe, speckle, fusion, prior, attention, context, p2_head
+# scale=s  levels=p2-p3-p4-p5  modules=sfe, speckle, fusion, prior, attention, context, refine, p2_head
 # sar_loss={'w_sep': 0.2, 'w_small': 0.5, 'w_smooth': 0.05, 'margin': 1.0, 'bg_frac': 0.25}
 #
 # NOTE: when this file is loaded, ultralytics derives the compound scale from the
@@ -197,43 +197,59 @@ head:
   - 1
   - ContextAggregation
   - [ch, 38, multi, 8]
+- - 39
+  - 1
+  - TargetAwareRefinement
+  - [ch, 39, deform, 3, 0.5]
 - - 28
   - 1
   - TargetPriorModulation
   - [ch, 28, learned, 3, 8]
-- - 40
-  - 1
-  - SARAdaptiveAttention
-  - [ch, 40, 16, 7, adaptive]
 - - 41
   - 1
+  - SARAdaptiveAttention
+  - [ch, 41, 16, 7, adaptive]
+- - 42
+  - 1
   - ContextAggregation
-  - [ch, 41, multi, 8]
+  - [ch, 42, multi, 8]
+- - 43
+  - 1
+  - TargetAwareRefinement
+  - [ch, 43, deform, 3, 0.5]
 - - 32
   - 1
   - TargetPriorModulation
   - [ch, 32, learned, 3, 8]
-- - 43
+- - 45
   - 1
   - SARAdaptiveAttention
-  - [ch, 43, 16, 7, adaptive]
-- - 44
+  - [ch, 45, 16, 7, adaptive]
+- - 46
   - 1
   - ContextAggregation
-  - [ch, 44, multi, 8]
+  - [ch, 46, multi, 8]
+- - 47
+  - 1
+  - TargetAwareRefinement
+  - [ch, 47, deform, 3, 0.5]
 - - 36
   - 1
   - TargetPriorModulation
   - [ch, 36, learned, 3, 8]
-- - 46
+- - 49
   - 1
   - SARAdaptiveAttention
-  - [ch, 46, 16, 7, adaptive]
-- - 47
+  - [ch, 49, 16, 7, adaptive]
+- - 50
   - 1
   - ContextAggregation
-  - [ch, 47, multi, 8]
-- - [39, 42, 45, 48]
+  - [ch, 50, multi, 8]
+- - 51
+  - 1
+  - TargetAwareRefinement
+  - [ch, 51, deform, 3, 0.5]
+- - [40, 44, 48, 52]
   - 1
   - Detect
   - [nc]

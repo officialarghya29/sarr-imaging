@@ -52,13 +52,18 @@ MATRIX: tuple[tuple[str, str, str, str], ...] = (
     ("EXP-010", "full", "Efficiency study", "Uses the EXP-007 checkpoint; no separate training is needed."),
     ("EXP-011", "full", "Cross-dataset generalization", "Uses the EXP-007 checkpoint; no separate training is needed."),
     ("EXP-012", "full", "Multi-seed validation", "Three seeds for mean +/- std on the headline metric."),
+    # NOTE: EXP-012's seed repeats are emitted below against `full_<scale>`. For the v2
+    # headline number the same study must be repeated against `v2_full_<scale>`; that is a
+    # deliberate manual step because it doubles the compute and belongs in the paper's
+    # compute budget rather than in a generator's default.
     # --- v2 extension: the target-prior / clutter / frequency / context components, appended
     # rather than renumbered, so the already-published EXP-001..008 keep their exact meaning.
     ("EXP-013", "v2_clutter", "+ Clutter-aware representation",
      "Component 2 extension: clutter modelled separately from speckle."),
     ("EXP-014", "v2_prior", "+ Target prior modulation", "Component 8: the project's central hypothesis."),
     ("EXP-015", "v2_freq", "+ Spatial-frequency representation", "Component 9: explicit spectral branch."),
-    ("EXP-016", "v2_full", "FULL v2 SAR-YOLO", "Component 10: context aggregation, completing the v2 model."),
+    ("EXP-016", "v2_ctx", "+ Context aggregation", "Component 10: multi-extent context."),
+    ("EXP-017", "v2_full", "FULL v2 SAR-YOLO", "Component 11: target-aware deformable refinement, completing the v2 model."),
 )
 
 #: Experiment ids that are evaluated rather than trained.
@@ -76,7 +81,10 @@ ABLATION_SLOTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("target prior", ("tp_none", "tp_cfar", "tp_static", "tp_channel", "v2_full")),
     ("frequency", ("fr_none", "fr_highpass", "fr_static", "v2_full")),
     ("context", ("cx_none", "cx_local", "cx_regional", "v2_full")),
-    ("removal", ("v2_noclutter", "v2_noprior", "v2_nofreq", "v2_noctx")),
+    ("removal", ("v2_noclutter", "v2_noprior", "v2_nofreq", "v2_noctx", "v2_norefine")),
+    # Appended rather than inserted, so the ids of the slots above keep their meaning
+    # (an id is referenced by the ledger and by the paper tables).
+    ("refinement", ("rf_none", "rf_local", "rf_static", "v2_full")),
 )
 
 

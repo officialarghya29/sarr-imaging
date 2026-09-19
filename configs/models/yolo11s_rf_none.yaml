@@ -1,12 +1,12 @@
-# SAR-YOLO / v2_full_s  -- GENERATED FILE, do not edit by hand.
-# Regenerate with:  python -m saryolo arch --variant v2_full_s
+# SAR-YOLO / rf_none  -- GENERATED FILE, do not edit by hand.
+# Regenerate with:  python -m saryolo arch --variant rf_none
 # scale=s  levels=p2-p3-p4-p5  modules=sfe, speckle, frequency, fusion, prior, attention, context, refine, p2_head
 # sar_loss={'w_sep': 0.2, 'w_small': 0.5, 'w_smooth': 0.05, 'margin': 1.0, 'bg_frac': 0.25}
 #
 # NOTE: when this file is loaded, ultralytics derives the compound scale from the
 # FILE NAME (guess_model_scale), overwriting the 'scale' key below. The file must
 # therefore keep its 'yolo11s_' prefix or it will silently build at scale 'n'.
-# v2 full model at scale s.
+# TADR slot: refinement disabled.
 #
 # [from, repeats, module, args]
 nc: 1
@@ -204,7 +204,7 @@ head:
 - - 40
   - 1
   - TargetAwareRefinement
-  - [ch, 40, deform, 3, 0.5]
+  - [ch, 40, none, 3, 0.5]
 - - 29
   - 1
   - TargetPriorModulation
@@ -220,7 +220,7 @@ head:
 - - 44
   - 1
   - TargetAwareRefinement
-  - [ch, 44, deform, 3, 0.5]
+  - [ch, 44, none, 3, 0.5]
 - - 33
   - 1
   - TargetPriorModulation
@@ -236,7 +236,7 @@ head:
 - - 48
   - 1
   - TargetAwareRefinement
-  - [ch, 48, deform, 3, 0.5]
+  - [ch, 48, none, 3, 0.5]
 - - 37
   - 1
   - TargetPriorModulation
@@ -252,7 +252,7 @@ head:
 - - 52
   - 1
   - TargetAwareRefinement
-  - [ch, 52, deform, 3, 0.5]
+  - [ch, 52, none, 3, 0.5]
 - - [41, 45, 49, 53]
   - 1
   - Detect

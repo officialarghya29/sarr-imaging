@@ -155,21 +155,23 @@ def build_baseline_comparison(ledger, efficiency: dict | None = None) -> Table:
 def build_ablation(ledger) -> Table:
     """TABLE 3 — the main ablation, one component added per row."""
     best = _latest_by_experiment(_ledger_rows(ledger))
-    #: ``(exp id, label, (sfe, clutter, attention, amf, p2, sar loss, prior, frequency, context))``
+    #: ``(exp id, label, (sfe, clutter, attention, amf, p2, sar loss, prior, frequency,
+    #: context, refinement))``
     #: The clutter row is a mode change on the speckle slot rather than a new component, so it
     #: keeps ``speckle`` set and adds ``clutter``.
     chain = (
-        ("EXP-001", "YOLO baseline", (False, False, False, False, False, False, False, False, False)),
-        ("EXP-002", "+ SFE", (True, False, False, False, False, False, False, False, False)),
-        ("EXP-003", "+ Speckle", (True, False, False, False, False, False, False, False, False)),
-        ("EXP-004", "+ Attention", (True, False, True, False, False, False, False, False, False)),
-        ("EXP-005", "+ AMF", (True, False, True, True, False, False, False, False, False)),
-        ("EXP-006", "+ Small head", (True, False, True, True, True, False, False, False, False)),
-        ("EXP-007", "Full (v1)", (True, False, True, True, True, True, False, False, False)),
-        ("EXP-013", "+ Clutter-aware", (True, True, True, True, True, True, False, False, False)),
-        ("EXP-014", "+ Target prior", (True, True, True, True, True, True, True, False, False)),
-        ("EXP-015", "+ Spatial-frequency", (True, True, True, True, True, True, True, True, False)),
-        ("EXP-016", "Full (v2)", (True, True, True, True, True, True, True, True, True)),
+        ("EXP-001", "YOLO baseline", (False, False, False, False, False, False, False, False, False, False)),
+        ("EXP-002", "+ SFE", (True, False, False, False, False, False, False, False, False, False)),
+        ("EXP-003", "+ Speckle", (True, False, False, False, False, False, False, False, False, False)),
+        ("EXP-004", "+ Attention", (True, False, True, False, False, False, False, False, False, False)),
+        ("EXP-005", "+ AMF", (True, False, True, True, False, False, False, False, False, False)),
+        ("EXP-006", "+ Small head", (True, False, True, True, True, False, False, False, False, False)),
+        ("EXP-007", "Full (v1)", (True, False, True, True, True, True, False, False, False, False)),
+        ("EXP-013", "+ Clutter-aware", (True, True, True, True, True, True, False, False, False, False)),
+        ("EXP-014", "+ Target prior", (True, True, True, True, True, True, True, False, False, False)),
+        ("EXP-015", "+ Spatial-frequency", (True, True, True, True, True, True, True, True, False, False)),
+        ("EXP-016", "+ Context", (True, True, True, True, True, True, True, True, True, False)),
+        ("EXP-017", "Full (v2)", (True, True, True, True, True, True, True, True, True, True)),
     )
     table = Table(
         "main_ablation",
@@ -177,7 +179,7 @@ def build_ablation(ledger) -> Table:
         "is attributable to that component alone. The clutter row is a mode change on the "
         "speckle slot rather than an added module.",
         ["Model", "SFE", "Clutter", "Attention", "AMF", "P2 head", "SAR loss",
-         "Prior", "Frequency", "Context", "mAP50", "mAP50:95", "Params (M)", "FPS"],
+         "Prior", "Frequency", "Context", "Refine", "mAP50", "mAP50:95", "Params (M)", "FPS"],
     )
     for exp_id, label, flags in chain:
         record = best.get(exp_id)
@@ -205,6 +207,10 @@ MODULE_ABLATION_GROUPS: dict[str, tuple[str, ...]] = {
     "Target prior": ("tp_none", "tp_cfar", "tp_static", "tp_channel", "v2_full"),
     "Frequency": ("fr_none", "fr_highpass", "fr_static", "v2_full"),
     "Context": ("cx_none", "cx_local", "cx_regional", "v2_full"),
+    # Component 11's own study. `rf_local` is the capacity control for the proposed arm: the
+    # same sub-network with the offsets removed, so `ours - rf_local` isolates *deformation*
+    # rather than the extra convolution.
+    "Refinement": ("rf_none", "rf_local", "rf_static", "v2_full"),
 }
 
 #: Removal ablation rows: ``(label, variant)``. Exposed for the same reason as above.
@@ -214,6 +220,7 @@ REMOVAL_ABLATION_ROWS: tuple[tuple[str, str], ...] = (
     ("- target prior", "v2_noprior"),
     ("- spatial-frequency", "v2_nofreq"),
     ("- context", "v2_noctx"),
+    ("- refinement", "v2_norefine"),
 )
 
 
@@ -251,7 +258,7 @@ def build_removal_ablation(ledger) -> Table:
     rows = _ledger_rows(ledger)
     table = Table(
         "removal_ablation",
-        "Removal ablation on the full v2 model. 'Full' is EXP-016; each row removes exactly "
+        "Removal ablation on the full v2 model. 'Full' is EXP-017; each row removes exactly "
         "one component, so a *drop* in this table contradicts the corresponding gain in the "
         "cumulative ladder.",
         ["Model", "mAP50", "mAP50:95", "AP_small", "Params (M)", "FPS"],

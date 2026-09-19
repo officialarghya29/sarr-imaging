@@ -166,6 +166,7 @@ IDENTITY_MODES: dict[str, tuple[str, ...]] = {
     "TargetPriorModulation": ("learned", "channel", "static", "cfar", "none"),
     "SpatialFrequencyRepresentation": ("sff", "static", "highpass", "none"),
     "ContextAggregation": ("multi", "local", "regional", "none"),
+    "TargetAwareRefinement": ("deform", "static", "local", "none"),
 }
 
 #: Control modes that have no residual to learn from: they either return the input
@@ -186,7 +187,8 @@ def _declared_vocabularies() -> dict[str, tuple[str, ...]]:
     vocab = {
         name: tuple(getattr(M, name).MODES)
         for name in ("SARFeatureEnhancement", "SpeckleAwareFeatureModule", "AdaptiveMultiScaleFusion",
-                     "TargetPriorModulation", "SpatialFrequencyRepresentation", "ContextAggregation")
+                     "TargetPriorModulation", "SpatialFrequencyRepresentation", "ContextAggregation",
+                     "TargetAwareRefinement")
     }
     vocab["attention slot"] = tuple(M.ATTENTION_BUILDERS)
     vocab["attention gate"] = ("adaptive", "static")
@@ -424,17 +426,24 @@ def test_every_new_slot_mode_is_exercised_by_a_variant():
     only appear when ``parse_model`` substitutes channel counts and layer indices for the
     real graph. Coverage by a variant is therefore what actually tests the wiring.
     """
-    from saryolo.nn.modules import ContextAggregation, SpatialFrequencyRepresentation, TargetPriorModulation
+    from saryolo.nn.modules import (
+        ContextAggregation,
+        SpatialFrequencyRepresentation,
+        TargetAwareRefinement,
+        TargetPriorModulation,
+    )
 
     covered = {
         "prior": {s.prior for s in VARIANTS.values() if s.prior},
         "frequency": {s.frequency for s in VARIANTS.values() if s.frequency},
         "context": {s.context for s in VARIANTS.values() if s.context},
+        "refinement": {s.refinement for s in VARIANTS.values() if s.refinement},
     }
     expected = {
         "prior": set(TargetPriorModulation.MODES),
         "frequency": set(SpatialFrequencyRepresentation.MODES),
         "context": set(ContextAggregation.MODES),
+        "refinement": set(TargetAwareRefinement.MODES),
     }
     for slot, modes in expected.items():
         missing = modes - covered[slot]
@@ -453,7 +462,8 @@ def test_v2_ladder_adds_one_component_per_row():
         "v2_clutter": None,  # mode change, not a new slot
         "v2_prior": "prior",
         "v2_freq": "frequency",
-        "v2_full": "context",
+        "v2_ctx": "context",
+        "v2_full": "refine",
     }
     assert VARIANTS["full"].speckle == "sfm"
     assert VARIANTS["v2_clutter"].speckle == "sfm_clutter"
@@ -470,17 +480,23 @@ def test_v2_ladder_adds_one_component_per_row():
 
 def test_new_slots_appear_in_the_built_graph():
     """The new slots must materialise as layers, not be silently dropped."""
-    from saryolo.nn.modules import ContextAggregation, SpatialFrequencyRepresentation, TargetPriorModulation
+    from saryolo.nn.modules import (
+        ContextAggregation,
+        SpatialFrequencyRepresentation,
+        TargetAwareRefinement,
+        TargetPriorModulation,
+    )
 
     types = {type(m) for m in _build(VARIANTS["v2_full"], nc=2).model}
-    for cls in (TargetPriorModulation, SpatialFrequencyRepresentation, ContextAggregation):
+    for cls in (TargetPriorModulation, SpatialFrequencyRepresentation, ContextAggregation,
+                TargetAwareRefinement):
         assert cls in types, f"{cls.__name__} is missing from the built v2_full model"
 
 
 def test_v2_removal_ablation_actually_removes_something():
     """Every removal row must cost fewer parameters than the full model."""
     full = _num_params(_build(VARIANTS["v2_full"], nc=2))
-    for name in ("v2_noprior", "v2_nofreq", "v2_noctx", "v2_noclutter"):
+    for name in ("v2_noprior", "v2_nofreq", "v2_noctx", "v2_noclutter", "v2_norefine"):
         n = _num_params(_build(VARIANTS[name], nc=2))
         assert n < full, f"{name} ({n}) removes nothing relative to v2_full ({full})"
 
@@ -527,6 +543,30 @@ def test_context_slot_arms_differ_as_documented():
     assert counts["cx_none"] < counts["cx_regional"], counts
     assert counts["v2_full"] > counts["cx_local"], counts
     assert counts["v2_full"] > counts["cx_regional"], counts
+
+
+def test_refinement_slot_arms_differ_as_documented():
+    """``rf_local`` must be the same size as ``rf_none`` plus the mixing conv only.
+
+    The proposed arm's offsets cost two output channels per level. That is the *only*
+    difference between ``rf_local`` and the proposed arm, which is what makes
+    ``ours - rf_local`` an attribution to deformation rather than to added capacity.
+    """
+    counts = {
+        name: _num_params(_build(VARIANTS[name], nc=2))
+        for name in ("rf_none", "rf_local", "rf_static", "v2_full")
+    }
+    assert counts["rf_none"] < counts["rf_local"], counts
+    # `static` stores one shared offset field; `deform` predicts offsets from the feature,
+    # so it must be strictly larger.
+    assert counts["rf_local"] < counts["rf_static"] < counts["v2_full"], counts
+
+    # The difference between the proposed arm and its capacity control is small, so pin it
+    # explicitly: if a future edit gave `rf_local` an offset conv (or dropped it from
+    # `deform`) the two would still both build, but the ablation would silently stop
+    # measuring what it claims to measure.
+    delta = counts["v2_full"] - counts["rf_local"]
+    assert 0 < delta < 0.02 * counts["v2_full"], delta
 
 
 # ------------------------------------------------------------- new-module unit contracts
@@ -586,3 +626,157 @@ def test_frequency_module_survives_half_precision():
         out = module(x)
     assert out.dtype == torch.float16, out.dtype
     assert torch.isfinite(out).all()
+
+
+def test_refinement_resampling_is_an_identity_at_zero_offset():
+    """A zero offset field must resample the feature *at the same position*.
+
+    ``align_corners=True`` paired with a ``linspace(-1, 1)`` ramp is what makes a zero
+    offset sample the original pixel. If that pairing were wrong (for instance a ``(w, h)``
+    map built instead of ``(h, w)``, or ``align_corners`` left at its default), every
+    offset-free arm would quietly resample the feature at shifted positions -- a spatial
+    distortion that neither a parameter count nor the identity-at-init test would reveal,
+    because the gate starts closed and hides the whole branch.
+
+    Equality is asserted up to float32 round-off, not bitwise, because the resample path
+    is not bit-identical to no resample at all. The tolerance is only meaningful together
+    with a demonstration that a *real* displacement is orders of magnitude larger, which
+    the second half of this test measures rather than assumes: a 0.04-cell shift (below one
+    hundredth of the map) moves the output by ~0.4, against ~7e-7 for round-off.
+    """
+    from saryolo.nn.modules import TargetAwareRefinement
+
+    x = torch.randn(2, 16, 12, 20)
+    local = TargetAwareRefinement(16, mode="local").eval()
+    zero = TargetAwareRefinement(16, mode="deform", max_offset=0.0).eval()
+    zero.mix.load_state_dict(local.mix.state_dict())
+
+    # The grid itself: corners pinned exactly, so the identity mapping is verifiable
+    # independently of any resampling round-off.
+    grid = zero._base_grid(12, 20, x.device, torch.float32)
+    assert grid.shape == (12, 20, 2)
+    assert torch.equal(grid[0, 0], torch.tensor([-1.0, -1.0]))
+    assert torch.equal(grid[-1, -1], torch.tensor([1.0, 1.0]))
+
+    shifted = TargetAwareRefinement(16, mode="deform", max_offset=0.5).eval()
+    shifted.mix.load_state_dict(local.mix.state_dict())
+    with torch.no_grad():
+        shifted.offset.weight.zero_()
+        shifted.offset.bias.zero_()
+        shifted.offset.bias[0].fill_(0.08)  # ~0.04 grid units ~= a tenth of a cell
+        for module in (local, zero, shifted):
+            module.alpha.raw.fill_(1.5)  # open the gates: any distortion would be visible
+        out_local, out_zero, out_shifted = local(x), zero(x), shifted(x)
+
+    roundoff = float((out_local - out_zero).abs().max())
+    displacement = float((out_local - out_shifted).abs().max())
+    assert roundoff < 1e-5, f"zero offset should be an identity up to round-off, got {roundoff}"
+    assert displacement > 100 * roundoff, (
+        f"a sub-cell displacement ({displacement}) must dwarf round-off ({roundoff}); "
+        "otherwise this tolerance is hiding a real shift"
+    )
+
+
+def test_refinement_offsets_actually_move_the_sampling_grid():
+    """A non-zero offset field must change the output relative to ``local``.
+
+    This is the mechanism claim: ``deform`` is not ``local`` plus parameters. With the
+    offsets zeroed it *is* ``local`` (previous test); with the offsets driven to a known
+    value it must differ, or the gradient the offset head receives would be measuring
+    nothing.
+    """
+    from saryolo.nn.modules import TargetAwareRefinement
+
+    x = torch.randn(2, 16, 12, 12)
+    local = TargetAwareRefinement(16, mode="local").eval()
+    deform = TargetAwareRefinement(16, mode="deform", max_offset=0.5).eval()
+    deform.mix.load_state_dict(local.mix.state_dict())
+    with torch.no_grad():
+        # A constant, feature-independent offset: deterministic and unambiguously non-zero.
+        deform.offset.weight.zero_()
+        deform.offset.bias.fill_(0.8)  # tanh(0.8) * 0.5 ~= 0.33 grid units ~= 4 cells
+        for module in (local, deform):
+            module.alpha.raw.fill_(1.5)
+        out_local, out_deform = local(x), deform(x)
+    assert torch.isfinite(out_deform).all()
+    assert not torch.allclose(out_local, out_deform), "the offset field had no effect"
+
+
+def test_refinement_offsets_are_feature_adaptive_only_in_deform_mode():
+    """``deform`` must respond to its input; ``static`` must not.
+
+    The whole point of the arm is *content-adaptive* sampling, and the slot study leans on
+    ``static`` as the arm that keeps learned-but-fixed sampling. Asserting both directions
+    keeps that contrast honest.
+    """
+    from saryolo.nn.modules import TargetAwareRefinement
+
+    x1 = torch.randn(2, 16, 12, 12)
+    x2 = torch.randn(2, 16, 12, 12)
+
+    adaptive = TargetAwareRefinement(16, mode="deform", max_offset=0.5).eval()
+    fixed = TargetAwareRefinement(16, mode="static", max_offset=0.5).eval()
+    with torch.no_grad():
+        d_a1, d_a2 = adaptive._offsets(x1, 12, 12), adaptive._offsets(x2, 12, 12)
+        d_f1, d_f2 = fixed._offsets(x1, 12, 12), fixed._offsets(x2, 12, 12)
+
+    assert d_a1.shape == d_f1.shape == (2, 12, 12, 2)
+    # `static` is input-independent by construction, and identical across the batch.
+    assert torch.equal(d_f1, d_f2)
+    assert torch.equal(d_f1[0], d_f1[1])
+    # `deform` responds to both, which is the whole point of the arm.
+    assert not torch.equal(d_a1, d_a2), "deform offsets did not respond to the input"
+    assert not torch.equal(d_a1, d_f1), "deform did not move the grid relative to a fixed field"
+
+
+def test_refinement_offsets_stay_inside_their_bound():
+    """The tanh bound must hold under a deliberately extreme offset head.
+
+    An unbounded offset would let a cell sample the far side of the feature map, at which
+    point the "refinement" is doing global re-routing rather than local re-alignment -- and
+    the bound is what the documented ``max_offset`` sweep varies.
+    """
+    from saryolo.nn.modules import TargetAwareRefinement
+
+    module = TargetAwareRefinement(16, mode="deform", max_offset=0.25).eval()
+    x = torch.randn(2, 16, 12, 12)
+    with torch.no_grad():
+        module.offset.weight.fill_(50.0)
+        module.offset.bias.fill_(50.0)
+        d = module._offsets(x, 12, 12)
+    assert float(d.abs().max()) <= 0.25 + 1e-6, float(d.abs().max())
+
+
+def test_refinement_survives_half_precision():
+    """AMP: ``grid_sample`` has no fp16 CPU kernel, so the warp must upcast internally."""
+    from saryolo.nn.modules import TargetAwareRefinement
+
+    module = TargetAwareRefinement(16, mode="deform").eval()
+    x = torch.randn(1, 16, 16, 16, dtype=torch.float16)
+    with torch.no_grad():
+        out = module(x)
+    assert out.dtype == torch.float16, out.dtype
+    assert torch.isfinite(out).all()
+
+
+def test_refinement_offset_map_contract():
+    """``offset_map`` must expose the bounded offsets for the warping arms only.
+
+    The explainability pipeline renders this, so an arm with no offsets must raise rather
+    than return zeros: a plot of a zero field would show a trained model apparently choosing
+    not to move, which is a different statement from "this arm cannot move".
+    """
+    from saryolo.nn.modules import TargetAwareRefinement
+
+    x = torch.randn(2, 16, 12, 20)
+    for mode in ("deform", "static"):
+        module = TargetAwareRefinement(16, mode=mode, max_offset=0.25).eval()
+        with torch.no_grad():
+            d = module.offset_map(x)
+        assert d.shape == (2, 12, 20, 2), (mode, tuple(d.shape))
+        assert float(d.abs().max()) <= 0.25 + 1e-6, (mode, float(d.abs().max()))
+
+    for mode in ("local", "none"):
+        module = TargetAwareRefinement(16, mode=mode).eval()
+        with pytest.raises(ValueError):
+            module.offset_map(x)
