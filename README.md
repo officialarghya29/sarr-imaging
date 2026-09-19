@@ -8,9 +8,9 @@
 | --- | --- |
 | **Licence** | MIT for the code — datasets are never redistributed |
 | **Stack** | Python 3.10+ · Ultralytics 8.4.155 · PyTorch 2.x |
-| **Architectures** | 71 variants wired; every one builds and runs a forward pass |
-| **Experiments** | 68 configured; each reproducible from a committed YAML |
-| **Tests** | 156 passing — no dataset download and no GPU needed |
+| **Architectures** | 74 variants wired; every one builds and runs a forward pass |
+| **Experiments** | 72 configured; each reproducible from a committed YAML |
+| **Tests** | 169 passing — no dataset download and no GPU needed |
 | **Accuracy results** | none yet — not one number in this repository is fabricated |
 
 ---
@@ -20,7 +20,7 @@
 | | |
 | --- | --- |
 | **What this is** | A complete, reproducible research pipeline for SAR object detection: dataset audit → baseline → ten documented components → ablations → removal tests → robustness → efficiency → cross-dataset → paper. |
-| **What is proven** | The infrastructure. 156 tests pass; the baseline reproduces stock YOLO11 exactly; all nine modules are measurably identity functions at initialisation *and* demonstrably not frozen; every model trains end to end. |
+| **What is proven** | The infrastructure. 169 tests pass; the baseline reproduces stock YOLO11 exactly; all nine modules are measurably identity functions at initialisation *and* demonstrably not frozen; every model trains end to end. |
 | **What is *not* proven** | Accuracy. **No model has been trained on a real SAR dataset in this repository.** There is no result table here with numbers in it, and the table generators refuse to print one. |
 | **Why that's the point** | A detector paper is only as strong as its ablations. If the machinery that produces those ablations cannot be trusted, every number downstream is unverifiable. Build the instrument first. |
 
@@ -169,7 +169,8 @@ SAR image
    ▼
 Component 7: SAR-aware loss
              target/background separation + small-object term +
-             background speckle regularisation
+             background speckle regularisation + optional
+             representation consistency (SEC. 4)
    │
    ▼
 Predictions
@@ -223,6 +224,7 @@ Reading the chart:
 | + freq | **Component 9** | 14.690 | +0.103 | 51.90 | **+0.00** | +55.8% / +139.5% |
 | + context | **Component 10** | 15.854 | +1.164 | 54.65 | +2.75 | +68.2% / +152.2% |
 | **FULL v2** | **Component 11** | **16.230** | **+0.376** | **55.68** | **+1.03** | **+72.1% / +157.0%** |
+| + prior spectral | **Module G** | 16.586 | +0.356 | 55.68 | **+0.00** | +75.9% / +157.0% |
 
 The story the table tells is uncomfortable and useful: **the two cheapest modules carry the physical insight, and the two most expensive carry the resolution.** If EXP-006 shows the P2 head does not move AP_small, the model drops back to 35 GFLOPs and a much stronger efficiency claim — for free.
 
@@ -271,11 +273,17 @@ The prior is the paper's central hypothesis, so it gets the most careful ablatio
 | | local, no offsets | 16.212 | **the capacity control**: identical mixing network, grid never moves |
 | | learned offsets, input-independent | 16.212 | +**8** parameters over the row above, all of them the shared offset field |
 | | ours, input-adaptive offsets | 16.230 | +0.017M (17,288 params at scale `s`): the offset head is `C → 2` channels per level |
+| **Target prior, spectral** (8+9) | feat-conditioned spectral | 16.586 | **the Module G control**: byte-for-byte the same size as the row below — only the *conditioning signal* differs (raw feature, not prior) |
+| | ours, prior-conditioned spectral | 16.586 | the prior chooses the radial band gains: `EXP-018`, the ladder row for Module G |
 | **Removal** | − clutter / − prior / − freq / − context / − refinement | 16.061 / 16.048 / 16.127 / 15.066 / 15.854 | against full v2 at 16.230 |
 
 The **capacity-matched** row is the methodological point. Comparing "learned spatial prior" against "uniform learned prior" would confound *spatial selectivity* with *parameter count* — the larger arm could win for reasons that have nothing to do with the hypothesis. `tp_channel` therefore uses the proposed arm's exact evidence network and averages its output over space, so the two arms are byte-for-byte the same size (asserted in `test_target_prior_arms_are_capacity_matched_where_claimed`) and differ in one respect only: whether the prior is allowed to vary across the image. If `tp_channel` matches `v2_full`, the spatial-prior claim is dead — and the paper must say so.
 
 The same discipline applies to Component 9. A zero-initialised spectral gain would mean `gain = 1`, so the filtered branch would equal its input and the gate gradient would vanish identically — the frozen-module failure again. The bands therefore start small-but-non-zero, and identity comes from the gate. The `sff` arm also starts numerically equal to `static`, so the difference between those two rows measures *input adaptivity* alone.
+
+**Module G lives in the prior slot, not the spectral slot — and that is forced, not stylistic.** The brief asks for the target prior to drive frequency-band selection, but the backbone spectral slot runs at P5/32 *before* any prior exists, and an Ultralytics graph cannot feed a custom module two inputs (`parse_model` resolves `c2 = ch[f]`; only hardcoded names receive a channel list — verified against the installed source). Faking the wiring with a backward connection would break the stock summary, FLOPs counter and validator. So the conditioning is implemented where the prior actually is: the prior module itself produces the band gains. `tp_spectral_feat` is the control that keeps the claim honest — same head, same bands, same descriptor, fed raw-feature statistics instead of prior evidence — so `spectral − spectral_feat` isolates *prior* conditioning from mere input adaptivity.
+
+**SEC. 4 of the brief — representation consistency — is implemented as an opt-in loss term.** The model runs a second forward on a degraded copy of the same batch (the *same* corruption physics the robustness benchmark uses, so training and evaluation cannot drift apart) and the drift between the two views' feature maps is penalised. Three properties are pinned by test rather than asserted: the term is exactly zero when the views agree; positions where either view is silent are *excluded* rather than penalised (`cosine_similarity` returns 0 for a zero vector, so a dead position would otherwise contribute the maximum penalty and the term would spend its gradient reviving dead channels); and the perturbed pass runs BatchNorm in eval mode so the buffers see each batch exactly once — without which enabling the term would silently change the normalisation of the whole network and every ablation would measure that instead. The weight defaults to 0, so stock behaviour is bit-identical; enabling it costs one extra forward pass per step, which is stated rather than hidden.
 
 Component 11 needs a control that is uncommon in detection papers, because "deformable convolution" comparisons usually give the proposed arm *both* a new network and a new operation. `rf_local` therefore keeps the identical mixing network and removes only the offsets, so `ours − local` is attributable to **deformation** rather than to the extra convolution. Two further tests make the mechanism falsifiable at the unit level: a zero offset field must reproduce `local` exactly up to float32 round-off (measured: `7e-7`), while a **0.04-cell** displacement moves the output by `0.4` — six orders of magnitude larger, so the tolerance is demonstrably not hiding a real shift. And the base grid's corners are asserted at exactly `(-1, -1)` and `(1, 1)`, which is what pins `align_corners` to the sampling convention rather than leaving it to chance.
 
@@ -290,15 +298,16 @@ Component 11 needs a control that is uncommon in detection papers, because "defo
 | Check | Result | Evidence |
 | --- | --- | --- |
 | Baseline reproduces stock YOLO11 exactly | `2,624,080` (n), `9,458,752` (s) | `test_baseline_matches_stock_yolo11_parameter_count` |
-| All 63 architectures construct and forward | pass | `test_every_variant_builds_and_forwards` |
+| **All 74 architectures construct and forward** | pass, at even and odd input sizes | `test_every_variant_builds_and_forwards` |
 | Declared scales build at the right stride count | pass | `test_declared_scale_variants_build` |
 | Every SAR module is an **exact** identity at init | `max\|f(x)−x\| = 0.0e+00` ×9 | measured live + `test_each_module_is_exactly_identity_at_init` |
 | **No module is silently frozen at init** | every learnable mode has a non-zero gate gradient | `test_no_module_is_frozen_at_init` |
 | **All gates leave zero during real training** | `25/25` non-zero after 2 epochs | `SMOKE-003` checkpoint (checked dynamically, not just statically) |
+| **The consistency term reaches the loss through the real path** | weighted `sar_loss` > unweighted, second view run, BN counters advance by exactly 1 | `test_consistency_term_reaches_the_total_loss_through_the_model`, `test_consistency_pass_does_not_disturb_batchnorm_running_stats` |
 | Deformable refinement's grid identity is pinned | zero offset → `7e-7` dev; 0.04-cell shift → `0.4` | `test_refinement_resampling_is_an_identity_at_zero_offset` |
 | Offsets move the grid, and only in the adaptive arm | pass | `test_refinement_offsets_actually_move_the_sampling_grid`, `..._are_feature_adaptive_only_in_deform_mode` |
 | SAR-YOLO predicts identically to baseline at init | max abs diff `0.0` (v1 **and** v2) | `test_models_output_identically_to_baseline_at_init` |
-| Filenames cannot silently downgrade the scale | pass (71 variants) | `test_variant_filenames_encode_scale` |
+| Filenames cannot silently downgrade the scale | pass (74 variants) | `test_variant_filenames_encode_scale` |
 | Mode names cannot break the parser | pass (no keyword or `parse_model`-local collision) | `test_module_mode_names_are_safe_for_parse_model` |
 | Spectral branch is resolution- and AMP-safe | odd, non-square and fp16 inputs pass | `test_frequency_module_is_resolution_independent` |
 | Every ablation arm has a runnable config | pass | `test_every_ablation_arm_has_a_runnable_experiment_config` |
@@ -381,7 +390,7 @@ The brief that motivated this project named the failure mode to avoid: `YOLO + C
 
 ## Part VII · Quickstart
 
-Reproduce every verified claim locally — **no dataset download, no GPU** (`pytest tests/ -q` → 66 passed):
+Reproduce every verified claim locally — **no dataset download, no GPU** (`pytest tests/ -q` → all green):
 
 ```bash
 uv venv .venv --python 3.12
@@ -389,8 +398,8 @@ uv pip install --python .venv/bin/python torch torchvision --index-url https://d
 uv pip install --python .venv/bin/python ultralytics pytest
 source .venv/bin/activate
 
-pytest tests/ -q                                          # 156 tests
-python -m saryolo arch --variant all --nc 1               # emit 35 model YAMLs
+pytest tests/ -q                                          # 169 tests
+python -m saryolo arch --variant all --nc 1               # emit 74 model YAMLs
 python -m saryolo synth-data --out datasets/processed/synthetic_smoke
 python -m saryolo train --exp configs/exp/_smoke_baseline.yaml
 python -m saryolo train --exp configs/exp/_smoke_full.yaml
@@ -448,6 +457,7 @@ python scripts/train_all_experiments.py --keep-going
 | EXP-015 | + spatial-frequency | **Component 9** |
 | EXP-016 | + context | **Component 10** |
 | EXP-017 | **FULL SAR-YOLO v2** | **Component 11** — the v2 reference model |
+| EXP-018 | + prior spectral | **Module G** — the target prior selects the radial frequency bands |
 
 ### Module-level ablations (`EXP-2xx`)
 
@@ -459,7 +469,7 @@ Every arm below sits in the *same slot* with every other component held fixed, a
 | `EXP-221…224` | fusion (4) | Concat · projected-Add · ours-static · ours-adaptive |
 | `EXP-231…234` | speckle (2) | none · Lee · low-pass · ours-SFM |
 | `EXP-241…245` | enhancement (1) | identity · log · CLAHE · local-std · ours-SFE |
-| `EXP-251…255` | target prior (8) | none · CFAR · uniform · **capacity-matched** · ours-spatial |
+| `EXP-251…258` | target prior (8) | none · CFAR · uniform · capacity-matched-spatial · ours-spatial · **feat-conditioned spectral** · **ours prior-conditioned spectral (Module G)** · ladder reference |
 | `EXP-261…266` | frequency (9) | none · fixed high-pass · learned bands · **DCT** · **wavelet** · ours-adaptive |
 | `EXP-271…274` | context (10) | none · local · regional · ours-both |
 | `EXP-281…285` | removal | −clutter · −prior · −freq · −context · −refinement (against full v2) |
@@ -511,7 +521,7 @@ Two details carry the weight of the claim:
 ```
 saryolo/
 ├── nn/
-│   ├── arch.py            symbolic builder: 71 variants, all indices computed
+│   ├── arch.py            symbolic builder: 74 variants, all indices computed
 │   ├── modules/
 │   │   ├── input_adapter.py SIA (Comp 12) + raw / local / learned arms
 │   │   ├── enhancement.py SFE (Comp 1) + log / standardize / CLAHE baselines
@@ -539,7 +549,7 @@ configs/    datasets/ · models/ (63 generated) · exp/ (EXP-001…017 + EXP-2xx
 scripts/    prepare_dataset · make_exp_configs · train_all_experiments
             make_readme_assets (builds this page's charts) · check_chart_layout
 notebooks/  Colab: dataset prep · train + ablate · benchmark + paper
-tests/      156 tests across arch parity, identity, gradient flow, metrics, losses, data, repo
+tests/      169 tests across arch parity, identity, gradient flow, metrics, losses, data, repo
 docs/       DATASETS.md · METHOD.md · assets/ (generated charts)
 ```
 

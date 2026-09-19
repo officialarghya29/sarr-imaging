@@ -269,6 +269,44 @@ they cost no extra assignment pass. The weights live in the model YAML's
 `sar_loss` block, so a run is reproducible from the committed YAML, and an
 unknown key raises rather than being silently ignored.
 
+### SEC. 4 — representation consistency (opt-in, off by default)
+
+The fourth term compares the representation of the same batch under two draws
+of the imaging process:
+
+```
+F_a = backbone(batch)                  clean view
+F_b = backbone(perturb(batch, k, s))   degraded view, same corruption physics as SEC. 15
+L_consistency = (1/L) * sum_l  (1 - cos(F_a^l, F_b^l))     per detection level l
+L_total      += w_consistency * L_consistency
+```
+
+The hypothesis it encodes is that a SAR detector should not change its mind
+about *what is where* because the speckle draw changed: the drift that matters
+is directional, so the term is cosine (scale drift is a calibration difference,
+not a structure change) rather than MSE.
+
+**Dead positions are excluded, not penalised.** `cosine_similarity` returns 0
+when a vector has zero norm, so a feature position whose channels are all zero
+would contribute `1 - 0 = 1` — the largest possible value — and the term would
+spend its gradient reviving dead positions instead of measuring drift.
+Positions where either view is (near-)silent (norm <= 1e-6) are masked out of
+the average. This was a real bug in an earlier version: with BatchNorm biases
+and post-activation sparsity, silent positions are routine, and the term would
+have been dominated by them.
+
+**The perturbed pass runs BatchNorm in eval mode.** A second forward in train
+mode would move every BN running buffer twice per step, so enabling the term
+would silently change the normalisation of the whole network — and the ablation
+would measure that, not the loss. The model switches BN to eval for the second
+pass and restores it afterwards; the guard asserts each BN's
+`num_batches_tracked` advances by exactly 1 per step with the weight on, not 2.
+
+**Cost, stated rather than hidden:** one extra forward pass per step. The
+weight defaults to 0, so stock behaviour is bit-identical when off. The severity
+is rejected unless it comes from the published grid, for the same reason as the
+augmentation: training and evaluation must refer to the same degradation.
+
 ---
 
 ## Component 8 — Target Prior Modulation (TPM)
@@ -320,6 +358,40 @@ assumed, in `test_target_prior_arms_are_capacity_matched_where_claimed`.
 `v2_full`, the spatial prior is not what is doing the work, and the paper must
 report that.
 
+### Module G — prior-conditioned frequency selection (the `spectral` arms)
+
+The brief's Module G asks for the target prior to drive *frequency-band
+selection*, not merely feature modulation. The wiring one would first reach for
+— prior feeds the backbone spectral slot — is not expressible in an Ultralytics
+graph, for two verified reasons: a custom module cannot take two inputs
+(`parse_model` resolves `c2 = ch[f]`; only hardcoded names such as `CBFuse`
+receive a channel *list*), and the backbone spectral slot runs at P5/32 *before*
+any prior exists, so conditioning it would need a backward edge that breaks the
+stock summary, FLOPs counter and validator. Rather than fake the wiring, the
+conditioning lives where the prior actually is — this module produces the prior
+**and** lets it choose the spectrum:
+
+```
+e      = psi([F ; F - mu_n ; sd_n ; sd_w])       prior evidence (as above)
+d      = [mean(e), std(e), max(e)]               3-vector descriptor, pooled
+g      = band_head(d)                            (B, C, B) per-channel log-gain per band
+F_filt = radial_band_filter(F, g)                shared interpolation with Component 9
+F'     = F + alpha * (F_filt * (1 + M) - F)      prior-filtered AND prior-modulated
+```
+
+The band head reuses the same radial-band interpolation as Component 9, so the
+two spectral mechanisms share one implementation.
+
+**The matched-capacity control (`spectral_feat`).** Same head, same band count,
+same descriptor width, same parameters — only the head's *input* differs: pooled
+raw-feature statistics instead of pooled prior evidence. Without it, a reviewer
+could correctly object that any input-adaptive filter would do just as well;
+with it, `spectral - spectral_feat` isolates *prior* conditioning from input
+adaptivity, at byte-identical size (measured: both 16.586 M at scale s).
+
+**Ablation rows:** `tp_spectral_feat` (control), `tp_spectral` (proposed),
+`v2_prior_spectral` (the same mechanism in the ladder context — `EXP-018`).
+
 ---
 
 ## Component 9 — Spatial-Frequency Representation (SFR)
@@ -358,6 +430,12 @@ parameters — it is a buffer), `fr_static` (learnable bands, input-independent)
 and the proposed `fr_sff` (bands modulated per sample by the feature's own global
 descriptor). `sff` starts numerically equal to `static`, so `sff - static`
 measures the value of input adaptivity alone.
+
+**Scope note on "target-conditioned" frequency selection.** This slot's `sff`
+arm adapts to the *feature* — it cannot be conditioned on the target prior,
+because it runs in the backbone before any prior exists. The prior-conditioned
+mechanism (Module G) therefore lives in the prior slot instead; see the
+`tp_spectral` arms under Component 8 and their `spectral_feat` control.
 
 ---
 

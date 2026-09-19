@@ -1,5 +1,5 @@
 {
-  "variants": 71,
+  "variants": 74,
   "zoo": {
     "baseline_n": {
       "variant": "baseline",
@@ -60,6 +60,11 @@
       "variant": "v2_full",
       "scale": "n",
       "params_M": 4.362615
+    },
+    "v2_prior_spectral_n": {
+      "variant": "v2_prior_spectral",
+      "scale": "n",
+      "params_M": 4.454775
     },
     "baseline_s": {
       "variant": "baseline",
@@ -132,6 +137,12 @@
       "scale": "s",
       "params_M": 16.229583,
       "flops_G": 55.68260116
+    },
+    "v2_prior_spectral_s": {
+      "variant": "v2_prior_spectral",
+      "scale": "s",
+      "params_M": 16.585903,
+      "flops_G": 55.6832982
     }
   },
   "slots": {
@@ -262,7 +273,7 @@
         "variant": "tp_none",
         "label": "no modulation",
         "ours": false,
-        "params_M": 16.048379
+        "params_M": 16.048375
       },
       {
         "variant": "tp_cfar",
@@ -556,10 +567,10 @@
   },
   "dataset_count": 5,
   "experiments": {
-    "total": 66,
-    "config_files": 68,
+    "total": 70,
+    "config_files": 72,
     "with_results": [],
-    "ledger_runs": 12,
+    "ledger_runs": 14,
     "non_experiment_runs": [
       "SMOKE-001",
       "SMOKE-002",
@@ -568,14 +579,14 @@
     ]
   },
   "tests": {
-    "total": 156,
+    "total": 169,
     "by_file": {
       "tests/test_arch.py": 50,
       "tests/test_augmentation.py": 15,
       "tests/test_cli.py": 8,
       "tests/test_data.py": 19,
       "tests/test_hard_examples.py": 20,
-      "tests/test_losses.py": 10,
+      "tests/test_losses.py": 23,
       "tests/test_metrics.py": 11,
       "tests/test_repo.py": 23
     }

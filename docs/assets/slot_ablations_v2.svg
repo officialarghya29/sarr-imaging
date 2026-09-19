@@ -1049,8 +1049,8 @@ z
    </g>
    <g id="patch_3">
     <path d="M 177.715312 476.722266 
-L 521.759664 476.722266 
-L 521.759664 441.338672 
+L 521.759578 476.722266 
+L 521.759578 441.338672 
 L 177.715312 441.338672 
 z
 " clip-path="url(#pef6887fa4d)" style="fill: #22d3ee; opacity: 0.9"/>
@@ -1099,7 +1099,7 @@ L 630.023005 498.979687
    </g>
    <g id="text_15">
     <!-- 16.048M -->
-    <g style="fill: #8fa3bf" transform="translate(526.92033 461.628125) scale(0.1 -0.1)">
+    <g style="fill: #8fa3bf" transform="translate(526.920242 461.628125) scale(0.1 -0.1)">
      <defs>
       <path id="DejaVuSans-19" d="M 2113 2584 
 Q 1688 2584 1439 2293 
