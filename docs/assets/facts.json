@@ -1,5 +1,5 @@
 {
-  "variants": 63,
+  "variants": 71,
   "zoo": {
     "baseline_n": {
       "variant": "baseline",
@@ -294,7 +294,7 @@
         "variant": "fr_none",
         "label": "no spectral branch",
         "ours": false,
-        "params_M": 16.126599
+        "params_M": 16.126598
       },
       {
         "variant": "fr_highpass",
@@ -307,6 +307,18 @@
         "label": "learned bands, fixed filter",
         "ours": false,
         "params_M": 16.130695
+      },
+      {
+        "variant": "fr_dct",
+        "label": "block DCT, same size",
+        "ours": false,
+        "params_M": 16.130695
+      },
+      {
+        "variant": "fr_wavelet",
+        "label": "Haar sub-bands",
+        "ours": false,
+        "params_M": 16.128647
       },
       {
         "variant": "v2_full",
@@ -361,10 +373,48 @@
         "params_M": 16.212303
       },
       {
+        "variant": "rf_off25",
+        "label": "ours, radius 0.25",
+        "ours": true,
+        "params_M": 16.229583
+      },
+      {
+        "variant": "rf_off100",
+        "label": "ours, radius 1.0",
+        "ours": true,
+        "params_M": 16.229583
+      },
+      {
         "variant": "v2_full",
         "label": "ours, input-adaptive offsets",
         "ours": true,
         "params_M": 16.229583
+      }
+    ],
+    "adapter": [
+      {
+        "variant": "in_identity",
+        "label": "raw intensity (control)",
+        "ours": false,
+        "params_M": 16.229583
+      },
+      {
+        "variant": "in_local",
+        "label": "local statistics only",
+        "ours": false,
+        "params_M": 16.229626
+      },
+      {
+        "variant": "in_learned",
+        "label": "learned only",
+        "ours": false,
+        "params_M": 16.229681
+      },
+      {
+        "variant": "in_hybrid",
+        "label": "ours, both streams",
+        "ours": true,
+        "params_M": 16.229747
       }
     ],
     "removal": [
@@ -454,6 +504,12 @@
       "label": "Component 11 - deformable refinement",
       "max_abs_deviation": 0.0,
       "identical": true
+    },
+    {
+      "short": "SIA",
+      "label": "Component 12 - input adapter",
+      "max_abs_deviation": 0.0,
+      "identical": true
     }
   ],
   "datasets": {
@@ -500,24 +556,28 @@
   },
   "dataset_count": 5,
   "experiments": {
-    "total": 58,
-    "config_files": 60,
+    "total": 66,
+    "config_files": 68,
     "with_results": [],
-    "ledger_runs": 10,
+    "ledger_runs": 12,
     "non_experiment_runs": [
       "SMOKE-001",
       "SMOKE-002",
-      "SMOKE-003"
+      "SMOKE-003",
+      "SMOKE-004"
     ]
   },
   "tests": {
-    "total": 91,
+    "total": 156,
     "by_file": {
-      "tests/test_arch.py": 35,
+      "tests/test_arch.py": 50,
+      "tests/test_augmentation.py": 15,
+      "tests/test_cli.py": 8,
       "tests/test_data.py": 19,
+      "tests/test_hard_examples.py": 20,
       "tests/test_losses.py": 10,
-      "tests/test_metrics.py": 9,
-      "tests/test_repo.py": 18
+      "tests/test_metrics.py": 11,
+      "tests/test_repo.py": 23
     }
   }
 }

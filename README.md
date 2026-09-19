@@ -8,9 +8,9 @@
 | --- | --- |
 | **Licence** | MIT for the code — datasets are never redistributed |
 | **Stack** | Python 3.10+ · Ultralytics 8.4.155 · PyTorch 2.x |
-| **Architectures** | 63 variants wired; every one builds and runs a forward pass |
-| **Experiments** | 12 configured; each reproducible from a committed YAML |
-| **Tests** | 66 passing — no dataset download and no GPU needed |
+| **Architectures** | 71 variants wired; every one builds and runs a forward pass |
+| **Experiments** | 68 configured; each reproducible from a committed YAML |
+| **Tests** | 156 passing — no dataset download and no GPU needed |
 | **Accuracy results** | none yet — not one number in this repository is fabricated |
 
 ---
@@ -20,7 +20,7 @@
 | | |
 | --- | --- |
 | **What this is** | A complete, reproducible research pipeline for SAR object detection: dataset audit → baseline → ten documented components → ablations → removal tests → robustness → efficiency → cross-dataset → paper. |
-| **What is proven** | The infrastructure. 91 tests pass; the baseline reproduces stock YOLO11 exactly; all eight modules are measurably identity functions at initialisation *and* demonstrably not frozen; every model trains end to end. |
+| **What is proven** | The infrastructure. 156 tests pass; the baseline reproduces stock YOLO11 exactly; all nine modules are measurably identity functions at initialisation *and* demonstrably not frozen; every model trains end to end. |
 | **What is *not* proven** | Accuracy. **No model has been trained on a real SAR dataset in this repository.** There is no result table here with numbers in it, and the table generators refuse to print one. |
 | **Why that's the point** | A detector paper is only as strong as its ablations. If the machinery that produces those ablations cannot be trusted, every number downstream is unverifiable. Build the instrument first. |
 
@@ -119,19 +119,26 @@ Each component exists to answer one row of this table. No component exists becau
 | 9 | Speckle is broadband; convolution is low-pass-biased | Learnable *radial* spectral filter, adapted per sample | **SFR** | loses to a fixed high-pass, or to non-adaptive bands |
 | 10 | Local appearance cannot separate look-alikes | Multi-extent dilated + regional context residual | **CAG** | loses to local-only / regional-only, or does not survive removal |
 | 11 | The response peak sits on a clutter pixel, not the target | Prior-conditioned **deformable** resampling: each cell looks up to a bounded distance away | **TADR** | loses to its capacity control (same network, offsets removed), to fixed offsets, or does not survive removal |
+| 12 | A natural-image stem consumes raw intensity as if it were a photograph | Input-level SAR representation: local statistics and/or a learned stream, fused | **SIA** | loses to raw intensity, to local-statistics-only, or to learned-only |
 
 **Component numbering**, used consistently across the code, the docs and the paper:
 
-| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| SFE | SFM | SAA | AMF | P2 head | oriented *(planned)* | SAR loss | TPM | SFR | CAG | TADR |
+| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| SFE | SFM | SAA | AMF | P2 head | oriented *(planned)* | SAR loss | TPM | SFR | CAG | TADR | SIA |
 
-Components 1-7 are the **v1** model (EXP-001…007). Components 8-11, plus the clutter-aware mode of Component 2, are the **v2 extension** (EXP-013…017). They are not assumed to help: each has a removal ablation (`v2_noprior`, `v2_nofreq`, `v2_noctx`, `v2_norefine`) *and* a slot study, and a component that fails to earn its place gets deleted rather than reported. A component that only works when added in a particular order is not a component — hence the removal table is treated as the stronger evidence of the two.
+Components 1-7 are the **v1** model (EXP-001…007). Components 8-11, plus the clutter-aware mode of Component 2, are the **v2 extension** (EXP-013…017). Component 12 sits at the *input* rather than in the neck, so it is numbered last while executing first — the four arms it compares (`raw`, `local`, `learned`, `hybrid`) are `EXP-311…314`. They are not assumed to help: each has a removal ablation (`v2_noprior`, `v2_nofreq`, `v2_noctx`, `v2_norefine`) *and* a slot study, and a component that fails to earn its place gets deleted rather than reported. A component that only works when added in a particular order is not a component — hence the removal table is treated as the stronger evidence of the two.
 
 Component 6 (oriented boxes) is deliberately **not implemented**. Orientation only helps if annotations carry meaningful rotation — true for `SRSDD-v1.0` (six fine-grained ship classes) and `SAR-Ship-Dataset`, but not for SSDD/HRSID. The DOTA converter exists; the head does not, and will only be added if that experiment is actually run.
 
 ```text
 SAR image
+   │
+   ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│ Component 12: SAR Input Adapter                             (SIA)    │
+│   intensity · local statistics · learned stream · learned fusion      │
+└──────────────────────────────────────────────────────────────────────┘
    │
    ▼
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -176,11 +183,11 @@ Full mathematics, derivations and pseudocode: [`docs/METHOD.md`](docs/METHOD.md)
 
 ## Part III · The instrument
 
-![Measured identity-at-initialisation property for all eight modules](docs/assets/identity_property.svg)
+![Measured identity-at-initialisation property for all nine modules](docs/assets/identity_property.svg)
 
 ### The two guarantees the whole paper rests on
 
-**Guarantee 1 — exact identity at initialisation.** Every module returns `f(x) = x` **exactly**, not approximately, because its residual gate is zero-initialised (`out = x + 0 · branch`). A freshly built SAR-YOLO is therefore *numerically identical* to its baseline, and the measured deviation above is `0.0e+00` for all eight. Without this, a "module helps" result is confounded with "the extra layers happened to change the initial function". With it, a measured difference has exactly one available explanation: the module **learned** something.
+**Guarantee 1 — exact identity at initialisation.** Every module returns `f(x) = x` **exactly**, not approximately, because its residual gate is zero-initialised (`out = x + 0 · branch`). A freshly built SAR-YOLO is therefore *numerically identical* to its baseline, and the measured deviation above is `0.0e+00` for all nine. Without this, a "module helps" result is confounded with "the extra layers happened to change the initial function". With it, a measured difference has exactly one available explanation: the module **learned** something.
 
 **Guarantee 2 — the gate can actually open.** Identity comes from the gate *alone*, so the residual branch must **not** also be zero-initialised. That combination looks harmless and is fatal: with `branch = 0`, the gate gradient `dL/dα = ⟨dL/dout, branch⟩` is identically zero, so `α` never leaves 0 — and `dL/d(branch) = α · dL/dout` is zero for the same reason. Both vanish together, and the module stays a permanent no-op that passes every identity test.
 
@@ -285,13 +292,13 @@ Component 11 needs a control that is uncommon in detection papers, because "defo
 | Baseline reproduces stock YOLO11 exactly | `2,624,080` (n), `9,458,752` (s) | `test_baseline_matches_stock_yolo11_parameter_count` |
 | All 63 architectures construct and forward | pass | `test_every_variant_builds_and_forwards` |
 | Declared scales build at the right stride count | pass | `test_declared_scale_variants_build` |
-| Every SAR module is an **exact** identity at init | `max\|f(x)−x\| = 0.0e+00` ×8 | measured live + `test_each_module_is_exactly_identity_at_init` |
+| Every SAR module is an **exact** identity at init | `max\|f(x)−x\| = 0.0e+00` ×9 | measured live + `test_each_module_is_exactly_identity_at_init` |
 | **No module is silently frozen at init** | every learnable mode has a non-zero gate gradient | `test_no_module_is_frozen_at_init` |
 | **All gates leave zero during real training** | `25/25` non-zero after 2 epochs | `SMOKE-003` checkpoint (checked dynamically, not just statically) |
 | Deformable refinement's grid identity is pinned | zero offset → `7e-7` dev; 0.04-cell shift → `0.4` | `test_refinement_resampling_is_an_identity_at_zero_offset` |
 | Offsets move the grid, and only in the adaptive arm | pass | `test_refinement_offsets_actually_move_the_sampling_grid`, `..._are_feature_adaptive_only_in_deform_mode` |
 | SAR-YOLO predicts identically to baseline at init | max abs diff `0.0` (v1 **and** v2) | `test_models_output_identically_to_baseline_at_init` |
-| Filenames cannot silently downgrade the scale | pass (63 variants) | `test_variant_filenames_encode_scale` |
+| Filenames cannot silently downgrade the scale | pass (71 variants) | `test_variant_filenames_encode_scale` |
 | Mode names cannot break the parser | pass (no keyword or `parse_model`-local collision) | `test_module_mode_names_are_safe_for_parse_model` |
 | Spectral branch is resolution- and AMP-safe | odd, non-square and fp16 inputs pass | `test_frequency_module_is_resolution_independent` |
 | Every ablation arm has a runnable config | pass | `test_every_ablation_arm_has_a_runnable_experiment_config` |
@@ -305,6 +312,11 @@ Component 11 needs a control that is uncommon in detection papers, because "defo
 | A dataset cannot validate clean while its boxes are unreadable | pass | same test |
 | Malformed VOC XML cannot abort a batch conversion | counted as `skipped_annotations` | `test_voc_converter_survives_malformed_annotations` |
 | Every registry dataset ships a matching data config | pass | `test_every_registry_dataset_has_a_matching_data_config` |
+| **The input-adapter control is bit-exact** | `max\|v2_full − in_identity\| = 0.0`, layer-for-layer identical graph, `+0` parameters | measured live; `test_frequency_slot_arms_differ_as_documented` pins the gate-only cost |
+| **A hard image cannot be silently dropped** | mining a foreign split raises instead of writing a no-op list | `test_hard_image_from_another_split_is_an_error_not_a_silent_no_op` |
+| **Augmentation cannot invalidate labels** | every corruption preserves shape (all 6 checked); clean view is byte-exact | `tests/test_augmentation.py` |
+| **The miner and the failure table cannot disagree** | both derive from one taxonomy; counts reconcile exactly | `test_score_totals_equal_the_failure_taxonomy_counts` |
+| Every taxonomy outcome must have a difficulty weight | an unmapped outcome raises rather than scoring zero | `test_every_taxonomy_outcome_has_a_weight` |
 
 ### What is not yet measured
 
@@ -377,7 +389,7 @@ uv pip install --python .venv/bin/python torch torchvision --index-url https://d
 uv pip install --python .venv/bin/python ultralytics pytest
 source .venv/bin/activate
 
-pytest tests/ -q                                          # 91 tests
+pytest tests/ -q                                          # 156 tests
 python -m saryolo arch --variant all --nc 1               # emit 35 model YAMLs
 python -m saryolo synth-data --out datasets/processed/synthetic_smoke
 python -m saryolo train --exp configs/exp/_smoke_baseline.yaml
@@ -448,16 +460,49 @@ Every arm below sits in the *same slot* with every other component held fixed, a
 | `EXP-231…234` | speckle (2) | none · Lee · low-pass · ours-SFM |
 | `EXP-241…245` | enhancement (1) | identity · log · CLAHE · local-std · ours-SFE |
 | `EXP-251…255` | target prior (8) | none · CFAR · uniform · **capacity-matched** · ours-spatial |
-| `EXP-261…264` | frequency (9) | none · fixed high-pass · learned bands · ours-adaptive |
+| `EXP-261…266` | frequency (9) | none · fixed high-pass · learned bands · **DCT** · **wavelet** · ours-adaptive |
 | `EXP-271…274` | context (10) | none · local · regional · ours-both |
 | `EXP-281…285` | removal | −clutter · −prior · −freq · −context · −refinement (against full v2) |
-| `EXP-291…294` | refinement (11) | none · **local (capacity control)** · fixed offsets · ours-adaptive |
+| `EXP-291…296` | refinement (11) | none · **local (capacity control)** · fixed offsets · offset sweep (25% · 100%) · ours-adaptive |
+| `EXP-311…314` | input adapter (12) | raw (`identity`) · local-statistics · learned · ours-hybrid |
+
+The `EXP-26x` range answers SEC. 14 of the brief directly: the transform is the *variable*, so FFT, block-DCT and Haar wavelet are compared in one slot with everything else held fixed, rather than assuming the FFT is right. `EXP-294/295` sweep the refinement's `max_offset` bound; it is logged as an **open sweep, not a tuned constant**, because the learned offsets sit at ~94% of the bound where `tanh`'s gradient is smallest — so the bound may well be too tight.
 
 Configs are generated, not written by hand:
 
 ```bash
 python scripts/make_exp_configs.py --dataset ssdd   # writes configs/exp/EXP-0xx_* and EXP-2xx_*
 ```
+
+### Training strategies that are not modules (`SEC. 5` and `SEC. 6`)
+
+Two parts of the brief change *what the model sees* rather than *what the model is*. They live outside the architecture on purpose, because a sampling strategy that needed its own layer would no longer be attributable — you could not tell whether a gain came from the extra capacity or from the extra examples.
+
+**SAR-specific augmentation** reuses the *same* corruption model the robustness benchmark evaluates under (`saryolo/evaluation/robustness.py`), so a model is trained under the degradation it is later tested under, and the severity grid is literally the same tuple. It is offline: the augmented training split is a committed artifact with a per-file manifest recording the corruption and severity applied to each image.
+
+```bash
+python -m saryolo augment --data configs/datasets/ssdd.yaml \
+       --views 2 --kinds speckle low_contrast blur low_resolution low_snr \
+       --out datasets/augmented/ssdd
+```
+
+Three properties are enforced rather than assumed:
+
+- **Labels are copied verbatim.** Every corruption is *appearance-only* — it changes pixel values and never moves a target — which is the entire justification for not transforming boxes. The builder compares output and input shapes per image and refuses a mismatch, because the moment a corruption resizes an image the labels become wrong for it.
+- **`clutter` is opt-in, not default.** It injects bright blobs that are not labelled, which teaches suppression of bright compact regions — the exact appearance of the small targets this paper is trying to improve. It stays available for the ablation that tests that concern.
+- **Severities must come from the published robustness grid.** A value outside it is rejected, so the augmented run and the robustness figure cannot stop referring to the same degradation.
+
+**Hard-example mining** is an offline sampling change: score every image by how badly the model failed on it, then emit a training list containing all training images *plus* the hardest ones repeated.
+
+```bash
+python -m saryolo mine-hard --weights runs/detect/exp/weights/best.pt \
+       --data configs/datasets/ssdd.yaml --split train --out results/hard_examples
+```
+
+Two details carry the weight of the claim:
+
+- **It mines the split that will be trained on, and refuses otherwise.** Mining `val` and then oversampling those images would train on the evaluation data. `--split` defaults to `train`, and a non-`train` value prints what it contaminates. A hard image that is not in the training list is an **error**, not a filter: the first version silently dropped them, so mining `val` wrote a list containing none of the mined images while still reporting a repeat count and exiting 0 — a run indistinguishable from the baseline.
+- **It reuses the failure taxonomy** (`visualization/error_analysis.py`) rather than matching boxes itself, so the difficulty ranking and the paper's failure-analysis table cannot disagree about the same model. The first version carried its own IoU matcher, which made it a *third* matcher and let the two reports contradict each other.
 
 ---
 
@@ -466,22 +511,24 @@ python scripts/make_exp_configs.py --dataset ssdd   # writes configs/exp/EXP-0xx
 ```
 saryolo/
 ├── nn/
-│   ├── arch.py            symbolic builder: 63 variants, all indices computed
+│   ├── arch.py            symbolic builder: 71 variants, all indices computed
 │   ├── modules/
+│   │   ├── input_adapter.py SIA (Comp 12) + raw / local / learned arms
 │   │   ├── enhancement.py SFE (Comp 1) + log / standardize / CLAHE baselines
 │   │   ├── speckle.py     SFM (Comp 2) + Lee / low-pass + clutter-aware mode
 │   │   ├── attention.py   SAA (Comp 3) + SE / ECA / CBAM baselines
 │   │   ├── fusion.py      AMF (Comp 4) + concat / projected-add / static baselines
 │   │   ├── target_prior.py TPM (Comp 8) + cfar / uniform / capacity-matched arms
-│   │   ├── frequency.py   SFR (Comp 9) + fixed-high-pass / non-adaptive arms
+│   │   ├── frequency.py   SFR (Comp 9) + high-pass / DCT / wavelet / non-adaptive arms
 │   │   ├── context.py     CAG (Comp 10) + local-only / regional-only arms
 │   │   ├── refinement.py  TADR (Comp 11) + local / fixed-offset control arms
 │   │   └── _common.py     shared primitives + the module contract (identity, gradients)
 │   ├── losses.py          SAR-aware loss (Comp 7)
 │   ├── model.py           DetectionModel carrying the SAR criterion
 │   └── register.py        publishes custom layers to ultralytics
+├── augmentation/          SAR-specific augmentation (SEC. 5), reusing the corruption model
 ├── data/                  registry · converters · validator · statistics · leakage
-├── training/              trainer · experiment runner · config loader
+├── training/              trainer · runner · config loader · hard_examples (SEC. 6)
 ├── evaluation/            COCO AP + scale-wise AP · robustness · efficiency · domain shift
 ├── visualization/         detections · Grad-CAM (all 8 modules) · feature maps · failure taxonomy
 ├── tracking/              append-only ledger + environment capture
@@ -492,7 +539,7 @@ configs/    datasets/ · models/ (63 generated) · exp/ (EXP-001…017 + EXP-2xx
 scripts/    prepare_dataset · make_exp_configs · train_all_experiments
             make_readme_assets (builds this page's charts) · check_chart_layout
 notebooks/  Colab: dataset prep · train + ablate · benchmark + paper
-tests/      91 tests across arch parity, identity, gradient flow, metrics, losses, data, repo
+tests/      156 tests across arch parity, identity, gradient flow, metrics, losses, data, repo
 docs/       DATASETS.md · METHOD.md · assets/ (generated charts)
 ```
 
@@ -530,6 +577,9 @@ The ledger is **append-only**. A rerun never overwrites an earlier result, and f
 - **Scale-wise AP here is our own implementation**, with deviations from pycocotools documented in `saryolo/evaluation/metrics.py`.
 - **Cross-dataset evaluation refuses to run on incompatible label spaces**, rather than reporting a meaningless low mAP.
 - **Oriented detection (Component 6) is unimplemented.** The DOTA converter exists; the head does not.
+- **SAR augmentation is offline, so it is fixed rather than resampled per epoch.** A training run sees `views` variants of each image instead of a fresh draw every epoch, and the split costs `views`× the disk. That is the price of the augmented set being a committed, byte-reproducible, per-file-attributable artifact; an online transform hook would avoid it and would put the augmentation outside the inspectable path. Stated here because it is a real trade-off, not a detail.
+- **Hard-example mining is untested as a *strategy*.** The tooling is verified — determinism, leakage refusal, agreement with the failure taxonomy — but whether oversampling hard images actually improves mAP is an experiment, not a result. Mining adds no architecture, so if it does not help it costs only a run.
+- **The difficulty weights are a judgement call, not a measurement.** They weight small-object misses highest because that is the paper's claim. They are explicit function arguments precisely so an ablation can vary them, and the default should not be read as a tuned result.
 - **Cross-level scale routing is not implemented, and could not be without patching the parser.** A stage that reweights P2-P5 jointly against one shared prior needs a module consumed by several feature maps. `parse_model` resolves an unknown module's output channels with `c2 = ch[f]`, which raises `TypeError` for a list `from`, and naming a `Detect` subclass as the head fails too because the head branch is a `frozenset` *identity* test. Both were verified empirically rather than assumed. Component 11 is therefore *per-level* refinement, and the plan's "target-aware dynamic scale routing" is reported as unimplemented rather than faked per-level and described as cross-level.
 
 ## License

@@ -206,6 +206,10 @@ def measure_identity() -> list[dict]:
         ("SFR", "Component 9 - spatial-frequency", M.SpatialFrequencyRepresentation(c)),
         ("CAG", "Component 10 - context aggregation", M.ContextAggregation(c)),
         ("TADR", "Component 11 - deformable refinement", M.TargetAwareRefinement(c)),
+        # The adapter's *proposed* arm is `hybrid`, and it satisfies the same contract as every
+        # other module, so it belongs in this measurement rather than being left out and the
+        # count quietly kept at eight.
+        ("SIA", "Component 12 - input adapter", M.SARInputAdapter(c, mode="hybrid")),
     ]
     rows = []
     for short, label, module in cases:
@@ -305,6 +309,8 @@ SLOT_SETS_V2: dict[str, tuple[str, list[tuple[str, str, bool]]]] = {
             ("fr_none", "no spectral branch", False),
             ("fr_highpass", "fixed high-pass", False),
             ("fr_static", "learned bands, fixed filter", False),
+            ("fr_dct", "block DCT, same size", False),
+            ("fr_wavelet", "Haar sub-bands", False),
             ("v2_full", "ours, input-adaptive", True),
         ],
     ),
@@ -323,7 +329,18 @@ SLOT_SETS_V2: dict[str, tuple[str, list[tuple[str, str, bool]]]] = {
             ("rf_none", "no refinement", False),
             ("rf_local", "local, no offsets (control)", False),
             ("rf_static", "learned offsets, fixed", False),
+            ("rf_off25", "ours, radius 0.25", True),
+            ("rf_off100", "ours, radius 1.0", True),
             ("v2_full", "ours, input-adaptive offsets", True),
+        ],
+    ),
+    "adapter": (
+        "Module A - SAR input adapter   (applied to full v2)",
+        [
+            ("in_identity", "raw intensity (control)", False),
+            ("in_local", "local statistics only", False),
+            ("in_learned", "learned only", False),
+            ("in_hybrid", "ours, both streams", True),
         ],
     ),
     "removal": (

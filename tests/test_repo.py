@@ -222,7 +222,7 @@ def test_every_ablation_arm_has_a_runnable_experiment_config():
     sys.path.insert(0, str(REPO_ROOT / "scripts"))
     import make_exp_configs as G
 
-    arms = sorted({variant for _slot, variants in G.ABLATION_SLOTS for variant in variants})
+    arms = sorted({variant for _slot, _prefix, variants in G.ABLATION_SLOTS for variant in variants})
     assert arms, "the ablation matrix is empty"
     for variant in arms:
         assert variant in VARIANTS, f"ablation arm {variant!r} is not a declared model variant"
@@ -324,3 +324,136 @@ def test_readme_documents_every_ladder_step():
         f"README cost table and the measured ladder disagree -- "
         f"undocumented: {sorted(ladder - documented)}, stale rows: {sorted(documented - ladder)}"
     )
+
+
+#: Every count the README states about the repository, and how it is measured. The README
+#: previously said "63 variants", "12 experiments" and "66 tests" in one paragraph and "91
+#: tests" in another while the real figures were 71/68/149 -- six hand-typed numbers, none of
+#: which was right, and none of which anything checked. A stale count is a small lie that
+#: costs a reader's trust in the large claims next to it, so they are asserted here.
+README_COUNT_CLAIMS: tuple[tuple[str, str], ...] = (
+    # (regex, what the number must equal)
+    (r"\| \*\*Architectures\*\* \| (\d+) variants wired", "variants"),
+    (r"\| \*\*Experiments\*\* \| (\d+) configured", "experiments"),
+    (r"\| \*\*Tests\*\* \| (\d+) passing", "tests"),
+    (r"# (\d+) tests$", "tests"),
+)
+
+
+def _collected_test_count() -> int:
+    """How many test *items* pytest will actually run.
+
+    Counted by collection rather than by counting ``def test_`` lines, because a
+    ``@pytest.mark.parametrize`` expands one function into many items: the two definitions
+    differed by 11 here (138 vs 149), and a guard that counts the wrong one would be wrong in
+    the direction that matters -- it would call the README correct while the suite grew.
+    This is the same measurement ``scripts/make_readme_assets.py`` makes.
+    """
+    import subprocess
+    import sys
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q"],
+        cwd=REPO_ROOT, capture_output=True, text=True,
+    )
+    assert proc.returncode == 0, f"pytest could not collect the suite:\n{proc.stderr}"
+    lines = [ln for ln in proc.stdout.splitlines() if "::" in ln or ln.endswith(".py")]
+    return len(lines)
+
+
+def _measured_counts() -> dict[str, int]:
+    """The counts as the repository actually stands, measured rather than recalled."""
+    from saryolo.training.config import list_experiments
+
+    return {
+        "variants": len(VARIANTS),
+        "experiments": len(list(list_experiments(EXP_DIR))),
+        "tests": _collected_test_count(),
+    }
+
+
+def test_readme_counts_match_the_repository():
+    """No count stated in the README may disagree with what is actually in the repo."""
+    import re
+
+    readme = (REPO_ROOT / "README.md").read_text()
+    measured = _measured_counts()
+    problems = []
+    for pattern, key in README_COUNT_CLAIMS:
+        for found in re.findall(pattern, readme, flags=re.MULTILINE):
+            if int(found) != measured[key]:
+                problems.append(f"{pattern!r} says {found}, actual {key} is {measured[key]}")
+    assert not problems, (
+        "README counts have drifted from the repository:\n  "
+        + "\n  ".join(problems)
+        + "\nUpdate the README so its stated counts match. This fires whenever the suite "
+        "grows, which is the intended coupling: a stated number is a claim about the repo."
+    )
+
+
+def test_the_measured_counts_are_not_silently_zero():
+    """A detector that measures nothing would make the drift test above vacuous."""
+    measured = _measured_counts()
+    assert measured["variants"] > 0, measured
+    assert measured["tests"] > 0, measured
+
+
+def test_readme_states_every_component_number_in_its_table():
+    """The component table and the architecture diagram must not disagree."""
+    import re
+
+    readme = (REPO_ROOT / "README.md").read_text()
+    table = readme.split("**Component numbering**")[1].split("\n\n")[0]
+    numbers = [int(n) for n in re.findall(r"^\| (\d+) \|$", table, flags=re.MULTILINE)]
+    assert numbers == list(range(1, len(numbers) + 1)), (
+        f"the component-numbering row must run 1..N with no gaps: {numbers}"
+    )
+    # Every number must be described as a Component somewhere in the prose as well.
+    for n in numbers:
+        assert re.search(rf"Component {n}\b", readme), f"Component {n} is in the table but never explained"
+
+
+def test_experiment_configs_do_not_claim_the_same_id():
+    """No two configs may declare one experiment id, except the documented seed repeats.
+
+    The table builders and the ledger key on the experiment id, so two configs sharing one
+    id make the resulting number ambiguous -- whichever ran last silently wins. This actually
+    happened: adding an arm to a slot moved that slot's ``v2_full`` row to a new id and left
+    the previous file behind, so two configs both declared ``EXP-294``.
+
+    ``EXP-012`` is exempt because the multi-seed study is deliberately one experiment run at
+    three seeds, each with its own traceable config.
+    """
+    ids: dict[str, list[str]] = {}
+    for path in sorted(EXP_DIR.glob("*.yaml")):
+        exp_id = yaml.safe_load(path.read_text())["experiment"]["id"]
+        ids.setdefault(exp_id, []).append(path.name)
+    clashes = {
+        exp_id: names for exp_id, names in ids.items()
+        if len(names) > 1 and exp_id != "EXP-012"
+    }
+    assert not clashes, f"experiment ids claimed by more than one config: {clashes}"
+
+
+def test_the_config_generator_is_idempotent_and_prunes():
+    """Regenerating must not leave a file the generator no longer owns.
+
+    A stale config is not inert: it is a runnable experiment that no longer corresponds to
+    any arm, and it would appear in the ablation tables as a duplicate of a real one.
+    """
+    import subprocess
+    import sys
+
+    script = REPO_ROOT / "scripts" / "make_exp_configs.py"
+    before = {p.name for p in EXP_DIR.glob("EXP-*.yaml")}
+    proc = subprocess.run(
+        [sys.executable, str(script)], cwd=REPO_ROOT, capture_output=True, text=True
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    after = {p.name for p in EXP_DIR.glob("EXP-*.yaml")}
+    assert before == after, (
+        f"regenerating changed the config set: added {sorted(after - before)}, "
+        f"removed {sorted(before - after)}"
+    )
+    # The hand-written pipeline smoke configs are not owned by the generator.
+    assert (EXP_DIR / "_smoke_v2.yaml").exists()

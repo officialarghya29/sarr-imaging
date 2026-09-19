@@ -469,6 +469,120 @@ as unimplemented.
 
 ---
 
+## Component 12 — SAR Input Adapter (SIA)
+
+Every other component operates on *backbone features*. This one operates on the **image**,
+before the first convolution sees it, because that first convolution is where SAR statistics
+are least represented: a stock detector's stem was trained on natural images and consumes raw
+intensity as if it were an RGB photograph.
+
+```text
+stats   = psi([x ; mu ; sd ; hp])      mu, sd, hp = local mean / std / high-pass on a k x k window
+learned = phi(DWConv(x))
+z       = psi2([stats ; learned])      hybrid: both streams, learned fusion
+x'      = x + alpha * (z - x)          alpha = 0 at init  =>  exact identity
+```
+
+### Why the projected form, and when it can help
+
+`parse_model` resolves an unknown module's output width with `c2 = ch[f]`, so the adapter must
+return *the same* number of channels it received. A genuine widening of the input tensor is
+impossible without patching the parser or the stem, which is why the extra channels are a
+hidden representation projected back down — an *adapter*, not a new input layer.
+
+One honesty note belongs with the module. Ultralytics loads a single-channel SAR image by
+replicating it into three channels, so on single-polarisation data `x` and `mu`/`sd`/`hp` are
+internally redundant: the local statistics carry no information the raw channels do not
+already order differently. On such data the honest expectation is that `local` adds little
+over `identity`, and **the experiment should say so**. The arm becomes genuinely richer only
+for multi-channel input (dual-polarisation VV/VH, or a pre-computed feature stack such as
+intensity + local statistics + gradient).
+
+### Measured cost, and the control
+
+| arm | parameters added (c1 = 3) |
+| --- | --- |
+| `identity` | +0 |
+| `local` | +43 |
+| `learned` | +98 |
+| `hybrid` | +164 |
+
+`identity` is the control, and its exactness is measured rather than asserted. Dropping the
+adapter row from `in_identity` leaves a graph layer-for-layer identical to `v2_full` (same
+types, same per-layer parameter counts, 55 layers matching), and after synchronising the
+shared weights the two produce **bit-identical** outputs (max absolute difference `0.0`). So
+`in_identity` measures the rest of the model and nothing else.
+
+This is the arm that also carries an important negative result in advance: because the FFT/DCT
+slot already sits on the deepest backbone stage, and because a single-channel image is
+replicated into three, an input adapter has less to work with than it appears. If `in_hybrid`
+fails to beat `in_identity`, the correct conclusion is that the stem is not where SAR's missing
+prior lives — not that the adapter was implemented badly.
+
+## Training strategies that are not modules
+
+Two parts of the brief change *what the model sees* rather than *what the model is*. Both live
+outside the architecture deliberately: a sampling strategy that needed its own layer would no
+longer be attributable, because a gain could come from the extra capacity rather than from the
+extra examples.
+
+### SAR-specific augmentation (SEC. 5)
+
+Reuses the **same** corruption model the robustness benchmark evaluates under
+(`saryolo/evaluation/robustness.py`). This is the point, not a convenience: a second
+implementation would let the degradation a model trains on and the degradation it is tested
+under drift apart, and a robustness result would then measure an inconsistency between two
+pieces of code rather than a property of the model. Because they share one implementation, the
+severity grid is literally the same tuple.
+
+| property | how it is guaranteed |
+| --- | --- |
+| labels stay valid | every corruption is appearance-only, verified by comparing output and input shapes per image; a mismatch raises |
+| the clean view is the original | `identity` round-trips byte-exactly (measured: max abs diff `0`) |
+| reproducibility | one seed → byte-identical images, and the draw is recorded per file in a manifest |
+| comparability with the robustness figure | a severity outside the published grid is rejected |
+| the headline claim is not gambled | `clutter` is opt-in, not default (unlabelled bright blobs look like the small targets being improved) |
+
+It is **offline**, with the trade-off stated: the augmented split is a committed, inspectable
+artifact, at the cost of being fixed rather than resampled per epoch, and of `views`× the disk.
+
+### Hard-example mining (SEC. 6)
+
+An offline sampling change: score every image by how badly the model failed on it, then emit a
+training list containing all training images *plus* the hardest ones repeated. Nothing is
+approximated and no bookkeeping lives in the trainer, so the two runs differ only in the list
+of images they saw.
+
+```text
+score(image) = sum_k  w_k * count_k(image)  /  max(n_gt, 1)
+```
+
+The count comes from the failure taxonomy in `saryolo/visualization/error_analysis.py`, not
+from a matcher of its own. That matters twice over: an earlier version carried its own IoU
+matcher — making a *third* one — which meant the difficulty ranking and the paper's
+failure-analysis table could contradict each other about the same model.
+
+Weights, and why: `small_object_miss` 3.0 (the headline claim), `clutter_false_positive` 1.5
+and `classification_error` 1.5, `false_negative` 1.0, `false_positive` 1.0,
+`localization_error` 1.0, `clutter_confusion` 0.5, `true_positive` 0.0. An unmapped taxonomy
+outcome **raises** rather than scoring zero, because a failure mode silently worth nothing is
+how a miner stops mining the thing it was added for.
+
+Normalisation is by ground-truth count, so the score is a per-image failure *rate*: one miss in
+a five-target scene ranks above one miss in a one-target scene. A total miss is a rate of `1.0`
+at any density — which is the correct behaviour, and is why the normalisation is stated as a
+rate rather than as "denser scenes score lower".
+
+Two rules keep it honest:
+
+- **Mine the split you will train on.** `--split` defaults to `train`; a non-`train` value
+  prints what it contaminates. Mining `val` and oversampling those images trains on the
+  evaluation data.
+- **A hard image outside the training list is an error, not a filter.** The first version
+  filtered them out silently, so mining `val` wrote a list containing none of the mined images
+  while still reporting a repeat count and exiting 0 — a run indistinguishable from the
+  baseline. `write_oversampled_list` now raises.
+
 ## Evaluation protocol
 
 * **mAP50 / mAP50:95** via a self-contained COCO-protocol implementation
