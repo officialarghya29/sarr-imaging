@@ -167,6 +167,7 @@ IDENTITY_MODES: dict[str, tuple[str, ...]] = {
     "SpatialFrequencyRepresentation": ("sff", "static", "highpass", "none"),
     "ContextAggregation": ("multi", "local", "regional", "none"),
     "TargetAwareRefinement": ("deform", "static", "local", "none"),
+    "SARInputAdapter": ("hybrid", "local", "learned", "identity"),
 }
 
 #: Control modes that have no residual to learn from: they either return the input
@@ -188,7 +189,7 @@ def _declared_vocabularies() -> dict[str, tuple[str, ...]]:
         name: tuple(getattr(M, name).MODES)
         for name in ("SARFeatureEnhancement", "SpeckleAwareFeatureModule", "AdaptiveMultiScaleFusion",
                      "TargetPriorModulation", "SpatialFrequencyRepresentation", "ContextAggregation",
-                     "TargetAwareRefinement")
+                     "TargetAwareRefinement", "SARInputAdapter")
     }
     vocab["attention slot"] = tuple(M.ATTENTION_BUILDERS)
     vocab["attention gate"] = ("adaptive", "static")
@@ -245,25 +246,28 @@ def test_each_module_is_exactly_identity_at_init():
         assert torch.equal(out, x), f"{type(module).__name__} is not an exact identity at init"
 
 
-@pytest.mark.parametrize("variant", ["full_p35_s", "v2_full_p35_s"])
-def test_models_output_identically_to_baseline_at_init(variant):
-    """With the baseline's weights in place, SAR-YOLO must predict identically.
+def _assert_init_equivalence(reference: str, variant: str) -> float:
+    """Copy ``reference``'s stock weights into ``variant`` and require identical output.
 
-    Inserting modules shifts ``Sequential`` indices, so the baseline state dict
-    cannot be loaded positionally. Instead the *stock* layers are matched in
-    order (insertions are additive, so the stock rows keep their relative order)
-    and copied one by one. The two models must then agree exactly.
+    Inserting modules shifts ``Sequential`` indices, so a state dict cannot be loaded
+    positionally. Instead the *stock* layers are matched in order (insertions are additive,
+    so the stock rows keep their relative order) and copied one by one. The two models must
+    then agree exactly, which is the only way to show that the inserted modules contribute
+    nothing at step 0 rather than merely little.
+
+    Returns:
+        The maximum absolute output difference (0.0 when the invariant holds).
     """
     from saryolo.nn.modules import CUSTOM_MODULES
 
-    baseline = _build(VARIANTS["baseline_s"], nc=1, ch=3)
-    saryolo_model = _build(VARIANTS[variant], nc=1, ch=3)
+    ref_model = _build(VARIANTS[reference], nc=1, ch=3)
+    got_model = _build(VARIANTS[variant], nc=1, ch=3)
 
     custom = tuple(CUSTOM_MODULES.values())
-    ref_stock = [m for m in baseline.model if not isinstance(m, custom)]
-    got_stock = [m for m in saryolo_model.model if not isinstance(m, custom)]
+    ref_stock = [m for m in ref_model.model if not isinstance(m, custom)]
+    got_stock = [m for m in got_model.model if not isinstance(m, custom)]
     assert len(ref_stock) == len(got_stock), (
-        f"stock layer count differs: baseline {len(ref_stock)} vs SAR-YOLO {len(got_stock)}"
+        f"stock layer count differs: {reference} has {len(ref_stock)}, {variant} has {len(got_stock)}"
     )
     with torch.no_grad():
         for ref_layer, got_layer in zip(ref_stock, got_stock, strict=True):
@@ -272,14 +276,41 @@ def test_models_output_identically_to_baseline_at_init(variant):
 
     x = torch.randn(1, 3, 128, 128)
     with torch.no_grad():
-        ref = baseline(x)
-        got = saryolo_model(x)
+        ref = ref_model(x)
+        got = got_model(x)
 
     ref_t = ref[0] if isinstance(ref, (tuple, list)) else ref
     got_t = got[0] if isinstance(got, (tuple, list)) else got
     assert ref_t.shape == got_t.shape, f"shape mismatch: {ref_t.shape} vs {got_t.shape}"
-    max_diff = (ref_t - got_t).abs().max().item()
+    return (ref_t - got_t).abs().max().item()
+
+
+@pytest.mark.parametrize("variant", ["full_p35_s", "v2_full_p35_s"])
+def test_models_output_identically_to_baseline_at_init(variant):
+    """With the baseline's weights in place, SAR-YOLO must predict identically."""
+    max_diff = _assert_init_equivalence("baseline_s", variant)
     assert max_diff == 0.0, f"modules are not identity at init (max abs diff {max_diff:.3e})"
+
+
+@pytest.mark.parametrize(
+    "variant",
+    [
+        # Module A arms: each must be neutral at init against the model it extends, or the
+        # input-representation comparison would be confounded by a changed initial function.
+        "in_identity", "in_local", "in_learned", "in_hybrid",
+        # The alternative-frequency arms and the offset sweep must likewise start neutral.
+        "fr_dct", "fr_wavelet", "rf_off25", "rf_off100",
+    ],
+)
+def test_new_arms_are_neutral_at_init_relative_to_v2(variant):
+    """Every new arm must leave the full v2 model's function unchanged at initialisation.
+
+    Checked against ``v2_full`` rather than the baseline because that is the model each arm
+    is designed to be added to; the stock-layer copy makes the comparison exact instead of
+    approximate.
+    """
+    max_diff = _assert_init_equivalence("v2_full", variant)
+    assert max_diff == 0.0, f"{variant} is not identity at init (max abs diff {max_diff:.3e})"
 
 
 def test_p2_head_adds_a_detection_level():
@@ -428,6 +459,7 @@ def test_every_new_slot_mode_is_exercised_by_a_variant():
     """
     from saryolo.nn.modules import (
         ContextAggregation,
+        SARInputAdapter,
         SpatialFrequencyRepresentation,
         TargetAwareRefinement,
         TargetPriorModulation,
@@ -438,12 +470,14 @@ def test_every_new_slot_mode_is_exercised_by_a_variant():
         "frequency": {s.frequency for s in VARIANTS.values() if s.frequency},
         "context": {s.context for s in VARIANTS.values() if s.context},
         "refinement": {s.refinement for s in VARIANTS.values() if s.refinement},
+        "adapter": {s.adapter for s in VARIANTS.values() if s.adapter},
     }
     expected = {
         "prior": set(TargetPriorModulation.MODES),
         "frequency": set(SpatialFrequencyRepresentation.MODES),
         "context": set(ContextAggregation.MODES),
         "refinement": set(TargetAwareRefinement.MODES),
+        "adapter": set(SARInputAdapter.MODES),
     }
     for slot, modes in expected.items():
         missing = modes - covered[slot]
@@ -525,11 +559,15 @@ def test_frequency_slot_arms_differ_as_documented():
         name: _num_params(_build(VARIANTS[name], nc=2))
         for name in ("fr_none", "fr_highpass", "fr_static", "v2_full")
     }
-    # The high-pass profile is a registered buffer, not a parameter: the arm differs from
-    # the disabled one in behaviour, not in size.
-    assert counts["fr_highpass"] == counts["fr_none"], counts
-    # Learnable bands add parameters; the input-adaptive head adds more on top.
-    assert counts["fr_static"] > counts["fr_none"], counts
+    # The high-pass *profile* is a registered buffer, not a parameter, so the arm's entire cost
+    # over the disabled one is its residual gate -- exactly one scalar. Stated as an equality
+    # rather than `>=` because "the fixed filter is free" is the actual claim: if the profile
+    # ever became an nn.Parameter this would jump to a filter bank's worth.
+    assert counts["fr_highpass"] - counts["fr_none"] == 1, counts
+    # Learnable radial bands do cost a filter bank (per channel, per band), which is what the
+    # proposal trades against the fixed profile above.
+    assert counts["fr_static"] - counts["fr_none"] > 1, counts
+    # The input-adaptive head adds more on top of the bands.
     assert counts["v2_full"] > counts["fr_static"], counts
 
 
@@ -780,3 +818,134 @@ def test_refinement_offset_map_contract():
         module = TargetAwareRefinement(16, mode=mode).eval()
         with pytest.raises(ValueError):
             module.offset_map(x)
+
+
+# ------------------------------------------------------- alternative frequency study
+def test_dct_basis_is_orthonormal():
+    """The DCT basis must satisfy ``B B^T == I``, or the round trip is meaningless.
+
+    This is not a formality. The first version of this arm used a constant ``1/2`` where the
+    product of the two 1D normalisation factors belongs, which scaled the analysis step by a
+    factor of two. The filter still produced finite output and still looked like a spectral
+    branch, but the analysis/synthesis pair no longer reconstructed anything -- a silent
+    numerical error that only shows up when the round trip is actually measured.
+    """
+    from saryolo.nn.modules.frequency import _dct_basis
+
+    basis = _dct_basis(torch.device("cpu"), torch.float32)
+    assert basis.shape == (64, 64)
+    identity = torch.eye(64)
+    assert float((basis @ basis.t() - identity).abs().max()) < 1e-5
+
+
+def test_local_transforms_reconstruct_when_their_gains_are_unity():
+    """With zero log-gains the transforms must be a near-exact identity on the feature.
+
+    ``exp(0) = 1``, so this measures the transform pair alone, independently of any gate or
+    learned gain. The tolerance is float32 rounding, not a modelling choice.
+    """
+    from saryolo.nn.modules import SpatialFrequencyRepresentation as SFR
+
+    for mode in ("dct", "wavelet"):
+        module = SFR(8, mode=mode).eval()
+        with torch.no_grad():
+            module.band_gain.zero_()
+        for shape in ((16, 16), (17, 23), (24, 40)):
+            x = torch.randn(2, 8, *shape)
+            with torch.no_grad():
+                y = module._forward_dct(x) if mode == "dct" else module._forward_wavelet(x)
+            assert y.shape == x.shape, (mode, shape, tuple(y.shape))
+            err = float((y - x).abs().max())
+            assert err < 1e-4, f"{mode} does not reconstruct at {shape}: max abs err {err:.3e}"
+
+
+def test_the_local_transforms_differ_from_the_global_fft_arm():
+    """A block DCT and a Haar decomposition must not be the FFT arm under another name.
+
+    The alternative-frequency study is only informative if the arms are genuinely different
+    transforms: if two arms produced the same output the comparison would be vacuous and the
+    table would report a difference of zero for a reason nobody intended.
+    """
+    from saryolo.nn.modules import SpatialFrequencyRepresentation as SFR
+
+    x = torch.randn(2, 8, 24, 24)
+    torch.manual_seed(0)
+    outs = {}
+    for mode in ("static", "dct", "wavelet"):
+        module = SFR(8, mode=mode).eval()
+        with torch.no_grad():
+            module.alpha.raw.fill_(1.5)  # open the gate so the branch is visible
+            outs[mode] = module(x)
+    for a, b in (("static", "dct"), ("static", "wavelet"), ("dct", "wavelet")):
+        assert not torch.allclose(outs[a], outs[b]), f"{a} and {b} produced identical output"
+
+
+def test_frequency_arms_have_comparable_capacity():
+    """The frequency study must vary the *transform*, not the parameter count.
+
+    The FFT and DCT arms are both parameterised as ``C x bands``; the Haar arm has four
+    octave sub-bands, so it is smaller but within the same order. A study where one arm
+    carried an order of magnitude more parameters could not attribute a win to the transform.
+    """
+    from saryolo.nn.modules import SpatialFrequencyRepresentation as SFR
+
+    counts = {
+        mode: sum(p.numel() for p in SFR(64, mode=mode).parameters())
+        for mode in ("static", "sff", "dct", "wavelet")
+    }
+    # `static` and `dct` are *exactly* the same size: C x bands of log-gain plus the single
+    # gate scalar. That equality is the point -- FFT vs block DCT is then a comparison of
+    # transforms at identical capacity, not a comparison of model sizes.
+    assert counts["static"] == counts["dct"] == 64 * 8 + 1, counts
+    # Haar has four octave bands rather than `bands` radial ones: smaller, same order.
+    assert counts["wavelet"] == 64 * 4 + 1, counts
+    assert counts["sff"] > counts["dct"], counts
+
+
+# ------------------------------------------------------------------------- Module A
+def test_input_adapter_representation_contract():
+    """``representation`` must return the input's shape for every arm, and vary by mode."""
+    from saryolo.nn.modules import SARInputAdapter
+
+    x = torch.randn(2, 3, 16, 16)
+    outputs = {}
+    for mode in SARInputAdapter.MODES:
+        module = SARInputAdapter(3, mode=mode).eval()
+        with torch.no_grad():
+            z = module.representation(x)
+        assert z.shape == x.shape, (mode, tuple(z.shape))
+        outputs[mode] = z
+    # The identity arm returns its input unchanged; the others must differ from it and from
+    # each other, or the slot study would compare the same function four times.
+    assert torch.equal(outputs["identity"], x)
+    for other in ("local", "learned", "hybrid"):
+        assert not torch.allclose(outputs["identity"], outputs[other]), other
+    assert not torch.allclose(outputs["local"], outputs["learned"])
+    assert not torch.allclose(outputs["local"], outputs["hybrid"])
+
+
+def test_input_adapter_identity_arm_has_no_parameters():
+    """The control arm must be free, so any gain it shows cannot be capacity."""
+    from saryolo.nn.modules import SARInputAdapter
+
+    identity = SARInputAdapter(3, mode="identity")
+    assert sum(p.numel() for p in identity.parameters()) == 0
+    for mode in ("local", "learned", "hybrid"):
+        module = SARInputAdapter(3, mode=mode)
+        assert sum(p.numel() for p in module.parameters()) > 0, mode
+
+
+def test_input_adapter_sits_at_the_image_not_at_a_feature():
+    """The adapter row must be the first layer and consume ``ch`` (the image width).
+
+    If it were emitted anywhere else it would be a second enhancement module rather than an
+    input representation, and the Module A comparison would be measuring the wrong thing.
+    """
+    from saryolo.nn.modules import SARInputAdapter
+
+    model = _build(VARIANTS["in_hybrid"], nc=1, ch=3)
+    first = model.model[0]
+    assert isinstance(first, SARInputAdapter), type(first).__name__
+    assert first.c1 == 3, first.c1
+    # The baseline has no such row, which is what keeps EXP-001 exactly stock YOLO11.
+    assert not any(isinstance(m, SARInputAdapter) for m in _build(VARIANTS["v2_full"], nc=1).model)

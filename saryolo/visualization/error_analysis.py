@@ -52,19 +52,43 @@ class FailureCase:
 
 
 class FailureSummary:
-    """Counts per outcome plus concrete examples of each."""
+    """Every categorised case, with convenient views over it.
+
+    All cases are retained (``cases``), not just a capped sample per outcome. The first
+    version dropped everything past five per kind and discarded the image each case belonged
+    to, which made the summary unusable for anything that needs *which* images failed -- the
+    hard-example miner in ``saryolo.training.hard_examples`` being the reason this matters.
+    Recomputing the cases a second time to recover them would have been the alternative, and
+    two taxonomies that can disagree is exactly what this module exists to prevent.
+
+    ``examples`` stays as the capped convenience view used by the text report, so a human
+    reading the log is not handed thousands of lines.
+    """
 
     def __init__(self) -> None:
         self.counts: Counter = Counter()
         self.examples: dict[str, list[FailureCase]] = {}
+        self.cases: list[FailureCase] = []
         self.n_gt = 0
         self.n_det = 0
 
     def add(self, case: FailureCase, keep: int = 5) -> None:
         self.counts[case.kind] += 1
+        self.cases.append(case)
         bucket = self.examples.setdefault(case.kind, [])
         if len(bucket) < keep:
             bucket.append(case)
+
+    def all_cases(self) -> list[FailureCase]:
+        """Every categorised case, in the order the taxonomy produced them."""
+        return list(self.cases)
+
+    def per_image(self) -> dict[str, Counter]:
+        """``{image: Counter(outcome -> count)}`` over the *complete* case list."""
+        out: dict[str, Counter] = {}
+        for case in self.cases:
+            out.setdefault(case.image, Counter())[case.kind] += 1
+        return out
 
     def summary(self) -> str:
         lines = [f"Failure analysis: {self.n_gt} GT, {self.n_det} detections"]
@@ -73,10 +97,14 @@ class FailureSummary:
         return "\n".join(lines)
 
     def to_dict(self) -> dict:
+        # `per_image` is included because it is compact (a few integers per image) and is what
+        # downstream consumers aggregate; the full case list is not serialised, since every
+        # box coordinate for every error would bloat the report without being read.
         return {
             "n_gt": self.n_gt,
             "n_det": self.n_det,
             "counts": dict(self.counts),
+            "per_image": {k: dict(v) for k, v in self.per_image().items()},
             "examples": {k: [c.to_dict() for c in v] for k, v in self.examples.items()},
         }
 
@@ -171,17 +199,36 @@ def analyse_failures(
     return summary
 
 
-def image_contrast_map(data_yaml: str | Path, limit: int | None = None) -> dict[str, float]:
-    """Per-image local contrast for the validation split (clutter proxy)."""
+def image_contrast_map(
+    data_yaml: str | Path, split: str = "val", limit: int | None = None
+) -> dict[str, float]:
+    """Per-image local contrast for one split (clutter proxy).
+
+    ``split`` is a parameter because the hard-example miner mines the *training* split, and a
+    contrast map computed from ``val`` would silently score the training images' clutter using
+    the wrong images' statistics -- or, once the splits differ in length, miss most of them.
+    """
     import cv2
 
     from saryolo.data.yolo import load_data_config
 
     root, cfg = load_data_config(data_yaml)
-    images_dir = root / (cfg.get("val") or "images/val")
+    rel = cfg.get(split) or f"images/{split}"
+    resolved = Path(rel) if Path(rel).is_absolute() else root / rel
+
+    # A split value may be an image *list* (which is what the hard-example config writes), not
+    # a directory. `rglob` on a file returns nothing, so without this the caller would get an
+    # empty contrast map and no error -- and the clutter proxy would quietly stop working.
+    if resolved.is_file() and resolved.suffix.lower() in (".txt", ".lst"):
+        images = [Path(line) for line in resolved.read_text().splitlines() if line.strip()]
+    else:
+        images_dir = resolved
+        images = sorted(
+            p for p in images_dir.rglob("*")
+            if p.suffix.lower() in (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff")
+        )
 
     out: dict[str, float] = {}
-    images = sorted(p for p in images_dir.rglob("*") if p.suffix.lower() in (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"))
     for path in images[:limit] if limit else images:
         img = cv2.imdecode(np.fromfile(str(path), dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
         if img is None:

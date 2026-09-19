@@ -141,9 +141,17 @@ def predict_to_labels(
 
     ``conf`` defaults to 0.001 so the AP curve is computed over the full
     precision/recall range rather than truncated at a deployment threshold.
+
+    ``out_dir`` is resolved to an absolute path before being handed to ultralytics. This is
+    not tidiness: ultralytics re-roots a *relative* ``project`` under its own runs directory,
+    so ``out_dir="results/eval"`` had inference written to ``runs/detect/results/eval`` while
+    this function then looked in ``results/eval`` and raised ``FileNotFoundError`` -- meaning
+    every caller that passed a relative path failed, including this function's own default.
+    With an absolute path the two agree and the returned directory is the one written.
     """
     from saryolo.training.trainer import load_model
 
+    out_dir = Path(out_dir).resolve()
     model = load_model(str(weights))
     kwargs = dict(
         source=str(images_dir),
@@ -161,12 +169,16 @@ def predict_to_labels(
     if device:
         kwargs["device"] = device
     model.predict(**kwargs)
-    labels = Path(out_dir) / "labels"
+    labels = out_dir / "labels"
     if not labels.exists():
         # Ultralytics sometimes nests under the run name.
-        candidates = sorted(Path(out_dir).rglob("labels"))
+        candidates = sorted(out_dir.rglob("labels"))
         if not candidates:
-            raise FileNotFoundError(f"No prediction labels were written under {out_dir}")
+            raise FileNotFoundError(
+                f"No prediction labels were written under {out_dir}. Note that ultralytics "
+                "re-roots a relative `project` under runs/detect/, so a caller passing a "
+                "relative out_dir would find its output elsewhere."
+            )
         labels = candidates[0]
     return labels
 

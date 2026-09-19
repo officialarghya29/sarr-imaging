@@ -69,22 +69,35 @@ MATRIX: tuple[tuple[str, str, str, str], ...] = (
 #: Experiment ids that are evaluated rather than trained.
 EVAL_ONLY = {"EXP-009", "EXP-010", "EXP-011"}
 
-#: Module-level ablation slots. Each arm sits in the *same slot* with every other
-#: component held fixed, so a difference between arms is attributable to that slot's
-#: mechanism rather than to a change elsewhere in the graph. The last entry of each slot
-#: is the proposed arm (except the removal slot, where every row is a removal).
-ABLATION_SLOTS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("attention", ("att_none", "att_se", "att_eca", "att_cbam", "att_saa_static", "attention")),
-    ("fusion", ("fus_concat", "fus_add", "fus_static", "amf")),
-    ("speckle", ("spk_none", "spk_lee", "spk_denoise", "speckle")),
-    ("enhancement", ("pre_identity", "pre_log", "pre_clahe", "pre_standardize", "sfe")),
-    ("target prior", ("tp_none", "tp_cfar", "tp_static", "tp_channel", "v2_full")),
-    ("frequency", ("fr_none", "fr_highpass", "fr_static", "v2_full")),
-    ("context", ("cx_none", "cx_local", "cx_regional", "v2_full")),
-    ("removal", ("v2_noclutter", "v2_noprior", "v2_nofreq", "v2_noctx", "v2_norefine")),
+#: Module-level ablation slots: ``(slot name, experiment-id prefix, arms)``.
+#:
+#: Each arm sits in the *same slot* with every other component held fixed, so a difference
+#: between arms is attributable to that slot's mechanism rather than to a change elsewhere in
+#: the graph. The last entry of each slot is the proposed arm (except the removal slot, where
+#: every row is a removal).
+#:
+#: The id prefix is written out rather than derived from the slot's position. Deriving it
+#: (``f"EXP-2{slot_index}{arm_index}"``) silently produced ``EXP-2101`` once a tenth slot was
+#: added, i.e. a four-digit id that no longer matched the documented ``EXP-2<slot><arm>``
+#: scheme and that a reader could not place. An explicit prefix also means appending a slot
+#: can never renumber the ids of the slots above it.
+ABLATION_SLOTS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("attention", "21", ("att_none", "att_se", "att_eca", "att_cbam", "att_saa_static", "attention")),
+    ("fusion", "22", ("fus_concat", "fus_add", "fus_static", "amf")),
+    ("speckle", "23", ("spk_none", "spk_lee", "spk_denoise", "speckle")),
+    ("enhancement", "24", ("pre_identity", "pre_log", "pre_clahe", "pre_standardize", "sfe")),
+    ("target prior", "25", ("tp_none", "tp_cfar", "tp_static", "tp_channel", "v2_full")),
+    # Appended (not inserted) so the arms above keep their ids: SEC. 14 of the brief asks for
+    # the alternative-frequency study explicitly, so the transform arms join this slot.
+    ("frequency", "26", ("fr_none", "fr_highpass", "fr_static", "fr_dct", "fr_wavelet", "v2_full")),
+    ("context", "27", ("cx_none", "cx_local", "cx_regional", "v2_full")),
+    ("removal", "28", ("v2_noclutter", "v2_noprior", "v2_nofreq", "v2_noctx", "v2_norefine")),
     # Appended rather than inserted, so the ids of the slots above keep their meaning
     # (an id is referenced by the ledger and by the paper tables).
-    ("refinement", ("rf_none", "rf_local", "rf_static", "v2_full")),
+    ("refinement", "29", ("rf_none", "rf_local", "rf_static", "rf_off25", "rf_off100", "v2_full")),
+    # Module A. The proposed arm is `in_hybrid` rather than `v2_full` because the adapter is
+    # deliberately *not* part of the v2 default: it has to earn that place here.
+    ("input adapter", "31", ("in_identity", "in_local", "in_learned", "in_hybrid")),
 )
 
 
@@ -169,13 +182,23 @@ def main() -> int:
         _write(out / f"EXP-012_seed{seed}_full_{args.scale}.yaml", payload, f"multi-seed seed {seed}")
         written.append(f"EXP-012_seed{seed}_full_{args.scale}.yaml")
 
-    # Module-level ablation arms: EXP-2<slot><arm>.
-    for slot_index, (slot, variants) in enumerate(ABLATION_SLOTS, start=1):
+    # Module-level ablation arms: EXP-<prefix><arm>.
+    seen_ids: dict[str, str] = {}
+    for slot, prefix, variants in ABLATION_SLOTS:
         for arm_index, variant in enumerate(variants, start=1):
-            exp_id = f"EXP-2{slot_index}{arm_index}"
+            exp_id = f"EXP-{prefix}{arm_index}"
             rel_model = model_rel(variant)
             if rel_model is None:
                 continue
+            # Two configs claiming one experiment id would make the ledger ambiguous: the
+            # table builders key on the id, so whichever ran last would silently win. This
+            # actually happened when a slot grew and its `v2_full` arm moved id.
+            key = exp_id
+            if key in seen_ids:
+                raise SystemExit(
+                    f"duplicate experiment id {exp_id}: {seen_ids[key]} and {slot}/{variant}"
+                )
+            seen_ids[key] = f"{slot}/{variant}"
             purpose = f"Module ablation -- {slot} slot, arm {arm_index}/{len(variants)} ({variant})."
             payload = {
                 "experiment": {"id": exp_id, "name": f"{slot}: {variant}", "description": purpose},
@@ -187,9 +210,22 @@ def main() -> int:
             _write(out / f"{exp_id}_{slot.replace(' ', '_')}_{variant}.yaml", payload, purpose)
             written.append(f"{exp_id}_{slot.replace(' ', '_')}_{variant}.yaml")
 
+    # Prune configs this generator owns but no longer emits. Without this, an arm that moves
+    # id leaves its old file behind: the directory then contains two configs for the same
+    # experiment, and `--only EXP-294` would run whichever sorted first. Only `EXP-*` files
+    # are touched (`_smoke_*.yaml` is hand-written and must survive).
+    emitted = set(written)
+    pruned = [p.name for p in sorted(out.glob("EXP-*.yaml")) if p.name not in emitted]
+    for name in pruned:
+        (out / name).unlink()
+
     print(f"wrote {len(written)} configs to {out}")
     for name in written:
         print(f"  {name}")
+    if pruned:
+        print(f"\npruned {len(pruned)} stale config(s) this run no longer emits:")
+        for name in pruned:
+            print(f"  {name}")
     if missing:
         print("\nMISSING model YAMLs (run `python -m saryolo arch --variant all` first):")
         for path in sorted(set(missing)):

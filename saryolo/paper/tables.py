@@ -205,12 +205,18 @@ MODULE_ABLATION_GROUPS: dict[str, tuple[str, ...]] = {
     # Component 8's own study. `tp_channel` is the capacity-matched control for `v2_full`:
     # the same evidence network, with spatial variation pooled away.
     "Target prior": ("tp_none", "tp_cfar", "tp_static", "tp_channel", "v2_full"),
-    "Frequency": ("fr_none", "fr_highpass", "fr_static", "v2_full"),
+    # The alternative-frequency study (SEC. 14 of the brief): the FFT arms, then the local
+    # transforms. `static` and `dct` carry identical parameter counts by construction, so a
+    # difference between them is attributable to the transform.
+    "Frequency": ("fr_none", "fr_highpass", "fr_static", "fr_dct", "fr_wavelet", "v2_full"),
     "Context": ("cx_none", "cx_local", "cx_regional", "v2_full"),
     # Component 11's own study. `rf_local` is the capacity control for the proposed arm: the
     # same sub-network with the offsets removed, so `ours - rf_local` isolates *deformation*
     # rather than the extra convolution.
-    "Refinement": ("rf_none", "rf_local", "rf_static", "v2_full"),
+    "Refinement": ("rf_none", "rf_local", "rf_static", "rf_off25", "rf_off100", "v2_full"),
+    # Module A. Unlike every other slot, the proposed arm is *not* `v2_full`: the adapter is
+    # not in the v2 default, so `in_hybrid` is the arm that would have to earn it a place.
+    "Input adapter": ("in_identity", "in_local", "in_learned", "in_hybrid"),
 }
 
 #: Removal ablation rows: ``(label, variant)``. Exposed for the same reason as above.

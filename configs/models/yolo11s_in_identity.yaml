@@ -1,0 +1,264 @@
+# SAR-YOLO / in_identity  -- GENERATED FILE, do not edit by hand.
+# Regenerate with:  python -m saryolo arch --variant in_identity
+# scale=s  levels=p2-p3-p4-p5  modules=adapter, sfe, speckle, frequency, fusion, prior, attention, context, refine, p2_head
+# sar_loss={'w_sep': 0.2, 'w_small': 0.5, 'w_smooth': 0.05, 'margin': 1.0, 'bg_frac': 0.25}
+#
+# NOTE: when this file is loaded, ultralytics derives the compound scale from the
+# FILE NAME (guess_model_scale), overwriting the 'scale' key below. The file must
+# therefore keep its 'yolo11s_' prefix or it will silently build at scale 'n'.
+# SIA slot: raw intensity (control; adds no parameters).
+#
+# [from, repeats, module, args]
+nc: 1
+scale: s
+scales:
+  n: [0.5, 0.25, 1024]
+  s: [0.5, 0.5, 1024]
+  m: [0.5, 1.0, 512]
+  l: [1.0, 1.0, 512]
+  x: [1.0, 1.5, 512]
+backbone:
+- - -1
+  - 1
+  - SARInputAdapter
+  - [ch, identity]
+- - -1
+  - 1
+  - Conv
+  - [64, 3, 2]
+- - -1
+  - 1
+  - Conv
+  - [128, 3, 2]
+- - -1
+  - 2
+  - C3k2
+  - [256, false, 0.25]
+- - -1
+  - 1
+  - SARFeatureEnhancement
+  - [ch, sfe, 3, 8]
+- - -1
+  - 1
+  - Conv
+  - [256, 3, 2]
+- - -1
+  - 2
+  - C3k2
+  - [512, false, 0.25]
+- - -1
+  - 1
+  - Conv
+  - [512, 3, 2]
+- - -1
+  - 2
+  - C3k2
+  - [512, true]
+- - -1
+  - 1
+  - Conv
+  - [1024, 3, 2]
+- - -1
+  - 2
+  - C3k2
+  - [1024, true]
+- - -1
+  - 1
+  - SPPF
+  - [1024, 5]
+- - -1
+  - 2
+  - C2PSA
+  - [1024]
+- - -1
+  - 1
+  - SpeckleAwareFeatureModule
+  - [ch, sfm_clutter, 8, 3]
+- - -1
+  - 1
+  - SpatialFrequencyRepresentation
+  - [ch, sff, 8, 8]
+head:
+- - -1
+  - 1
+  - nn.Upsample
+  - [null, 2, nearest]
+- - [15, 8]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 1
+  - AdaptiveMultiScaleFusion
+  - - ch
+    - [15, 8]
+    - 8
+    - amf
+- - -1
+  - 2
+  - C3k2
+  - [512, false]
+- - -1
+  - 1
+  - nn.Upsample
+  - [null, 2, nearest]
+- - [19, 6]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 1
+  - AdaptiveMultiScaleFusion
+  - - ch
+    - [19, 6]
+    - 8
+    - amf
+- - -1
+  - 2
+  - C3k2
+  - [256, false]
+- - -1
+  - 1
+  - nn.Upsample
+  - [null, 2, nearest]
+- - [23, 4]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 1
+  - AdaptiveMultiScaleFusion
+  - - ch
+    - [23, 4]
+    - 8
+    - amf
+- - -1
+  - 2
+  - C3k2
+  - [128, false]
+- - -1
+  - 1
+  - Conv
+  - [128, 3, 2]
+- - [27, 22]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 1
+  - AdaptiveMultiScaleFusion
+  - - ch
+    - [27, 22]
+    - 8
+    - amf
+- - -1
+  - 2
+  - C3k2
+  - [256, false]
+- - -1
+  - 1
+  - Conv
+  - [256, 3, 2]
+- - [31, 18]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 1
+  - AdaptiveMultiScaleFusion
+  - - ch
+    - [31, 18]
+    - 8
+    - amf
+- - -1
+  - 2
+  - C3k2
+  - [512, false]
+- - -1
+  - 1
+  - Conv
+  - [512, 3, 2]
+- - [35, 14]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 1
+  - AdaptiveMultiScaleFusion
+  - - ch
+    - [35, 14]
+    - 8
+    - amf
+- - -1
+  - 2
+  - C3k2
+  - [1024, true]
+- - 26
+  - 1
+  - TargetPriorModulation
+  - [ch, 26, learned, 3, 8]
+- - 39
+  - 1
+  - SARAdaptiveAttention
+  - [ch, 39, 16, 7, adaptive]
+- - 40
+  - 1
+  - ContextAggregation
+  - [ch, 40, multi, 8]
+- - 41
+  - 1
+  - TargetAwareRefinement
+  - [ch, 41, deform, 3, 0.5]
+- - 30
+  - 1
+  - TargetPriorModulation
+  - [ch, 30, learned, 3, 8]
+- - 43
+  - 1
+  - SARAdaptiveAttention
+  - [ch, 43, 16, 7, adaptive]
+- - 44
+  - 1
+  - ContextAggregation
+  - [ch, 44, multi, 8]
+- - 45
+  - 1
+  - TargetAwareRefinement
+  - [ch, 45, deform, 3, 0.5]
+- - 34
+  - 1
+  - TargetPriorModulation
+  - [ch, 34, learned, 3, 8]
+- - 47
+  - 1
+  - SARAdaptiveAttention
+  - [ch, 47, 16, 7, adaptive]
+- - 48
+  - 1
+  - ContextAggregation
+  - [ch, 48, multi, 8]
+- - 49
+  - 1
+  - TargetAwareRefinement
+  - [ch, 49, deform, 3, 0.5]
+- - 38
+  - 1
+  - TargetPriorModulation
+  - [ch, 38, learned, 3, 8]
+- - 51
+  - 1
+  - SARAdaptiveAttention
+  - [ch, 51, 16, 7, adaptive]
+- - 52
+  - 1
+  - ContextAggregation
+  - [ch, 52, multi, 8]
+- - 53
+  - 1
+  - TargetAwareRefinement
+  - [ch, 53, deform, 3, 0.5]
+- - [42, 46, 50, 54]
+  - 1
+  - Detect
+  - [nc]
+sar_loss: {w_sep: 0.2, w_small: 0.5, w_smooth: 0.05, margin: 1.0, bg_frac: 0.25}

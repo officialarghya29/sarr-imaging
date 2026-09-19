@@ -46,6 +46,11 @@ class ModelSpec:
         name: Variant name, e.g. ``"saryolo_full"``.
         scale: Compound scale key (``n``/``s``/``m``/``l``/``x``).
         nc: Number of classes.
+        adapter: SIA variant (Module A), emitted as the **first** backbone row so it
+            operates on the image rather than on features; ``None`` disables. Kept out of
+            the v2 full configuration on purpose: the brief's rule is to keep an input
+            representation only if the experiment justifies it, and v2 is already +72%
+            parameters, so the adapter is a candidate arm rather than a default.
         enhancement: SFE variant; ``None`` disables the module.
         speckle: SFM variant; ``None`` disables the module.
         frequency: SFR variant, on the deepest backbone stage; ``None`` disables.
@@ -61,6 +66,10 @@ class ModelSpec:
             deformable offsets are then predicted from an already prior-modulated
             feature, which is what makes the arm "target-aware" without duplicating
             the prior's evidence network.
+        refinement_max_offset: Search radius of Component 11's deformable offsets, in
+            normalised grid units. Exposed as a field because the smoke run showed the
+            learned offsets saturating the bound, so it is a hyperparameter to sweep
+            rather than a constant to leave implicit.
         fusion: Fusion variant inserted after each ``Concat``; ``None`` disables.
         levels: Detection levels, a subset of ``("p2", "p3", "p4", "p5")``.
         sar_loss: Optional Component-7 loss block, emitted as a top-level
@@ -72,6 +81,7 @@ class ModelSpec:
     name: str
     scale: str = "s"
     nc: int = 1
+    adapter: str | None = None
     enhancement: str | None = None
     speckle: str | None = None
     frequency: str | None = None
@@ -79,6 +89,7 @@ class ModelSpec:
     attention: str | None = None
     context: str | None = None
     refinement: str | None = None
+    refinement_max_offset: float = 0.5
     fusion: str | None = None
     levels: tuple[str, ...] = ("p3", "p4", "p5")
     sar_loss: dict[str, float] | None = None
@@ -100,6 +111,8 @@ class ModelSpec:
     def module_names(self) -> list[str]:
         """Enabled module slugs, in the order they appear along the forward graph."""
         mods = []
+        if self.adapter:
+            mods.append("adapter")
         if self.enhancement:
             mods.append("sfe")
         if self.speckle:
@@ -175,6 +188,13 @@ def build_yaml_dict(spec: ModelSpec) -> dict[str, Any]:
     b = _Builder()
 
     # ------------------------------------------------------------------ backbone
+    # Module A (SIA), the only row that consumes the image itself. Everything downstream
+    # sees its output, so this is the one place where "SAR-aware input representation" is
+    # not a description of features but of the tensor the first convolution reads.
+    if spec.adapter:
+        # Args stop after the mode: `source` is meaningless at row 0 (there is no source
+        # layer) and the kernel/reduction defaults are the ones the slot study holds fixed.
+        b.add("backbone", -1, 1, "SARInputAdapter", ["ch", spec.adapter])
     b.add("backbone", -1, 1, "Conv", [64, 3, 2])  # P1/2
     b.add("backbone", -1, 1, "Conv", [128, 3, 2])  # P2/4
     p2 = b.add("backbone", -1, 2, "C3k2", [256, False, 0.25])
@@ -266,7 +286,8 @@ def build_yaml_dict(spec: ModelSpec) -> dict[str, Any]:
             )
         if spec.refinement:
             heads[lvl] = b.add(
-                "head", heads[lvl], 1, "TargetAwareRefinement", ["ch", heads[lvl], spec.refinement, 3, 0.5]
+                "head", heads[lvl], 1, "TargetAwareRefinement",
+                ["ch", heads[lvl], spec.refinement, 3, spec.refinement_max_offset],
             )
 
     b.add("head", [heads[lvl] for lvl in spec.levels], 1, "Detect", ["nc"])
@@ -474,6 +495,35 @@ VARIANTS.update({
                     notes="TADR slot: capacity control -- same network, no offsets."),
     "rf_static": _v2("rf_static", refinement="static",
                      notes="TADR slot: learned but input-independent offsets."),
+    # The offset bound is a sweep, not a constant: in smoke training the learned offsets
+    # reached |d| ~ 0.47 against s = 0.5, so the tanh was operating where its derivative is
+    # smallest. These arms test whether the bound is binding.
+    "rf_off25": _v2("rf_off25", refinement_max_offset=0.25,
+                    notes="TADR slot: half the search radius (is the bound binding?)."),
+    "rf_off100": _v2("rf_off100", refinement_max_offset=1.0,
+                     notes="TADR slot: double the search radius (does the model want more?)."),
+
+    # --- SEC. 14 of the brief: the alternative frequency study, beyond FFT vs learned.
+    # Same slot, same bands, same parameter count as `v2_full`'s spectral arm, so the
+    # transform is the variable rather than the capacity.
+    "fr_dct": _v2("fr_dct", frequency="dct",
+                  notes="Frequency study: 8x8 block DCT-II with learnable radial bands."),
+    "fr_wavelet": _v2("fr_wavelet", frequency="wavelet",
+                      notes="Frequency study: one-level Haar with learnable per-sub-band gains."),
+})
+
+# --- Module A (SIA) slot study. The brief forbids assuming which input representation is
+# right, so all four arms are wired and none is in the v2 default: the adapter has to earn
+# its place in the full model through this comparison, not by being assumed.
+VARIANTS.update({
+    "in_identity": _v2("in_identity", adapter="identity",
+                       notes="SIA slot: raw intensity (control; adds no parameters)."),
+    "in_local": _v2("in_local", adapter="local",
+                    notes="SIA slot: local-statistics representation only."),
+    "in_learned": _v2("in_learned", adapter="learned",
+                      notes="SIA slot: learned representation only."),
+    "in_hybrid": _v2("in_hybrid", adapter="hybrid",
+                     notes="SIA slot: proposed -- learned + local-statistics streams, learned fusion."),
 })
 
 #: v2 at the scales used for the main benchmark, plus `n` for the CPU pipeline smoke test

@@ -61,15 +61,62 @@ def _cmd_synth(args) -> int:
     return 0
 
 
+def _dataset_splits(dataset: Path, splits: list[str]) -> list[tuple[str, Path, Path]]:
+    """Resolve ``images/<split>`` directories, failing loudly instead of silently.
+
+    Both commands below used to ``continue`` past any split whose ``images/<split>``
+    directory was absent and then return success. A wrong path, or a ``data.yaml`` passed
+    where a dataset *directory* is expected, therefore printed nothing and exited 0 -- so a
+    CI step or a shell ``if ! saryolo check-data ...`` would report "dataset verified"
+    having examined zero images. Silence is indistinguishable from approval, which makes it
+    a worse failure than a crash.
+
+    Args:
+        dataset: Dataset root, expected to contain ``images/<split>`` and ``labels/<split>``.
+        splits: Split names to resolve.
+
+    Returns:
+        One ``(split, images_dir, labels_dir)`` tuple per split that exists.
+
+    Raises:
+        SystemExit: If the root does not exist, is a file, or no requested split is present.
+    """
+    if dataset.is_file():
+        raise SystemExit(
+            f"--dataset expects a dataset DIRECTORY, but {dataset} is a file.\n"
+            f"A data.yaml names the splits rather than containing them; pass the directory\n"
+            f"it points at, e.g. --dataset {dataset.parent}."
+        )
+    if not dataset.is_dir():
+        raise SystemExit(
+            f"--dataset {dataset} does not exist.\n"
+            f"Expected a directory containing images/<split> and labels/<split>."
+        )
+
+    found = [(s, dataset / "images" / s, dataset / "labels" / s) for s in splits
+             if (dataset / "images" / s).exists()]
+    if not found:
+        present = sorted(p.name for p in (dataset / "images").glob("*") if p.is_dir()) \
+            if (dataset / "images").is_dir() else []
+        raise SystemExit(
+            f"none of the requested splits {splits} exist under {dataset / 'images'}.\n"
+            f"Splits actually present: {present or 'none (no images/ directory)'}"
+        )
+
+    missing = [s for s in splits if s not in {name for name, _i, _l in found}]
+    if missing:
+        # Not an error by default: plenty of SAR datasets ship no test split. Reported so the
+        # reader can tell "checked and clean" from "never looked at".
+        print(f"NOTE: splits not found and therefore not checked: {missing}\n")
+    return found
+
+
 def _cmd_check_data(args) -> int:
     from saryolo.data import validate_yolo_dataset, write_report
 
     dataset = Path(args.dataset)
     failed = False
-    for split in args.splits:
-        images, labels = dataset / "images" / split, dataset / "labels" / split
-        if not images.exists():
-            continue
+    for split, images, labels in _dataset_splits(dataset, list(args.splits)):
         report = validate_yolo_dataset(images, labels, class_names=args.classes)
         print(report.summary())
         if args.report:
@@ -84,10 +131,7 @@ def _cmd_stats(args) -> int:
     from saryolo.data import plot_statistics, profile_dataset, save_statistics
 
     dataset = Path(args.dataset)
-    for split in args.splits:
-        images, labels = dataset / "images" / split, dataset / "labels" / split
-        if not images.exists():
-            continue
+    for split, images, labels in _dataset_splits(dataset, list(args.splits)):
         stats = profile_dataset(
             images, labels, args.classes, name=args.name or dataset.name, split=split,
             intensity_sample=args.sample,
@@ -177,12 +221,172 @@ def _cmd_cross_dataset(args) -> int:
     return 0
 
 
+def _cmd_mine_hard(args) -> int:
+    """Score the validation split by difficulty and write an oversampled train list."""
+    from saryolo.evaluation.metrics import (
+        load_yolo_ground_truth,
+        load_yolo_predictions,
+        predict_to_labels,
+    )
+    from saryolo.training.hard_examples import (
+        rank_examples,
+        score_examples,
+        write_hard_data_config,
+        write_oversampled_list,
+    )
+    from saryolo.visualization.error_analysis import image_contrast_map
+
+    data = Path(args.data).resolve()
+    if not data.exists():
+        raise SystemExit(f"--data {data} does not exist")
+
+    from saryolo.data.yolo import split_dirs
+
+    # Hard examples must be mined from the split that will be trained on. Mining the
+    # validation split and then oversampling those images would train on the evaluation data,
+    # so `train` is the default and any other split has to be asked for explicitly.
+    mined_dir, _ = split_dirs(data, args.split)
+    train_images_dir, _ = split_dirs(data, "train")
+    if not mined_dir.exists():
+        raise SystemExit(f"{args.split} images not found at {mined_dir}")
+    if args.split != "train":
+        print(
+            f"WARNING: mining the '{args.split}' split. Those images are now in the training "
+            "list, so "
+            f"'{args.split}' can no longer be used as an evaluation split for the model "
+            "trained from it -- it is contaminated. Report metrics from a split that was "
+            "never mined."
+        )
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    # Inference is the expensive step and its output is reusable, so an existing run is
+    # reused rather than silently repeated -- and when it is reused the caller is told, so
+    # they are not left believing fresh predictions were produced.
+    labels = out / "predictions" / "labels"
+    if labels.exists() and any(labels.glob("*.txt")):
+        print(f"reusing existing predictions from {labels}")
+    else:
+        labels = predict_to_labels(
+            args.weights, mined_dir, imgsz=args.imgsz, conf=args.conf,
+            out_dir=out / "predictions", device=args.device,
+        )
+
+    preds = load_yolo_predictions(labels, mined_dir)
+    gts = load_yolo_ground_truth(data)
+    if not gts:
+        raise SystemExit(
+            f"no ground truth found for the val split of {data}; "
+            "difficulty scoring would be meaningless"
+        )
+
+    contrast = image_contrast_map(data, split=args.split, limit=args.contrast_limit)
+    rows = score_examples(preds, gts, contrast_by_image=contrast)
+    hard, easy = rank_examples(rows, top_frac=args.top_frac, min_count=args.min_count)
+
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "difficulty.json").write_text(
+        json.dumps({"n_images": len(rows), "hard": [r.as_row() for r in hard],
+                    "all": [r.as_row() for r in rows]}, indent=2)
+    )
+    print(f"scored {len(rows)} images; {len(hard)} marked hard (top_frac={args.top_frac})")
+    for row in hard[:10]:
+        print(f"  {row.score:6.3f}  {row.image}  missed={row.missed} spurious={row.spurious}")
+
+    # Only two things differ from a baseline run: the image list and the config pointing at it.
+    extensions = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff")
+    train_images = sorted(
+        str(p) for p in train_images_dir.rglob("*") if p.suffix.lower() in extensions
+    )
+    # Detections are keyed by file *stem*, so the hard set is resolved back to a path through
+    # the mined split's own index. A stem that resolves to nothing is an error rather than a
+    # warning: dropping it would quietly reduce the mining to a no-op.
+    mined_index = {p.stem: str(p) for p in mined_dir.rglob("*") if p.suffix.lower() in extensions}
+    unresolved = [r.image for r in hard if r.image not in mined_index]
+    if unresolved:
+        raise SystemExit(
+            f"{len(unresolved)} hard image(s) could not be mapped back to a file path under "
+            f"{mined_dir}: {unresolved[:3]}. The training list would silently omit them."
+        )
+    hard_paths = [mined_index[r.image] for r in hard]
+    if not train_images:
+        raise SystemExit(
+            f"no training images found under {train_images_dir}; the oversampled list would "
+            "be empty and must not be used to train"
+        )
+
+    train_list = write_oversampled_list(train_images, hard_paths, out / "train_hard.txt", repeats=args.repeats)
+    cfg = write_hard_data_config(data, train_list, out / "data_hard.yaml",
+                                 note=f"source={data} split={args.split} repeats={args.repeats} "
+                                      f"top_frac={args.top_frac}")
+    # Reported from the file that was actually written, not from the intended arithmetic: the
+    # two disagreed, and only one of them affects training.
+    written = [line for line in train_list.read_text().splitlines() if line.strip()]
+    extra = len(written) - len(train_images)
+    print(f"\nwrote {train_list}: {len(written)} entries ({len(train_images)} base + {extra} repeats)")
+    print(f"wrote {cfg}")
+    if extra == 0:
+        # Not a hard failure -- `repeats=1` legitimately means no oversampling -- but a run
+        # that silently oversamples nothing is the baseline, and should not look like mining.
+        print(
+            "\nNOTE: no image was oversampled. This run is identical to the baseline unless "
+            "the hard set was empty by choice."
+        )
+        return 1
+    return 0
+
+
+def _cmd_augment(args) -> int:
+    """Build a multi-view, SAR-augmented copy of a training split (SEC. 5)."""
+    from saryolo.augmentation.sar import AugmentationPlan, build_augmented_train_split
+
+    images_dir = Path(args.images) if args.images else None
+    if images_dir is None:
+        from saryolo.data.yolo import split_dirs
+
+        images_dir, _ = split_dirs(args.data, "train")
+    if not images_dir.exists():
+        raise SystemExit(f"training images not found at {images_dir}")
+
+    plan = AugmentationPlan(
+        kinds=tuple(args.kinds), views=args.views, include_clean=not args.no_clean, seed=args.seed,
+        severities={k: tuple(v) for k, v in _parse_severities(args.severity).items()},
+    )
+    manifest = build_augmented_train_split(images_dir, args.out, plan, limit=args.limit)
+    print(json.dumps({k: v for k, v in manifest.items() if k != "entries"}, indent=2))
+    for kind in plan.kinds:
+        n = sum(1 for e in manifest["entries"] if e["corruption"] == kind)
+        print(f"  {kind:<16} {n} images")
+    if manifest["skipped"]:
+        print(f"\n{len(manifest['skipped'])} image(s) skipped; see manifest.json for the reason")
+    if manifest["n_emitted"] == 0:
+        print("\nNothing was emitted; the destination must not be used for training.")
+        return 1
+    print(f"\nwrote {args.out} ({manifest['n_emitted']} images + manifest.json)")
+    return 0
+
+
+def _parse_severities(specs: list[str] | None) -> dict[str, tuple[float, ...]]:
+    """Parse ``--severity speckle=8,4`` into ``{'speckle': (8.0, 4.0)}``."""
+    out: dict[str, tuple[float, ...]] = {}
+    for spec in specs or []:
+        if "=" not in spec:
+            raise SystemExit(f"--severity expects KIND=v1,v2 (got {spec!r})")
+        kind, values = spec.split("=", 1)
+        try:
+            out[kind.strip()] = tuple(float(v) for v in values.split(",") if v.strip())
+        except ValueError as exc:
+            raise SystemExit(f"--severity {spec!r} has a non-numeric value: {exc}") from exc
+    return out
+
+
 def _cmd_bench(args) -> int:
     """Architecture-level params/FLOPs benchmark; needs no training and no GPU."""
     from saryolo.evaluation.efficiency import profile_yaml
     from saryolo.nn.arch import VARIANTS, variant_filename
 
     rows = []
+    unresolved = []
     for variant in args.variants:
         # Accept a variant key ('full_s'), a plain name ('full'), or an explicit path.
         path = Path(args.models) / f"{variant}.yaml"
@@ -191,7 +395,10 @@ def _cmd_bench(args) -> int:
         if not path.exists():
             candidates = sorted(Path(args.models).glob(f"*{variant}*.yaml"))
             if not candidates:
-                print(f"skip {variant}: no yaml under {args.models}")
+                # Collected rather than printed-and-forgotten: a mistyped variant must not
+                # leave the caller with a success status and a shorter table than asked for.
+                unresolved.append(variant)
+                print(f"UNRESOLVED {variant}: no yaml under {args.models}")
                 continue
             path = candidates[0]
         row = profile_yaml(path, imgsz=args.imgsz, nc=args.nc)
@@ -201,6 +408,9 @@ def _cmd_bench(args) -> int:
         out = Path(args.out)
         out.mkdir(parents=True, exist_ok=True)
         (out / "architecture_benchmark.json").write_text(json.dumps(rows, indent=2, default=float))
+    if unresolved:
+        print(f"\n{len(unresolved)} requested variant(s) could not be resolved: {unresolved}")
+        return 1
     return 0
 
 
@@ -349,6 +559,33 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out", default="results/generalization")
     p.add_argument("--allow-partial-overlap", action="store_true")
     p.set_defaults(func=_cmd_cross_dataset)
+
+    p = sub.add_parser("mine-hard", help="score val images by difficulty and write an oversampled train list")
+    p.add_argument("--weights", required=True)
+    p.add_argument("--data", required=True, help="data.yaml of the dataset the checkpoint was trained on")
+    p.add_argument("--split", default="train",
+                   help="split to mine; must be the one that will be trained on (default: train)")
+    p.add_argument("--imgsz", type=int, default=640)
+    p.add_argument("--conf", type=float, default=0.001)
+    p.add_argument("--top-frac", type=float, default=0.2, dest="top_frac")
+    p.add_argument("--min-count", type=int, default=0, dest="min_count")
+    p.add_argument("--repeats", type=int, default=2)
+    p.add_argument("--contrast-limit", type=int, default=None, dest="contrast_limit")
+    p.add_argument("--device", default=None)
+    p.add_argument("--out", default="results/hard_examples")
+    p.set_defaults(func=_cmd_mine_hard)
+
+    p = sub.add_parser("augment", help="build a multi-view SAR-augmented training split (SEC. 5)")
+    p.add_argument("--data", required=True, help="data.yaml to read the train split from")
+    p.add_argument("--images", default=None, help="override: images directory to augment")
+    p.add_argument("--kinds", nargs="+", default=["speckle", "low_contrast", "blur", "low_resolution", "low_snr"])
+    p.add_argument("--views", type=int, default=2, help="augmented copies per image (clean copy is extra)")
+    p.add_argument("--severity", nargs="*", default=None, help="restrict a grid, e.g. speckle=8,4")
+    p.add_argument("--no-clean", action="store_true", help="omit the undeformed copy")
+    p.add_argument("--limit", type=int, default=None)
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--out", default="datasets/augmented/train")
+    p.set_defaults(func=_cmd_augment)
 
     p = sub.add_parser("bench", help="architecture-level params/FLOPs table (no training)")
     p.add_argument("--variants", nargs="+", required=True)

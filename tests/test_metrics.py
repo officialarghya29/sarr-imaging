@@ -105,3 +105,61 @@ def test_class_mismatch_is_not_a_true_positive():
     dets = [_det("a", 1, (0, 0, 100, 100), score=0.9)]
     stats = compute_ap(dets, gts, nc=2, area_range=AREA_RANGES["all"])
     assert stats["AP"] == pytest.approx(0.0)
+
+
+# --------------------------------------------------------------- prediction output path
+def test_predict_to_labels_resolves_a_relative_out_dir(tmp_path, monkeypatch):
+    """Regression: ultralytics re-roots a *relative* ``project`` under its own runs dir.
+
+    Inference for ``out_dir="results/eval"`` was written to ``runs/detect/results/eval`` while
+    the function then looked in ``results/eval`` and raised ``FileNotFoundError``. Every caller
+    that passed a relative path failed -- including this function's own default, and therefore
+    ``saryolo eval``, the robustness sweep and the cross-dataset evaluation. The contract pinned
+    here is the one that makes them work: the directory handed to ultralytics must be absolute,
+    and the directory returned must be the one actually written.
+    """
+    from pathlib import Path
+
+    from saryolo.evaluation import metrics
+
+    seen: dict = {}
+
+    class _FakeModel:
+        def predict(self, **kwargs):
+            project = Path(kwargs["project"])
+            seen["project"] = project
+            # This is exactly what ultralytics does: re-root a relative project under runs/.
+            root = project if project.is_absolute() else Path("runs") / "detect" / project
+            labels = root / "labels"
+            labels.mkdir(parents=True, exist_ok=True)
+            (labels / "a.txt").write_text("0 0.500000 0.500000 0.250000 0.250000 0.9\n")
+
+    monkeypatch.setattr("saryolo.training.trainer.load_model", lambda *_a, **_k: _FakeModel())
+    monkeypatch.chdir(tmp_path)
+
+    labels = metrics.predict_to_labels("w.pt", tmp_path / "imgs", out_dir="results/preds")
+
+    assert seen["project"].is_absolute(), "a relative project is what caused the bug"
+    assert Path(labels).is_absolute()
+    assert Path(labels).exists(), f"returned {labels}, which was never written"
+    assert Path(labels).parent == (tmp_path / "results" / "preds")
+    assert not (tmp_path / "runs").exists(), "output must not be re-rooted under runs/detect"
+
+
+def test_predict_to_labels_returns_the_directory_it_wrote(tmp_path, monkeypatch):
+    """The returned path must contain the labels, so callers never guess where they landed."""
+    from pathlib import Path
+
+    from saryolo.evaluation import metrics
+
+    class _FakeModel:
+        def predict(self, **kwargs):
+            labels = Path(kwargs["project"]) / "labels"
+            labels.mkdir(parents=True, exist_ok=True)
+            (labels / "img.txt").write_text("0 0.5 0.5 0.1 0.1 0.8\n")
+
+    monkeypatch.setattr("saryolo.training.trainer.load_model", lambda *_a, **_k: _FakeModel())
+    out = tmp_path / "nested" / "deep"
+    labels = metrics.predict_to_labels("w.pt", tmp_path / "imgs", out_dir=out)
+    assert Path(labels) == (out / "labels")
+    assert sorted(p.name for p in Path(labels).glob("*.txt")) == ["img.txt"]
