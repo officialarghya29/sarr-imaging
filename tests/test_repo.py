@@ -245,3 +245,82 @@ def test_paper_table_rows_reference_real_models():
     named += [v for _label, v in REMOVAL_ABLATION_ROWS]
     unknown = sorted({v for v in named if v not in VARIANTS})
     assert not unknown, f"paper tables name variants that do not exist: {unknown}"
+
+
+# ------------------------------------------------------------------- README numbers
+#: README cost-table row label -> model variant. The README's cost table is the number a
+#: reader quotes first, and it is hand-maintained prose sitting next to generated charts, so
+#: it is exactly the kind of figure that drifts without anyone noticing. It did: adding
+#: Component 11 to the full model changed every "ours" row of the v2 slot table, and nothing
+#: in the suite could see it.
+README_COST_ROWS: dict[str, str] = {
+    "YOLO11-s": "baseline",
+    "+ SFE": "sfe",
+    "+ SFM": "speckle",
+    "+ SAA": "attention",
+    "+ AMF": "amf",
+    "+ P2 head": "p2",
+    "FULL v1": "full",
+    "+ clutter": "v2_clutter",
+    "+ prior": "v2_prior",
+    "+ freq": "v2_freq",
+    "+ context": "v2_ctx",
+    "FULL v2": "v2_full",
+}
+
+
+def _readme_cost_table() -> dict[str, tuple[float, float]]:
+    """Parse ``| label | ... | params | ... | GFLOPs | ... |`` rows out of the README."""
+    rows: dict[str, tuple[float, float]] = {}
+    for line in (REPO_ROOT / "README.md").read_text().splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = [c.strip().replace("*", "") for c in line.strip().strip("|").split("|")]
+        if len(cells) < 5 or cells[0] not in README_COST_ROWS:
+            continue
+        try:
+            rows[cells[0]] = (float(cells[2]), float(cells[4]))
+        except ValueError:  # header separator row, or a placeholder such as an em dash
+            continue
+    return rows
+
+
+def test_readme_cost_table_matches_the_measured_models():
+    """The README's cost table must agree with the measured model zoo.
+
+    Compared against ``docs/assets/facts.json``, which the asset generator recomputes from
+    live ``parse_model`` builds rather than from anything typed by hand.
+    """
+    facts = json.loads((REPO_ROOT / "docs" / "assets" / "facts.json").read_text())
+    zoo = facts["zoo"]
+    readme = _readme_cost_table()
+    assert len(readme) == len(README_COST_ROWS), (
+        f"README cost-table rows not found: {sorted(set(README_COST_ROWS) - set(readme))}"
+    )
+    for label, variant in sorted(README_COST_ROWS.items()):
+        params, flops = readme[label]
+        expected_params = zoo[f"{variant}_s"]["params_M"]
+        expected_flops = zoo[f"{variant}_s"]["flops_G"]
+        # Compared at the README's own precision (3 dp for params, 2 dp for GFLOPs), so the
+        # test neither demands more digits than the table shows nor tolerates a real drift.
+        assert round(params, 3) == round(expected_params, 3), (
+            f"{label}: README says {params} M params, measured {expected_params:.6f} M"
+        )
+        assert round(flops, 2) == round(expected_flops, 2), (
+            f"{label}: README says {flops} GFLOPs, measured {expected_flops:.4f}"
+        )
+
+
+def test_readme_documents_every_ladder_step():
+    """A ladder step that is missing from the README table is an undocumented experiment.
+
+    The measured zoo is generated from ``scripts/make_readme_assets.py``'s ``LADDER``, so it
+    is the authoritative list of steps; this fails when a step is added without a row.
+    """
+    facts = json.loads((REPO_ROOT / "docs" / "assets" / "facts.json").read_text())
+    ladder = {key.rsplit("_", 1)[0] for key in facts["zoo"] if key.endswith("_s")}
+    documented = set(README_COST_ROWS.values())
+    assert ladder == documented, (
+        f"README cost table and the measured ladder disagree -- "
+        f"undocumented: {sorted(ladder - documented)}, stale rows: {sorted(documented - ladder)}"
+    )

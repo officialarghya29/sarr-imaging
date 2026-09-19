@@ -16,10 +16,25 @@ from pathlib import Path
 
 import numpy as np
 
-__all__ = ["find_layers", "gradcam", "feature_maps", "overlay_heatmap", "save_attention_panel"]
+__all__ = ["find_layers", "gradcam", "feature_maps", "overlay_heatmap", "save_attention_panel",
+           "CAM_TARGET_KINDS"]
 
 
-def find_layers(model, kinds: tuple[str, ...] = ("SARAdaptiveAttention", "SpeckleAwareFeatureModule", "SARFeatureEnhancement")):
+#: Every SAR-YOLO module is a valid Grad-CAM target. The list covers all components so a
+#: figure can attribute a prediction to the target prior (8), the spectral branch (9),
+#: context (10) or the deformable refinement (11), not only to the v1 modules.
+CAM_TARGET_KINDS: tuple[str, ...] = (
+    "SARAdaptiveAttention",
+    "SpeckleAwareFeatureModule",
+    "SARFeatureEnhancement",
+    "TargetPriorModulation",
+    "SpatialFrequencyRepresentation",
+    "ContextAggregation",
+    "TargetAwareRefinement",
+)
+
+
+def find_layers(model, kinds: tuple[str, ...] = CAM_TARGET_KINDS):
     """List ``(index, name, module)`` for layers whose type name contains any of ``kinds``."""
     net = getattr(model, "model", model)
     found = []

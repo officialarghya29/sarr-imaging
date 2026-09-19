@@ -21,5 +21,22 @@
 | Speckle | spk_lee | TBD | TBD | TBD |
 | Speckle | spk_denoise | TBD | TBD | TBD |
 | Speckle | speckle | TBD | TBD | TBD |
+| Target prior | tp_none | TBD | TBD | TBD |
+| Target prior | tp_cfar | TBD | TBD | TBD |
+| Target prior | tp_static | TBD | TBD | TBD |
+| Target prior | tp_channel | TBD | TBD | TBD |
+| Target prior | v2_full | TBD | TBD | TBD |
+| Frequency | fr_none | TBD | TBD | TBD |
+| Frequency | fr_highpass | TBD | TBD | TBD |
+| Frequency | fr_static | TBD | TBD | TBD |
+| Frequency | v2_full | TBD | TBD | TBD |
+| Context | cx_none | TBD | TBD | TBD |
+| Context | cx_local | TBD | TBD | TBD |
+| Context | cx_regional | TBD | TBD | TBD |
+| Context | v2_full | TBD | TBD | TBD |
+| Refinement | rf_none | TBD | TBD | TBD |
+| Refinement | rf_local | TBD | TBD | TBD |
+| Refinement | rf_static | TBD | TBD | TBD |
+| Refinement | v2_full | TBD | TBD | TBD |
 
 `TBD` = not yet measured (run the corresponding experiment).

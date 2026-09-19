@@ -277,7 +277,7 @@ non-negative-only prior can express the first half of that sentence and not the
 second. The modulation is multiplicative because speckle is signal dependent, so
 the correction must scale with local intensity rather than act as a constant
 offset. The module is applied per detection level, \emph{before} attention, so
-attention and context both operate on target-modulated features. The ablation
+attention, context and deformable refinement all operate on target-modulated features. The ablation
 includes a capacity-matched arm whose prior is pooled over space: it is identical
 in size to the proposed arm, so $\mathrm{learned}$ vs. $\mathrm{channel}$ isolates
 spatial selectivity, and if the two match, this contribution is not supported.
@@ -315,6 +315,27 @@ downsampling, at the detection resolution. This is a mechanistic contrast with
 attention, which applies a multiplicative gate rather than adding a context field;
 whether the distinction earns its parameters is answered by the removal ablation
 rather than asserted.
+
+\subsection{Target-aware deformable refinement}
+\label{sec:tadr}
+Every module above changes \emph{what} a feature contains; none changes \emph{where
+it is read from}. In SAR the fixed backbone grid is often misaligned with the
+target itself, because a wake, a harbour edge or a speckle spike displaces the
+local statistics. We therefore give each cell a bounded learned opportunity to
+sample elsewhere,
+\begin{equation}
+\tilde{F} = \mathrm{grid\_sample}\!\left(F,\; G_{\mathrm{base}}
++ s\tanh(\Delta(F))\right), \qquad
+F' = F + \alpha\big(\mathrm{mix}(\tilde{F}) - F\big),
+\end{equation}
+where $G_{\mathrm{base}}$ is the identity sampling grid with
+\texttt{align\_corners}, so $\Delta = 0$ resamples exactly the original position,
+and $s$ bounds the search radius. The module is placed \emph{after} the target
+prior, so the offsets are predicted from an already target-modulated feature.
+Because a deformable arm would otherwise be credited for both a new operation and
+the network that predicts it, the control arm keeps the identical mixing network
+and removes only the offsets: the comparison then isolates deformation, in the
+same way the prior's capacity-matched control isolates spatial selectivity.
 
 \subsection{SAR-aware objective}
 \begin{equation}

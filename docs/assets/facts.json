@@ -1,5 +1,5 @@
 {
-  "variants": 58,
+  "variants": 63,
   "zoo": {
     "baseline_n": {
       "variant": "baseline",
@@ -51,10 +51,15 @@
       "scale": "n",
       "params_M": 3.962535
     },
+    "v2_ctx_n": {
+      "variant": "v2_ctx",
+      "scale": "n",
+      "params_M": 4.261643
+    },
     "v2_full_n": {
       "variant": "v2_full",
       "scale": "n",
-      "params_M": 4.261643
+      "params_M": 4.362615
     },
     "baseline_s": {
       "variant": "baseline",
@@ -116,11 +121,17 @@
       "params_M": 14.690127,
       "flops_G": 51.89690292
     },
-    "v2_full_s": {
-      "variant": "v2_full",
+    "v2_ctx_s": {
+      "variant": "v2_ctx",
       "scale": "s",
       "params_M": 15.853571,
       "flops_G": 54.65327636
+    },
+    "v2_full_s": {
+      "variant": "v2_full",
+      "scale": "s",
+      "params_M": 16.229583,
+      "flops_G": 55.68260116
     }
   },
   "slots": {
@@ -251,31 +262,31 @@
         "variant": "tp_none",
         "label": "no modulation",
         "ours": false,
-        "params_M": 15.672367
+        "params_M": 16.048379
       },
       {
         "variant": "tp_cfar",
         "label": "CFAR statistic (no learning)",
         "ours": false,
-        "params_M": 15.672367
+        "params_M": 16.048379
       },
       {
         "variant": "tp_static",
         "label": "learned, spatially uniform",
         "ours": false,
-        "params_M": 15.673327
+        "params_M": 16.049339
       },
       {
         "variant": "tp_channel",
         "label": "learned, capacity-matched",
         "ours": false,
-        "params_M": 15.853571
+        "params_M": 16.229583
       },
       {
         "variant": "v2_full",
         "label": "ours, spatial prior",
         "ours": true,
-        "params_M": 15.853571
+        "params_M": 16.229583
       }
     ],
     "frequency": [
@@ -283,25 +294,25 @@
         "variant": "fr_none",
         "label": "no spectral branch",
         "ours": false,
-        "params_M": 15.750587
+        "params_M": 16.126599
       },
       {
         "variant": "fr_highpass",
         "label": "fixed high-pass",
         "ours": false,
-        "params_M": 15.750587
+        "params_M": 16.126599
       },
       {
         "variant": "fr_static",
         "label": "learned bands, fixed filter",
         "ours": false,
-        "params_M": 15.754683
+        "params_M": 16.130695
       },
       {
         "variant": "v2_full",
         "label": "ours, input-adaptive",
         "ours": true,
-        "params_M": 15.853571
+        "params_M": 16.229583
       }
     ],
     "context": [
@@ -309,25 +320,51 @@
         "variant": "cx_none",
         "label": "no context",
         "ours": false,
-        "params_M": 14.690131
+        "params_M": 15.066143
       },
       {
         "variant": "cx_local",
         "label": "local, dilated",
         "ours": false,
-        "params_M": 15.766291
+        "params_M": 16.142303
       },
       {
         "variant": "cx_regional",
         "label": "regional only",
         "ours": false,
-        "params_M": 14.777411
+        "params_M": 15.153423
       },
       {
         "variant": "v2_full",
         "label": "ours, both extents",
         "ours": true,
-        "params_M": 15.853571
+        "params_M": 16.229583
+      }
+    ],
+    "refinement": [
+      {
+        "variant": "rf_none",
+        "label": "no refinement",
+        "ours": false,
+        "params_M": 15.853575
+      },
+      {
+        "variant": "rf_local",
+        "label": "local, no offsets (control)",
+        "ours": false,
+        "params_M": 16.212295
+      },
+      {
+        "variant": "rf_static",
+        "label": "learned offsets, fixed",
+        "ours": false,
+        "params_M": 16.212303
+      },
+      {
+        "variant": "v2_full",
+        "label": "ours, input-adaptive offsets",
+        "ours": true,
+        "params_M": 16.229583
       }
     ],
     "removal": [
@@ -335,31 +372,37 @@
         "variant": "v2_noclutter",
         "label": "- clutter branch",
         "ours": false,
-        "params_M": 15.684866
+        "params_M": 16.060878
       },
       {
         "variant": "v2_noprior",
         "label": "- target prior",
         "ours": false,
-        "params_M": 15.672363
+        "params_M": 16.048375
       },
       {
         "variant": "v2_nofreq",
         "label": "- spatial-frequency",
         "ours": false,
-        "params_M": 15.750586
+        "params_M": 16.126598
       },
       {
         "variant": "v2_noctx",
         "label": "- context",
         "ours": false,
-        "params_M": 14.690127
+        "params_M": 15.066139
+      },
+      {
+        "variant": "v2_norefine",
+        "label": "- refinement",
+        "ours": false,
+        "params_M": 15.853571
       },
       {
         "variant": "v2_full",
         "label": "full v2",
         "ours": true,
-        "params_M": 15.853571
+        "params_M": 16.229583
       }
     ]
   },
@@ -403,6 +446,12 @@
     {
       "short": "CAG",
       "label": "Component 10 - context aggregation",
+      "max_abs_deviation": 0.0,
+      "identical": true
+    },
+    {
+      "short": "TADR",
+      "label": "Component 11 - deformable refinement",
       "max_abs_deviation": 0.0,
       "identical": true
     }
@@ -451,10 +500,10 @@
   },
   "dataset_count": 5,
   "experiments": {
-    "total": 52,
-    "config_files": 54,
+    "total": 58,
+    "config_files": 60,
     "with_results": [],
-    "ledger_runs": 6,
+    "ledger_runs": 10,
     "non_experiment_runs": [
       "SMOKE-001",
       "SMOKE-002",
@@ -462,13 +511,13 @@
     ]
   },
   "tests": {
-    "total": 82,
+    "total": 91,
     "by_file": {
-      "tests/test_arch.py": 28,
+      "tests/test_arch.py": 35,
       "tests/test_data.py": 19,
       "tests/test_losses.py": 10,
       "tests/test_metrics.py": 9,
-      "tests/test_repo.py": 16
+      "tests/test_repo.py": 18
     }
   }
 }

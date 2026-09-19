@@ -8,7 +8,7 @@
 | --- | --- |
 | **Licence** | MIT for the code — datasets are never redistributed |
 | **Stack** | Python 3.10+ · Ultralytics 8.4.155 · PyTorch 2.x |
-| **Architectures** | 58 variants wired; every one builds and runs a forward pass |
+| **Architectures** | 63 variants wired; every one builds and runs a forward pass |
 | **Experiments** | 12 configured; each reproducible from a committed YAML |
 | **Tests** | 66 passing — no dataset download and no GPU needed |
 | **Accuracy results** | none yet — not one number in this repository is fabricated |
@@ -20,7 +20,7 @@
 | | |
 | --- | --- |
 | **What this is** | A complete, reproducible research pipeline for SAR object detection: dataset audit → baseline → ten documented components → ablations → removal tests → robustness → efficiency → cross-dataset → paper. |
-| **What is proven** | The infrastructure. 82 tests pass; the baseline reproduces stock YOLO11 exactly; all seven modules are measurably identity functions at initialisation *and* demonstrably not frozen; every model trains end to end. |
+| **What is proven** | The infrastructure. 91 tests pass; the baseline reproduces stock YOLO11 exactly; all eight modules are measurably identity functions at initialisation *and* demonstrably not frozen; every model trains end to end. |
 | **What is *not* proven** | Accuracy. **No model has been trained on a real SAR dataset in this repository.** There is no result table here with numbers in it, and the table generators refuse to print one. |
 | **Why that's the point** | A detector paper is only as strong as its ablations. If the machinery that produces those ablations cannot be trusted, every number downstream is unverifiable. Build the instrument first. |
 
@@ -111,21 +111,22 @@ Each component exists to answer one row of this table. No component exists becau
 | 5 | Objects vanish below stride | P2 high-resolution detection level | **P2 head** | AP_small does not move |
 | 7 | Background gradient dominates | Target/background separation + small-object term | **SAR loss** | EXP-008 (architecture held fixed) |
 
-### v2: three failures v1 leaves unaddressed
+### v2: four failures v1 leaves unaddressed
 
 | # | Observed failure | Mechanism | Component | Ablation that could kill it |
 | --- | --- | --- | --- | --- |
 | 8 | Target information is mixed with clutter | A signed, content-adaptive target prior that **modulates** the feature | **TPM** | loses to the CFAR statistic, to a uniform prior, or to its capacity-matched control |
 | 9 | Speckle is broadband; convolution is low-pass-biased | Learnable *radial* spectral filter, adapted per sample | **SFR** | loses to a fixed high-pass, or to non-adaptive bands |
 | 10 | Local appearance cannot separate look-alikes | Multi-extent dilated + regional context residual | **CAG** | loses to local-only / regional-only, or does not survive removal |
+| 11 | The response peak sits on a clutter pixel, not the target | Prior-conditioned **deformable** resampling: each cell looks up to a bounded distance away | **TADR** | loses to its capacity control (same network, offsets removed), to fixed offsets, or does not survive removal |
 
 **Component numbering**, used consistently across the code, the docs and the paper:
 
-| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| SFE | SFM | SAA | AMF | P2 head | oriented *(planned)* | SAR loss | TPM | SFR | CAG |
+| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| SFE | SFM | SAA | AMF | P2 head | oriented *(planned)* | SAR loss | TPM | SFR | CAG | TADR |
 
-Components 1-7 are the **v1** model (EXP-001…007). Components 8-10, plus the clutter-aware mode of Component 2, are the **v2 extension** (EXP-013…016). They are not assumed to help: each has a removal ablation (`v2_noprior`, `v2_nofreq`, `v2_noctx`) *and* a slot study, and a component that fails to earn its place gets deleted rather than reported. A component that only works when added in a particular order is not a component — hence the removal table is treated as the stronger evidence of the two.
+Components 1-7 are the **v1** model (EXP-001…007). Components 8-11, plus the clutter-aware mode of Component 2, are the **v2 extension** (EXP-013…017). They are not assumed to help: each has a removal ablation (`v2_noprior`, `v2_nofreq`, `v2_noctx`, `v2_norefine`) *and* a slot study, and a component that fails to earn its place gets deleted rather than reported. A component that only works when added in a particular order is not a component — hence the removal table is treated as the stronger evidence of the two.
 
 Component 6 (oriented boxes) is deliberately **not implemented**. Orientation only helps if annotations carry meaningful rotation — true for `SRSDD-v1.0` (six fine-grained ship classes) and `SAR-Ship-Dataset`, but not for SSDD/HRSID. The DOTA converter exists; the head does not, and will only be added if that experiment is actually run.
 
@@ -154,6 +155,7 @@ SAR image
 │   Component 8:  target prior modulation                     (TPM)    │
 │   Component 3:  SAR-adaptive attention                      (SAA)    │
 │   Component 10: context aggregation                         (CAG)    │
+│   Component 11: target-aware deformable refinement          (TADR)   │
 │               → Detect(P2, P3, P4, P5)  Component 5: P2 head         │
 └──────────────────────────────────────────────────────────────────────┘
    │
@@ -166,7 +168,7 @@ Component 7: SAR-aware loss
 Predictions
 ```
 
-The ordering of Components 8 / 3 / 10 is deliberate and load-bearing for the *target-aware* claim: the prior modulates the feature **first**, so attention and context both operate on target-modulated features rather than on raw ones. That is what makes "target-aware attention" a structural property of the graph here rather than a description of intent.
+The ordering of Components 8 / 3 / 10 / 11 is deliberate and load-bearing for the *target-aware* claim: the prior modulates the feature **first**, so attention, context and the deformable offsets all operate on target-modulated features rather than on raw ones. That is what makes "target-aware attention" and "target-aware refinement" structural properties of the graph here rather than descriptions of intent. Component 11 goes **last** because it is the only stage that moves where the feature is *sampled*; everything before it changes what the feature *contains*, and re-sampling an already-decided feature would undo that work.
 
 Full mathematics, derivations and pseudocode: [`docs/METHOD.md`](docs/METHOD.md).
 
@@ -174,15 +176,15 @@ Full mathematics, derivations and pseudocode: [`docs/METHOD.md`](docs/METHOD.md)
 
 ## Part III · The instrument
 
-![Measured identity-at-initialisation property for all seven modules](docs/assets/identity_property.svg)
+![Measured identity-at-initialisation property for all eight modules](docs/assets/identity_property.svg)
 
 ### The two guarantees the whole paper rests on
 
-**Guarantee 1 — exact identity at initialisation.** Every module returns `f(x) = x` **exactly**, not approximately, because its residual gate is zero-initialised (`out = x + 0 · branch`). A freshly built SAR-YOLO is therefore *numerically identical* to its baseline, and the measured deviation above is `0.0e+00` for all seven. Without this, a "module helps" result is confounded with "the extra layers happened to change the initial function". With it, a measured difference has exactly one available explanation: the module **learned** something.
+**Guarantee 1 — exact identity at initialisation.** Every module returns `f(x) = x` **exactly**, not approximately, because its residual gate is zero-initialised (`out = x + 0 · branch`). A freshly built SAR-YOLO is therefore *numerically identical* to its baseline, and the measured deviation above is `0.0e+00` for all eight. Without this, a "module helps" result is confounded with "the extra layers happened to change the initial function". With it, a measured difference has exactly one available explanation: the module **learned** something.
 
 **Guarantee 2 — the gate can actually open.** Identity comes from the gate *alone*, so the residual branch must **not** also be zero-initialised. That combination looks harmless and is fatal: with `branch = 0`, the gate gradient `dL/dα = ⟨dL/dout, branch⟩` is identically zero, so `α` never leaves 0 — and `dL/d(branch) = α · dL/dout` is zero for the same reason. Both vanish together, and the module stays a permanent no-op that passes every identity test.
 
-This is not hypothetical. It was a real bug in this repository: Component 1 zero-initialised **both** its gate and its residual conv, so its learned enhancement branch never trained at all. `+SFE` would have measured nothing but its two affine scalars, and nothing in a training log would have shown it. `test_no_module_is_frozen_at_init` now asserts a non-zero gate gradient for every learnable mode, and the pipeline smoke run confirms it dynamically — after two epochs, all **15 gate instances across all six module types** had left zero.
+This is not hypothetical. It was a real bug in this repository: Component 1 zero-initialised **both** its gate and its residual conv, so its learned enhancement branch never trained at all. `+SFE` would have measured nothing but its two affine scalars, and nothing in a training log would have shown it. `test_no_module_is_frozen_at_init` now asserts a non-zero gate gradient for every learnable mode, and the pipeline smoke run confirms it dynamically — after two epochs, all **25 gate instances across all eight module types** had left zero.
 
 Both values above are measured live by [`scripts/make_readme_assets.py`](scripts/make_readme_assets.py) and pinned by `tests/test_arch.py`.
 
@@ -192,9 +194,9 @@ Reading the chart:
 
 - **The baseline is reproduced exactly.** 2,624,080 params (n) and 9,458,752 (s) at 80 classes — Ultralytics' published counts, matched to the unit.
 - **+P2 head and FULL have identical bars.** The SAR-aware loss is an *objective*, not a layer. Component 7 costs **zero** parameters. That is precisely what makes it a clean ablation (EXP-008) — the architecture is frozen and only the training signal changes.
-- **AMF and the P2 head dominate the cost.** Together they account for most of the added compute, which is why each must earn its place in EXP-005 and EXP-006 before the FULL model is ever trained. The three v2 components cost comparatively little: +1.45M parameters and +4.08 GFLOPs between them, two-thirds of that in context aggregation alone.
+- **AMF and the P2 head dominate the cost.** Together they account for most of the added compute, which is why each must earn its place in EXP-005 and EXP-006 before the FULL model is ever trained. The four v2 components cost +1.99M parameters and +5.11 GFLOPs between them, and more than half of that is context aggregation alone.
 - **The spectral branch costs parameters but almost no compute.** Component 9 adds +0.103M and essentially **0 GFLOPs**, because it is placed on the deepest backbone stage (P5/32) where the FFT operates on the smallest feature map. The same module at P2/4 would cost roughly 64× more — the placement is a design decision, not an implementation detail.
-- **The v2 model is ~68% larger than the baseline and ~2.5× its compute.** That is a real cost, and the honest framing is that Components 8-10 have to pay for it in accuracy, AP_small and robustness, or be removed.
+- **The v2 model is ~72% larger than the baseline and ~2.57× its compute.** That is a real cost, and the honest framing is that Components 8-11 have to pay for it in accuracy, AP_small and robustness, or be removed.
 
 ![Parameters versus GFLOPs for each ladder step](docs/assets/accuracy_cost.svg)
 
@@ -212,7 +214,8 @@ Reading the chart:
 | + clutter | Component 2 ext. | 14.406 | +0.169 | 50.74 | +0.17 | +52.8% / +134.2% |
 | + prior | **Component 8** | 14.587 | +0.181 | 51.90 | +1.15 | +54.7% / +139.5% |
 | + freq | **Component 9** | 14.690 | +0.103 | 51.90 | **+0.00** | +55.8% / +139.5% |
-| **FULL v2** | **Component 10** | **15.854** | **+1.163** | **54.65** | **+2.76** | **+68.2% / +152.2%** |
+| + context | **Component 10** | 15.854 | +1.164 | 54.65 | +2.75 | +68.2% / +152.2% |
+| **FULL v2** | **Component 11** | **16.230** | **+0.376** | **55.68** | **+1.03** | **+72.1% / +157.0%** |
 
 The story the table tells is uncomfortable and useful: **the two cheapest modules carry the physical insight, and the two most expensive carry the resolution.** If EXP-006 shows the P2 head does not move AP_small, the model drops back to 35 GFLOPs and a much stronger efficiency claim — for free.
 
@@ -245,23 +248,29 @@ The prior is the paper's central hypothesis, so it gets the most careful ablatio
 
 | Slot | Arm | Params (M) | What it isolates |
 | --- | --- | ---: | --- |
-| **Target prior** (8) | no modulation | 15.672 | the gate alone |
-| | CFAR statistic, no learning | 15.672 | is *learning* needed, or is local statistics enough? |
-| | learned, spatially uniform | 15.673 | +0.001M — one logit per channel, per level |
-| | learned, capacity-matched | 15.854 | **the same network as ours, pooled over space** |
-| | ours, spatial prior | 15.854 | *identical size to the row above* |
-| **Frequency** (9) | no branch / fixed high-pass | 15.751 | the fixed filter is a **buffer**: zero parameters |
-| | learned bands, input-independent | 15.755 | +0.004M: the bands are only `C × B` |
-| | ours, input-adaptive | 15.854 | +0.099M buys per-sample adaptation |
-| **Context** (10) | no context | 14.690 | |
-| | local (dilated) | 15.766 | |
-| | regional only | 14.777 | |
-| | ours, both extents | 15.854 | |
-| **Removal** | − clutter / − prior / − freq / − context | 15.685 / 15.672 / 15.751 / 14.690 | against full v2 at 15.854 |
+| **Target prior** (8) | no modulation | 16.048 | the gate alone |
+| | CFAR statistic, no learning | 16.048 | is *learning* needed, or is local statistics enough? |
+| | learned, spatially uniform | 16.049 | +0.001M — one logit per channel, per level |
+| | learned, capacity-matched | 16.230 | **the same network as ours, pooled over space** |
+| | ours, spatial prior | 16.230 | *identical size to the row above* |
+| **Frequency** (9) | no branch / fixed high-pass | 16.127 | the fixed filter is a **buffer**: zero parameters |
+| | learned bands, input-independent | 16.131 | +0.004M: the bands are only `C × B` |
+| | ours, input-adaptive | 16.230 | +0.099M buys per-sample adaptation |
+| **Context** (10) | no context | 15.066 | |
+| | local (dilated) | 16.142 | |
+| | regional only | 15.153 | |
+| | ours, both extents | 16.230 | |
+| **Refinement** (11) | no refinement | 15.854 | no mixing network and **no offset head** — 4 parameters heavier than deleting the module outright, and those 4 are only the gate scalars |
+| | local, no offsets | 16.212 | **the capacity control**: identical mixing network, grid never moves |
+| | learned offsets, input-independent | 16.212 | +**8** parameters over the row above, all of them the shared offset field |
+| | ours, input-adaptive offsets | 16.230 | +0.017M (17,288 params at scale `s`): the offset head is `C → 2` channels per level |
+| **Removal** | − clutter / − prior / − freq / − context / − refinement | 16.061 / 16.048 / 16.127 / 15.066 / 15.854 | against full v2 at 16.230 |
 
 The **capacity-matched** row is the methodological point. Comparing "learned spatial prior" against "uniform learned prior" would confound *spatial selectivity* with *parameter count* — the larger arm could win for reasons that have nothing to do with the hypothesis. `tp_channel` therefore uses the proposed arm's exact evidence network and averages its output over space, so the two arms are byte-for-byte the same size (asserted in `test_target_prior_arms_are_capacity_matched_where_claimed`) and differ in one respect only: whether the prior is allowed to vary across the image. If `tp_channel` matches `v2_full`, the spatial-prior claim is dead — and the paper must say so.
 
 The same discipline applies to Component 9. A zero-initialised spectral gain would mean `gain = 1`, so the filtered branch would equal its input and the gate gradient would vanish identically — the frozen-module failure again. The bands therefore start small-but-non-zero, and identity comes from the gate. The `sff` arm also starts numerically equal to `static`, so the difference between those two rows measures *input adaptivity* alone.
+
+Component 11 needs a control that is uncommon in detection papers, because "deformable convolution" comparisons usually give the proposed arm *both* a new network and a new operation. `rf_local` therefore keeps the identical mixing network and removes only the offsets, so `ours − local` is attributable to **deformation** rather than to the extra convolution. Two further tests make the mechanism falsifiable at the unit level: a zero offset field must reproduce `local` exactly up to float32 round-off (measured: `7e-7`), while a **0.04-cell** displacement moves the output by `0.4` — six orders of magnitude larger, so the tolerance is demonstrably not hiding a real shift. And the base grid's corners are asserted at exactly `(-1, -1)` and `(1, 1)`, which is what pins `align_corners` to the sampling convention rather than leaving it to chance.
 
 ![Test-suite composition across the repository's modules](docs/assets/tests.svg)
 
@@ -274,13 +283,15 @@ The same discipline applies to Component 9. A zero-initialised spectral gain wou
 | Check | Result | Evidence |
 | --- | --- | --- |
 | Baseline reproduces stock YOLO11 exactly | `2,624,080` (n), `9,458,752` (s) | `test_baseline_matches_stock_yolo11_parameter_count` |
-| All 58 architectures construct and forward | pass | `test_every_variant_builds_and_forwards` |
+| All 63 architectures construct and forward | pass | `test_every_variant_builds_and_forwards` |
 | Declared scales build at the right stride count | pass | `test_declared_scale_variants_build` |
-| Every SAR module is an **exact** identity at init | `max\|f(x)−x\| = 0.0e+00` ×7 | measured live + `test_each_module_is_exactly_identity_at_init` |
+| Every SAR module is an **exact** identity at init | `max\|f(x)−x\| = 0.0e+00` ×8 | measured live + `test_each_module_is_exactly_identity_at_init` |
 | **No module is silently frozen at init** | every learnable mode has a non-zero gate gradient | `test_no_module_is_frozen_at_init` |
-| **All gates leave zero during real training** | `15/15` non-zero after 2 epochs | `SMOKE-003` checkpoint (checked dynamically, not just statically) |
+| **All gates leave zero during real training** | `25/25` non-zero after 2 epochs | `SMOKE-003` checkpoint (checked dynamically, not just statically) |
+| Deformable refinement's grid identity is pinned | zero offset → `7e-7` dev; 0.04-cell shift → `0.4` | `test_refinement_resampling_is_an_identity_at_zero_offset` |
+| Offsets move the grid, and only in the adaptive arm | pass | `test_refinement_offsets_actually_move_the_sampling_grid`, `..._are_feature_adaptive_only_in_deform_mode` |
 | SAR-YOLO predicts identically to baseline at init | max abs diff `0.0` (v1 **and** v2) | `test_models_output_identically_to_baseline_at_init` |
-| Filenames cannot silently downgrade the scale | pass (58 variants) | `test_variant_filenames_encode_scale` |
+| Filenames cannot silently downgrade the scale | pass (63 variants) | `test_variant_filenames_encode_scale` |
 | Mode names cannot break the parser | pass (no keyword or `parse_model`-local collision) | `test_module_mode_names_are_safe_for_parse_model` |
 | Spectral branch is resolution- and AMP-safe | odd, non-square and fp16 inputs pass | `test_frequency_module_is_resolution_independent` |
 | Every ablation arm has a runnable config | pass | `test_every_ablation_arm_has_a_runnable_experiment_config` |
@@ -289,6 +300,7 @@ The same discipline applies to Component 9. A zero-initialised spectral gain wou
 | Baseline, FULL v1 and FULL v2 train end to end on CPU | all complete, ledger written | `_smoke_*` configs |
 | COCO matcher agrees with hand-computed cases | pass | `tests/test_metrics.py` |
 | No table can emit an unmeasured number | pass | `tests/test_repo.py` |
+| The README cost table matches the measured models | pass | `test_readme_cost_table_matches_the_measured_models` |
 | Oriented (9-field) labels are diagnosed, not dropped | reported as `oriented_labels` | `test_validator_diagnoses_oriented_labels_...` |
 | A dataset cannot validate clean while its boxes are unreadable | pass | same test |
 | Malformed VOC XML cannot abort a batch conversion | counted as `skipped_annotations` | `test_voc_converter_survives_malformed_annotations` |
@@ -312,7 +324,9 @@ Every experiment below is **code-complete and reproducible from a committed conf
 | + clutter-aware | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
 | + target prior | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
 | + spatial-frequency | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
+| + context | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
 | **SAR-YOLO v2 (FULL)** | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
+| − refinement (removal) | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
 
 `TBD` is rendered by the generator, not typed by hand. Fill these by running the notebooks on a GPU — the grid above fills itself in from the ledger.
 
@@ -363,7 +377,7 @@ uv pip install --python .venv/bin/python torch torchvision --index-url https://d
 uv pip install --python .venv/bin/python ultralytics pytest
 source .venv/bin/activate
 
-pytest tests/ -q                                          # 82 tests
+pytest tests/ -q                                          # 91 tests
 python -m saryolo arch --variant all --nc 1               # emit 35 model YAMLs
 python -m saryolo synth-data --out datasets/processed/synthetic_smoke
 python -m saryolo train --exp configs/exp/_smoke_baseline.yaml
@@ -420,7 +434,8 @@ python scripts/train_all_experiments.py --keep-going
 | EXP-013 | + clutter-aware SFM | Component 2 extension: clutter modelled separately from speckle |
 | EXP-014 | + target prior | **Component 8**, the central hypothesis |
 | EXP-015 | + spatial-frequency | **Component 9** |
-| EXP-016 | **FULL SAR-YOLO v2** | **Component 10** — the v2 reference model |
+| EXP-016 | + context | **Component 10** |
+| EXP-017 | **FULL SAR-YOLO v2** | **Component 11** — the v2 reference model |
 
 ### Module-level ablations (`EXP-2xx`)
 
@@ -435,7 +450,8 @@ Every arm below sits in the *same slot* with every other component held fixed, a
 | `EXP-251…255` | target prior (8) | none · CFAR · uniform · **capacity-matched** · ours-spatial |
 | `EXP-261…264` | frequency (9) | none · fixed high-pass · learned bands · ours-adaptive |
 | `EXP-271…274` | context (10) | none · local · regional · ours-both |
-| `EXP-281…284` | removal | −clutter · −prior · −freq · −context (against full v2) |
+| `EXP-281…285` | removal | −clutter · −prior · −freq · −context · −refinement (against full v2) |
+| `EXP-291…294` | refinement (11) | none · **local (capacity control)** · fixed offsets · ours-adaptive |
 
 Configs are generated, not written by hand:
 
@@ -450,7 +466,7 @@ python scripts/make_exp_configs.py --dataset ssdd   # writes configs/exp/EXP-0xx
 ```
 saryolo/
 ├── nn/
-│   ├── arch.py            symbolic builder: 58 variants, all indices computed
+│   ├── arch.py            symbolic builder: 63 variants, all indices computed
 │   ├── modules/
 │   │   ├── enhancement.py SFE (Comp 1) + log / standardize / CLAHE baselines
 │   │   ├── speckle.py     SFM (Comp 2) + Lee / low-pass + clutter-aware mode
@@ -459,6 +475,7 @@ saryolo/
 │   │   ├── target_prior.py TPM (Comp 8) + cfar / uniform / capacity-matched arms
 │   │   ├── frequency.py   SFR (Comp 9) + fixed-high-pass / non-adaptive arms
 │   │   ├── context.py     CAG (Comp 10) + local-only / regional-only arms
+│   │   ├── refinement.py  TADR (Comp 11) + local / fixed-offset control arms
 │   │   └── _common.py     shared primitives + the module contract (identity, gradients)
 │   ├── losses.py          SAR-aware loss (Comp 7)
 │   ├── model.py           DetectionModel carrying the SAR criterion
@@ -466,16 +483,16 @@ saryolo/
 ├── data/                  registry · converters · validator · statistics · leakage
 ├── training/              trainer · experiment runner · config loader
 ├── evaluation/            COCO AP + scale-wise AP · robustness · efficiency · domain shift
-├── visualization/         detections · Grad-CAM · feature maps · failure taxonomy
+├── visualization/         detections · Grad-CAM (all 8 modules) · feature maps · failure taxonomy
 ├── tracking/              append-only ledger + environment capture
 ├── paper/                 LaTeX + table/figure generators (cannot fabricate)
 └── cli.py                 python -m saryolo <command>
 
-configs/    datasets/ · models/ (58 generated) · exp/ (EXP-001…016 + EXP-2xx ablations)
+configs/    datasets/ · models/ (63 generated) · exp/ (EXP-001…017 + EXP-2xx ablations)
 scripts/    prepare_dataset · make_exp_configs · train_all_experiments
             make_readme_assets (builds this page's charts) · check_chart_layout
 notebooks/  Colab: dataset prep · train + ablate · benchmark + paper
-tests/      82 tests across arch parity, identity, gradient flow, metrics, losses, data, repo
+tests/      91 tests across arch parity, identity, gradient flow, metrics, losses, data, repo
 docs/       DATASETS.md · METHOD.md · assets/ (generated charts)
 ```
 
@@ -505,13 +522,15 @@ The ledger is **append-only**. A rerun never overwrites an earlier result, and f
 ## Known limitations, stated up front
 
 - **No real-dataset accuracy exists yet.** Everything in Part IV is infrastructure validation.
-- **The adaptive-vs-static rows are load-bearing.** If `att_saa_static` matches `att_saa`, the adaptivity claim is unsupported and the paper must say so. The same applies to `tp_channel` vs `v2_full` for the target prior, and `fr_static` vs `v2_full` for the spectral branch.
-- **Components 8-10 are unvalidated and may not survive.** They exist because v1 leaves three failures unaddressed, not because they are expected to help. v2 is ~68% larger and ~2.5× the compute of the baseline, so the removal ablation (`EXP-281…284`) can and should delete any component that does not pay for itself. A shorter, cheaper model is a *better* result, not a failure.
+- **The adaptive-vs-static rows are load-bearing.** If `att_saa_static` matches `att_saa`, the adaptivity claim is unsupported and the paper must say so. The same applies to `tp_channel` vs `v2_full` for the target prior, `fr_static` vs `v2_full` for the spectral branch, and `rf_local` vs `v2_full` for the deformable refinement.
+- **Components 8-11 are unvalidated and may not survive.** They exist because v1 leaves four failures unaddressed, not because they are expected to help. v2 is ~72% larger and ~2.57× the compute of the baseline, so the removal ablation (`EXP-281…285`) can and should delete any component that does not pay for itself. A shorter, cheaper model is a *better* result, not a failure.
+- **The deformable offset bound is being saturated and needs a sweep.** In the 2-epoch smoke run the learned offsets already reached `|d| ≈ 0.47` against the `max_offset = 0.5` bound, which means the tanh is operating where its gradient is smallest (`1 − tanh² ≈ 0.11`). That is either the model asking for a larger search radius or a bound set too tight, and the two have opposite fixes — so `max_offset` is a hyperparameter to sweep (a committed variant per value), not a constant to leave untuned.
 - **The v2 clutter mode is a mode change, not a new slot**, so EXP-013 adds no module: it changes Component 2's speckle estimator into a three-branch target/speckle/clutter form. Its ablation is the `- clutter` row, not a slot study.
 - **HRSID and SAR-Ship-Dataset leak under random chip splits** — chips are cut from a few large scenes. `saryolo.data.splits.leakage_report` exists to catch this; a scene-grouped split is required before trusting mAP on those datasets.
 - **Scale-wise AP here is our own implementation**, with deviations from pycocotools documented in `saryolo/evaluation/metrics.py`.
 - **Cross-dataset evaluation refuses to run on incompatible label spaces**, rather than reporting a meaningless low mAP.
 - **Oriented detection (Component 6) is unimplemented.** The DOTA converter exists; the head does not.
+- **Cross-level scale routing is not implemented, and could not be without patching the parser.** A stage that reweights P2-P5 jointly against one shared prior needs a module consumed by several feature maps. `parse_model` resolves an unknown module's output channels with `c2 = ch[f]`, which raises `TypeError` for a list `from`, and naming a `Detect` subclass as the head fails too because the head branch is a `frozenset` *identity* test. Both were verified empirically rather than assumed. Component 11 is therefore *per-level* refinement, and the plan's "target-aware dynamic scale routing" is reported as unimplemented rather than faked per-level and described as cross-level.
 
 ## License
 

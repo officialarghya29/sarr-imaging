@@ -21,11 +21,15 @@ FIGURE_PLAN: dict[str, str] = {
     "fig4_attention": "SAA diagram (drawn manually)",
     "fig5_fusion": "AMF diagram (drawn manually)",
     "fig6_small_object": "P2 head diagram (drawn manually)",
-    "fig7_qualitative": "GT vs baseline vs SAR-YOLO panels (saryolo.visualization.detections)",
-    "fig8_attention_maps": "Grad-CAM / feature maps (saryolo.visualization.attention_maps)",
-    "fig9_robustness": "robustness.json from both models",
-    "fig10_accuracy_efficiency": "ledger efficiency + mAP for both models",
-    "fig11_failures": "failure taxonomy counts (saryolo.visualization.error_analysis)",
+    "fig7_prior": "TPM diagram: signed target prior (Component 8, drawn manually)",
+    "fig8_spectral": "SFR diagram: radial bands (Component 9, drawn manually)",
+    "fig9_context": "CAG diagram: local + regional extents (Component 10, drawn manually)",
+    "fig10_refinement": "TADR diagram: bounded deformable resampling (Component 11, drawn manually)",
+    "fig11_qualitative": "GT vs baseline vs SAR-YOLO panels (saryolo.visualization.detections)",
+    "fig12_attention_maps": "Grad-CAM / feature maps (saryolo.visualization.attention_maps)",
+    "fig13_robustness": "robustness.json from both models",
+    "fig14_accuracy_efficiency": "ledger efficiency + mAP for both models",
+    "fig15_failures": "failure taxonomy counts (saryolo.visualization.error_analysis)",
 }
 
 

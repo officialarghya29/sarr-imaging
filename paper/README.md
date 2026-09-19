@@ -66,14 +66,15 @@ requires, so a figure cannot be drawn before its experiment exists:
 | Figure | Content | Data source |
 | --- | --- | --- |
 | 1 | Motivation: speckle, clutter, low contrast, small targets | `dataset_statistics/` |
-| 2–6 | Architecture and each module | drawn manually (TikZ / diagram tool) |
-| 7 | Qualitative: GT vs baseline vs SAR-YOLO | `saryolo.visualization.detections` |
-| 8 | Grad-CAM / feature maps | `saryolo.visualization.attention_maps` |
-| 9 | Robustness curves | `results/robustness/robustness.json` |
-| 10 | mAP vs FPS / params / FLOPs | ledger |
-| 11 | Failure taxonomy | `saryolo.visualization.error_analysis` |
+| 2–6 | v1 architecture and modules (SFE, SFM, SAA, AMF, P2 head) | drawn manually (TikZ / diagram tool) |
+| 7–10 | v2 modules (target prior, spectral branch, context, deformable refinement) | drawn manually (TikZ / diagram tool) |
+| 11 | Qualitative: GT vs baseline vs SAR-YOLO | `saryolo.visualization.detections` |
+| 12 | Grad-CAM / feature maps | `saryolo.visualization.attention_maps` |
+| 13 | Robustness curves | `results/robustness/robustness.json` |
+| 14 | mAP vs FPS / params / FLOPs | ledger |
+| 15 | Failure taxonomy | `saryolo.visualization.error_analysis` |
 
-Architecture diagrams (Figures 2–6) are intentionally *not* auto-generated:
+Architecture diagrams (Figures 2–10) are intentionally *not* auto-generated:
 a generated block diagram is rarely publication quality. The module docstrings in
 `docs/METHOD.md` contain the exact equations and data flow those diagrams should
 depict.

@@ -397,6 +397,78 @@ local.
 
 ---
 
+## Component 11 — Target-Aware Deformable Refinement (TADR)
+
+Components 1-10 change *what a feature contains*. None of them changes *where it
+is sampled*. A detector that only reweights its features is still bound to the
+alignment the backbone's fixed grid produced, and in SAR that alignment is
+frequently poor at the target: a ship's wake, a harbour wall or a speckle spike
+pulls the local statistics around, so the strongest response at a cell often
+belongs to a neighbouring clutter pixel rather than to the target itself.
+
+TADR gives every cell a bounded, learned opportunity to look somewhere else:
+
+```
+d      = Delta(F)                            offsets, (B, 2, H, W)
+d      = s * tanh(d)                         bounded to |d| <= s
+F~     = grid_sample(F, G_base + d)          differentiable bilinear resample
+F'     = mix(F~)                             depth-wise 3x3 + BN + SiLU, 1x1 mix
+out    = F + alpha * (F' - F)                alpha = 0 at init => identity
+```
+
+with `G_base` the identity grid (`linspace(-1, 1)` per axis, `align_corners=True`),
+so `d = 0` is exactly the original sampling position. `s` is `max_offset`, the
+search radius in normalised grid units (1.0 = half the feature map).
+
+**Why this is a distinct mechanism, not more attention.** The three candidates are
+separable on paper and in the ablation:
+
+| Stage | Acts on the feature by | Isolated by |
+| --- | --- | --- |
+| Attention (3) | multiplicative gate at each cell | `att_saa_static` |
+| Context (10) | additive field aggregated *around* each cell | `cx_local` / `cx_regional` |
+| Refinement (11) | changing *where* the value is read from | `rf_local` |
+
+The distinction matters because a deformable arm is usually credited for two
+effects at once: the new operation *and* the extra network that predicts it. The
+`rf_local` control therefore keeps the identical mixing sub-network and removes
+only the offsets, so `ours − local` measures deformation alone -- the same
+discipline applied to the prior's capacity-matched control.
+
+**Wiring.** TADR is the last module before each level's head, and it is placed
+*after* Component 8 by construction, so its offsets are predicted from an
+already prior-modulated feature. The "target-aware" conditioning is thus
+structural (the feature it deforms already carries the prior) rather than a second
+evidence network, which would duplicate Component 8's computation and confound the
+two ablations.
+
+**Ablation:** `rf_none` (no refinement, and *no allocated network*), `rf_local`
+(capacity control), `rf_static` (learned but input-independent offsets, which
+isolates content-adaptive sampling from learned sampling), `deform` (proposed), and
+the removal row `v2_norefine`.
+
+**Open item that the smoke run surfaced.** After two epochs of smoke training the
+learned offsets reached `|d| ~ 0.47` against a bound of `s = 0.5`, i.e. the tanh is
+saturated where its derivative is smallest (`1 - tanh^2 ~ 0.11`). Either the model
+wants a larger search radius or the bound was set too tight, and the two have
+opposite fixes; `max_offset` is therefore a hyperparameter to sweep rather than a
+constant, and no claim in the paper should rest on the value currently in the YAML.
+
+**Not implemented: cross-level scale routing.** The plan's "target-aware dynamic
+scale routing" would reweight P2-P5 jointly against one shared prior. That needs a
+module consuming several feature maps, which this repository's model YAMLs cannot
+express -- verified, not assumed. `parse_model` resolves an unknown module's output
+channels with `c2 = ch[f]`, so a list `from` raises `TypeError: list indices must be
+integers or slices, not list`; and naming a `Detect` subclass as the head fails
+because the head branch is a `frozenset` *identity* test, so the subclass never
+receives `[reg_max, end2end, ch_list]` and dies with `IndexError: tuple index out of
+range`. Supporting it would mean patching `parse_model`, which this project avoids
+so that the stock summary, FLOPs counter, validator and checkpointing keep working.
+Component 11 is therefore *per-level* refinement, and the routing idea is reported
+as unimplemented.
+
+---
+
 ## Evaluation protocol
 
 * **mAP50 / mAP50:95** via a self-contained COCO-protocol implementation
