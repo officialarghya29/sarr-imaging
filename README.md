@@ -8,7 +8,7 @@
 | --- | --- |
 | **Licence** | MIT for the code — datasets are never redistributed |
 | **Stack** | Python 3.10+ · Ultralytics 8.4.155 · PyTorch 2.x |
-| **Architectures** | 35 variants wired; every one builds and runs a forward pass |
+| **Architectures** | 58 variants wired; every one builds and runs a forward pass |
 | **Experiments** | 12 configured; each reproducible from a committed YAML |
 | **Tests** | 66 passing — no dataset download and no GPU needed |
 | **Accuracy results** | none yet — not one number in this repository is fabricated |
@@ -19,8 +19,8 @@
 
 | | |
 | --- | --- |
-| **What this is** | A complete, reproducible research pipeline for SAR object detection: dataset audit → baseline → four SAR-specific modules → ablations → robustness → efficiency → cross-dataset → paper. |
-| **What is proven** | The infrastructure. 66 tests pass; the baseline reproduces stock YOLO11 exactly; every module is measurably an identity function at initialisation; both models train end to end. |
+| **What this is** | A complete, reproducible research pipeline for SAR object detection: dataset audit → baseline → ten documented components → ablations → removal tests → robustness → efficiency → cross-dataset → paper. |
+| **What is proven** | The infrastructure. 82 tests pass; the baseline reproduces stock YOLO11 exactly; all seven modules are measurably identity functions at initialisation *and* demonstrably not frozen; every model trains end to end. |
 | **What is *not* proven** | Accuracy. **No model has been trained on a real SAR dataset in this repository.** There is no result table here with numbers in it, and the table generators refuse to print one. |
 | **Why that's the point** | A detector paper is only as strong as its ablations. If the machinery that produces those ablations cannot be trusted, every number downstream is unverifiable. Build the instrument first. |
 
@@ -111,6 +111,22 @@ Each component exists to answer one row of this table. No component exists becau
 | 5 | Objects vanish below stride | P2 high-resolution detection level | **P2 head** | AP_small does not move |
 | 7 | Background gradient dominates | Target/background separation + small-object term | **SAR loss** | EXP-008 (architecture held fixed) |
 
+### v2: three failures v1 leaves unaddressed
+
+| # | Observed failure | Mechanism | Component | Ablation that could kill it |
+| --- | --- | --- | --- | --- |
+| 8 | Target information is mixed with clutter | A signed, content-adaptive target prior that **modulates** the feature | **TPM** | loses to the CFAR statistic, to a uniform prior, or to its capacity-matched control |
+| 9 | Speckle is broadband; convolution is low-pass-biased | Learnable *radial* spectral filter, adapted per sample | **SFR** | loses to a fixed high-pass, or to non-adaptive bands |
+| 10 | Local appearance cannot separate look-alikes | Multi-extent dilated + regional context residual | **CAG** | loses to local-only / regional-only, or does not survive removal |
+
+**Component numbering**, used consistently across the code, the docs and the paper:
+
+| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| SFE | SFM | SAA | AMF | P2 head | oriented *(planned)* | SAR loss | TPM | SFR | CAG |
+
+Components 1-7 are the **v1** model (EXP-001…007). Components 8-10, plus the clutter-aware mode of Component 2, are the **v2 extension** (EXP-013…016). They are not assumed to help: each has a removal ablation (`v2_noprior`, `v2_nofreq`, `v2_noctx`) *and* a slot study, and a component that fails to earn its place gets deleted rather than reported. A component that only works when added in a particular order is not a component — hence the removal table is treated as the stronger evidence of the two.
+
 Component 6 (oriented boxes) is deliberately **not implemented**. Orientation only helps if annotations carry meaningful rotation — true for `SRSDD-v1.0` (six fine-grained ship classes) and `SAR-Ship-Dataset`, but not for SSDD/HRSID. The DOTA converter exists; the head does not, and will only be added if that experiment is actually run.
 
 ```text
@@ -122,6 +138,7 @@ SAR image
 │   P2/4  ──► Component 1: SAR Feature Enhancement            (SFE)    │
 │   P3/8, P4/16, P5/32, SPPF/C2PSA                                     │
 │   P5/32 ──► Component 2: Speckle-Aware Feature Module       (SFM)    │
+│   P5/32 ──► Component 9: Spatial-Frequency Representation   (SFR)    │
 └──────────────────────────────────────────────────────────────────────┘
    │
    ▼
@@ -133,7 +150,10 @@ SAR image
    │
    ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│ per level ──► Component 3: SAR-Adaptive Attention           (SAA)    │
+│ per detection level, applied in this order:                          │
+│   Component 8:  target prior modulation                     (TPM)    │
+│   Component 3:  SAR-adaptive attention                      (SAA)    │
+│   Component 10: context aggregation                         (CAG)    │
 │               → Detect(P2, P3, P4, P5)  Component 5: P2 head         │
 └──────────────────────────────────────────────────────────────────────┘
    │
@@ -146,19 +166,25 @@ Component 7: SAR-aware loss
 Predictions
 ```
 
+The ordering of Components 8 / 3 / 10 is deliberate and load-bearing for the *target-aware* claim: the prior modulates the feature **first**, so attention and context both operate on target-modulated features rather than on raw ones. That is what makes "target-aware attention" a structural property of the graph here rather than a description of intent.
+
 Full mathematics, derivations and pseudocode: [`docs/METHOD.md`](docs/METHOD.md).
 
 ---
 
 ## Part III · The instrument
 
-![Measured identity-at-initialisation property for all four modules](docs/assets/identity_property.svg)
+![Measured identity-at-initialisation property for all seven modules](docs/assets/identity_property.svg)
 
-### The single guarantee the whole paper rests on
+### The two guarantees the whole paper rests on
 
-Every module is initialised so that `f(x) = x` **exactly** — not approximately. Zero-initialised output projections and zero gates make each module a no-op at step 0, so a freshly built SAR-YOLO is *numerically identical* to its baseline.
+**Guarantee 1 — exact identity at initialisation.** Every module returns `f(x) = x` **exactly**, not approximately, because its residual gate is zero-initialised (`out = x + 0 · branch`). A freshly built SAR-YOLO is therefore *numerically identical* to its baseline, and the measured deviation above is `0.0e+00` for all seven. Without this, a "module helps" result is confounded with "the extra layers happened to change the initial function". With it, a measured difference has exactly one available explanation: the module **learned** something.
 
-This matters more than it sounds. Without it, a "module helps" result is confounded with "the extra layers happened to change the initial function". With it, a measured difference has exactly one available explanation: the module **learned** something. The values above are measured live by [`scripts/make_readme_assets.py`](scripts/make_readme_assets.py), and pinned by `tests/test_arch.py`.
+**Guarantee 2 — the gate can actually open.** Identity comes from the gate *alone*, so the residual branch must **not** also be zero-initialised. That combination looks harmless and is fatal: with `branch = 0`, the gate gradient `dL/dα = ⟨dL/dout, branch⟩` is identically zero, so `α` never leaves 0 — and `dL/d(branch) = α · dL/dout` is zero for the same reason. Both vanish together, and the module stays a permanent no-op that passes every identity test.
+
+This is not hypothetical. It was a real bug in this repository: Component 1 zero-initialised **both** its gate and its residual conv, so its learned enhancement branch never trained at all. `+SFE` would have measured nothing but its two affine scalars, and nothing in a training log would have shown it. `test_no_module_is_frozen_at_init` now asserts a non-zero gate gradient for every learnable mode, and the pipeline smoke run confirms it dynamically — after two epochs, all **15 gate instances across all six module types** had left zero.
+
+Both values above are measured live by [`scripts/make_readme_assets.py`](scripts/make_readme_assets.py) and pinned by `tests/test_arch.py`.
 
 ![Measured parameter cost of every module in the ablation ladder](docs/assets/ladder_params.svg)
 
@@ -166,7 +192,9 @@ Reading the chart:
 
 - **The baseline is reproduced exactly.** 2,624,080 params (n) and 9,458,752 (s) at 80 classes — Ultralytics' published counts, matched to the unit.
 - **+P2 head and FULL have identical bars.** The SAR-aware loss is an *objective*, not a layer. Component 7 costs **zero** parameters. That is precisely what makes it a clean ablation (EXP-008) — the architecture is frozen and only the training signal changes.
-- **AMF and the P2 head dominate the cost.** Together they account for most of the added compute, which is why each must earn its place in EXP-005 and EXP-006 before the FULL model is ever trained.
+- **AMF and the P2 head dominate the cost.** Together they account for most of the added compute, which is why each must earn its place in EXP-005 and EXP-006 before the FULL model is ever trained. The three v2 components cost comparatively little: +1.45M parameters and +4.08 GFLOPs between them, two-thirds of that in context aggregation alone.
+- **The spectral branch costs parameters but almost no compute.** Component 9 adds +0.103M and essentially **0 GFLOPs**, because it is placed on the deepest backbone stage (P5/32) where the FFT operates on the smallest feature map. The same module at P2/4 would cost roughly 64× more — the placement is a design decision, not an implementation detail.
+- **The v2 model is ~68% larger than the baseline and ~2.5× its compute.** That is a real cost, and the honest framing is that Components 8-10 have to pay for it in accuracy, AP_small and robustness, or be removed.
 
 ![Parameters versus GFLOPs for each ladder step](docs/assets/accuracy_cost.svg)
 
@@ -180,7 +208,11 @@ Reading the chart:
 | + SAA | Component 3 | 10.037 | +0.164 | 22.70 | +0.10 | +6.5% params · +4.8% compute |
 | + AMF | Component 4 | 13.840 | +3.802 | 35.21 | +12.52 | +47% params · +62% compute |
 | + P2 head | Component 5 | 14.237 | +0.398 | 50.57 | **+15.36** | +51% params · **+133% compute** |
-| **FULL** | + SAR loss | **14.237** | **+0.000** | **50.57** | **+0.00** | **+0.0%** — the loss is parameter-free |
+| FULL v1 | + SAR loss | 14.237 | +0.000 | 50.57 | +0.00 | +51.0% params / +133.4% compute — the loss is parameter-free |
+| + clutter | Component 2 ext. | 14.406 | +0.169 | 50.74 | +0.17 | +52.8% / +134.2% |
+| + prior | **Component 8** | 14.587 | +0.181 | 51.90 | +1.15 | +54.7% / +139.5% |
+| + freq | **Component 9** | 14.690 | +0.103 | 51.90 | **+0.00** | +55.8% / +139.5% |
+| **FULL v2** | **Component 10** | **15.854** | **+1.163** | **54.65** | **+2.76** | **+68.2% / +152.2%** |
 
 The story the table tells is uncomfortable and useful: **the two cheapest modules carry the physical insight, and the two most expensive carry the resolution.** If EXP-006 shows the P2 head does not move AP_small, the model drops back to 35 GFLOPs and a much stronger efficiency claim — for free.
 
@@ -205,6 +237,32 @@ The claim is never *"attention helps"*. It is *"our block beats SE, ECA and CBAM
 
 Two facts worth stating plainly. **The classical arms are parameter-free**, so the proposed SFM cannot justify itself on elegance — only on measured accuracy. And the adaptive vs. static rows are the load-bearing experiments: if `att_saa_static` matches `att_saa`, the adaptivity claim is unsupported and the paper must say so.
 
+![Slot-matched module ablations for the v2 components](docs/assets/slot_ablations_v2.svg)
+
+### The v2 slots, and the control that makes the central claim testable
+
+The prior is the paper's central hypothesis, so it gets the most careful ablation of anything here. The question is not "does a prior help?" but "does *learning a spatially varying* prior help, beyond what cheaper alternatives achieve?" Three arms exist to make that answerable:
+
+| Slot | Arm | Params (M) | What it isolates |
+| --- | --- | ---: | --- |
+| **Target prior** (8) | no modulation | 15.672 | the gate alone |
+| | CFAR statistic, no learning | 15.672 | is *learning* needed, or is local statistics enough? |
+| | learned, spatially uniform | 15.673 | +0.001M — one logit per channel, per level |
+| | learned, capacity-matched | 15.854 | **the same network as ours, pooled over space** |
+| | ours, spatial prior | 15.854 | *identical size to the row above* |
+| **Frequency** (9) | no branch / fixed high-pass | 15.751 | the fixed filter is a **buffer**: zero parameters |
+| | learned bands, input-independent | 15.755 | +0.004M: the bands are only `C × B` |
+| | ours, input-adaptive | 15.854 | +0.099M buys per-sample adaptation |
+| **Context** (10) | no context | 14.690 | |
+| | local (dilated) | 15.766 | |
+| | regional only | 14.777 | |
+| | ours, both extents | 15.854 | |
+| **Removal** | − clutter / − prior / − freq / − context | 15.685 / 15.672 / 15.751 / 14.690 | against full v2 at 15.854 |
+
+The **capacity-matched** row is the methodological point. Comparing "learned spatial prior" against "uniform learned prior" would confound *spatial selectivity* with *parameter count* — the larger arm could win for reasons that have nothing to do with the hypothesis. `tp_channel` therefore uses the proposed arm's exact evidence network and averages its output over space, so the two arms are byte-for-byte the same size (asserted in `test_target_prior_arms_are_capacity_matched_where_claimed`) and differ in one respect only: whether the prior is allowed to vary across the image. If `tp_channel` matches `v2_full`, the spatial-prior claim is dead — and the paper must say so.
+
+The same discipline applies to Component 9. A zero-initialised spectral gain would mean `gain = 1`, so the filtered branch would equal its input and the gate gradient would vanish identically — the frozen-module failure again. The bands therefore start small-but-non-zero, and identity comes from the gate. The `sff` arm also starts numerically equal to `static`, so the difference between those two rows measures *input adaptivity* alone.
+
 ![Test-suite composition across the repository's modules](docs/assets/tests.svg)
 
 ---
@@ -216,13 +274,19 @@ Two facts worth stating plainly. **The classical arms are parameter-free**, so t
 | Check | Result | Evidence |
 | --- | --- | --- |
 | Baseline reproduces stock YOLO11 exactly | `2,624,080` (n), `9,458,752` (s) | `test_baseline_matches_stock_yolo11_parameter_count` |
-| All 35 architectures construct and forward | pass | `test_every_variant_builds_and_forwards` |
+| All 58 architectures construct and forward | pass | `test_every_variant_builds_and_forwards` |
 | Declared scales build at the right stride count | pass | `test_declared_scale_variants_build` |
-| Every SAR module is an **exact** identity at init | `max\|f(x)−x\| = 0.0e+00` ×4 | measured live + `test_each_module_is_exactly_identity_at_init` |
-| SAR-YOLO predicts identically to baseline at init | max abs diff `0.0` | `test_models_output_identically_to_baseline_at_init` |
-| Filenames cannot silently downgrade the scale | pass (35 variants) | `test_variant_filenames_encode_scale` |
-| SAR-aware loss reaches the optimiser | `train/sar_loss`, `val/sar_loss` non-zero | smoke run log |
-| Baseline + FULL train end to end on CPU | both complete, ledger written | `_smoke_*` configs |
+| Every SAR module is an **exact** identity at init | `max\|f(x)−x\| = 0.0e+00` ×7 | measured live + `test_each_module_is_exactly_identity_at_init` |
+| **No module is silently frozen at init** | every learnable mode has a non-zero gate gradient | `test_no_module_is_frozen_at_init` |
+| **All gates leave zero during real training** | `15/15` non-zero after 2 epochs | `SMOKE-003` checkpoint (checked dynamically, not just statically) |
+| SAR-YOLO predicts identically to baseline at init | max abs diff `0.0` (v1 **and** v2) | `test_models_output_identically_to_baseline_at_init` |
+| Filenames cannot silently downgrade the scale | pass (58 variants) | `test_variant_filenames_encode_scale` |
+| Mode names cannot break the parser | pass (no keyword or `parse_model`-local collision) | `test_module_mode_names_are_safe_for_parse_model` |
+| Spectral branch is resolution- and AMP-safe | odd, non-square and fp16 inputs pass | `test_frequency_module_is_resolution_independent` |
+| Every ablation arm has a runnable config | pass | `test_every_ablation_arm_has_a_runnable_experiment_config` |
+| No table row names a non-existent model | pass | `test_paper_table_rows_reference_real_models` |
+| SAR-aware loss reaches the optimiser | `train/sar_loss`, `val/sar_loss` non-zero | smoke run logs |
+| Baseline, FULL v1 and FULL v2 train end to end on CPU | all complete, ledger written | `_smoke_*` configs |
 | COCO matcher agrees with hand-computed cases | pass | `tests/test_metrics.py` |
 | No table can emit an unmeasured number | pass | `tests/test_repo.py` |
 | Oriented (9-field) labels are diagnosed, not dropped | reported as `oriented_labels` | `test_validator_diagnoses_oriented_labels_...` |
@@ -244,7 +308,11 @@ Every experiment below is **code-complete and reproducible from a committed conf
 | + SAA | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
 | + AMF | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
 | + P2 head | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
-| **SAR-YOLO (FULL)** | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
+| **SAR-YOLO v1 (FULL)** | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
+| + clutter-aware | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
+| + target prior | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
+| + spatial-frequency | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
+| **SAR-YOLO v2 (FULL)** | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
 
 `TBD` is rendered by the generator, not typed by hand. Fill these by running the notebooks on a GPU — the grid above fills itself in from the ledger.
 
@@ -295,7 +363,7 @@ uv pip install --python .venv/bin/python torch torchvision --index-url https://d
 uv pip install --python .venv/bin/python ultralytics pytest
 source .venv/bin/activate
 
-pytest tests/ -q                                          # 66 tests
+pytest tests/ -q                                          # 82 tests
 python -m saryolo arch --variant all --nc 1               # emit 35 model YAMLs
 python -m saryolo synth-data --out datasets/processed/synthetic_smoke
 python -m saryolo train --exp configs/exp/_smoke_baseline.yaml
@@ -349,8 +417,31 @@ python scripts/train_all_experiments.py --keep-going
 | EXP-010 | Efficiency benchmark | params, FLOPs, FPS, latency, memory |
 | EXP-011 | Cross-dataset | domain shift |
 | EXP-012 | Multi-seed (0, 1, 2) | mean ± std |
+| EXP-013 | + clutter-aware SFM | Component 2 extension: clutter modelled separately from speckle |
+| EXP-014 | + target prior | **Component 8**, the central hypothesis |
+| EXP-015 | + spatial-frequency | **Component 9** |
+| EXP-016 | **FULL SAR-YOLO v2** | **Component 10** — the v2 reference model |
 
-Plus module-level ablations — `att_se`, `att_eca`, `att_cbam`, `att_saa_static`, `fus_concat`, `fus_add`, `fus_static`, `spk_lee`, `spk_denoise`, `pre_log`, `pre_clahe`, `pre_standardize` — so every proposed block faces the standard component it aims to replace.
+### Module-level ablations (`EXP-2xx`)
+
+Every arm below sits in the *same slot* with every other component held fixed, and every arm has a runnable config — not just a model YAML:
+
+| Range | Slot | Arms |
+| --- | --- | --- |
+| `EXP-211…216` | attention (3) | none · SE · ECA · CBAM · ours-static · ours-adaptive |
+| `EXP-221…224` | fusion (4) | Concat · projected-Add · ours-static · ours-adaptive |
+| `EXP-231…234` | speckle (2) | none · Lee · low-pass · ours-SFM |
+| `EXP-241…245` | enhancement (1) | identity · log · CLAHE · local-std · ours-SFE |
+| `EXP-251…255` | target prior (8) | none · CFAR · uniform · **capacity-matched** · ours-spatial |
+| `EXP-261…264` | frequency (9) | none · fixed high-pass · learned bands · ours-adaptive |
+| `EXP-271…274` | context (10) | none · local · regional · ours-both |
+| `EXP-281…284` | removal | −clutter · −prior · −freq · −context (against full v2) |
+
+Configs are generated, not written by hand:
+
+```bash
+python scripts/make_exp_configs.py --dataset ssdd   # writes configs/exp/EXP-0xx_* and EXP-2xx_*
+```
 
 ---
 
@@ -359,12 +450,16 @@ Plus module-level ablations — `att_se`, `att_eca`, `att_cbam`, `att_saa_static
 ```
 saryolo/
 ├── nn/
-│   ├── arch.py            symbolic builder: 35 variants, all indices computed
+│   ├── arch.py            symbolic builder: 58 variants, all indices computed
 │   ├── modules/
 │   │   ├── enhancement.py SFE (Comp 1) + log / standardize / CLAHE baselines
-│   │   ├── speckle.py     SFM (Comp 2) + Lee / low-pass baselines
+│   │   ├── speckle.py     SFM (Comp 2) + Lee / low-pass + clutter-aware mode
 │   │   ├── attention.py   SAA (Comp 3) + SE / ECA / CBAM baselines
-│   │   └── fusion.py      AMF (Comp 4) + concat / projected-add / static baselines
+│   │   ├── fusion.py      AMF (Comp 4) + concat / projected-add / static baselines
+│   │   ├── target_prior.py TPM (Comp 8) + cfar / uniform / capacity-matched arms
+│   │   ├── frequency.py   SFR (Comp 9) + fixed-high-pass / non-adaptive arms
+│   │   ├── context.py     CAG (Comp 10) + local-only / regional-only arms
+│   │   └── _common.py     shared primitives + the module contract (identity, gradients)
 │   ├── losses.py          SAR-aware loss (Comp 7)
 │   ├── model.py           DetectionModel carrying the SAR criterion
 │   └── register.py        publishes custom layers to ultralytics
@@ -376,11 +471,11 @@ saryolo/
 ├── paper/                 LaTeX + table/figure generators (cannot fabricate)
 └── cli.py                 python -m saryolo <command>
 
-configs/    datasets/ · models/ (35 generated) · exp/ (EXP-001…012)
+configs/    datasets/ · models/ (58 generated) · exp/ (EXP-001…016 + EXP-2xx ablations)
 scripts/    prepare_dataset · make_exp_configs · train_all_experiments
             make_readme_assets (builds this page's charts) · check_chart_layout
 notebooks/  Colab: dataset prep · train + ablate · benchmark + paper
-tests/      66 tests across arch parity, identity, metrics, losses, data, repo
+tests/      82 tests across arch parity, identity, gradient flow, metrics, losses, data, repo
 docs/       DATASETS.md · METHOD.md · assets/ (generated charts)
 ```
 
@@ -410,7 +505,9 @@ The ledger is **append-only**. A rerun never overwrites an earlier result, and f
 ## Known limitations, stated up front
 
 - **No real-dataset accuracy exists yet.** Everything in Part IV is infrastructure validation.
-- **The adaptive-vs-static rows are load-bearing.** If `att_saa_static` matches `att_saa`, the adaptivity claim is unsupported and the paper must say so.
+- **The adaptive-vs-static rows are load-bearing.** If `att_saa_static` matches `att_saa`, the adaptivity claim is unsupported and the paper must say so. The same applies to `tp_channel` vs `v2_full` for the target prior, and `fr_static` vs `v2_full` for the spectral branch.
+- **Components 8-10 are unvalidated and may not survive.** They exist because v1 leaves three failures unaddressed, not because they are expected to help. v2 is ~68% larger and ~2.5× the compute of the baseline, so the removal ablation (`EXP-281…284`) can and should delete any component that does not pay for itself. A shorter, cheaper model is a *better* result, not a failure.
+- **The v2 clutter mode is a mode change, not a new slot**, so EXP-013 adds no module: it changes Component 2's speckle estimator into a three-branch target/speckle/clutter form. Its ablation is the `- clutter` row, not a slot study.
 - **HRSID and SAR-Ship-Dataset leak under random chip splits** — chips are cut from a few large scenes. `saryolo.data.splits.leakage_report` exists to catch this; a scene-grouped split is required before trusting mAP on those datasets.
 - **Scale-wise AP here is our own implementation**, with deviations from pycocotools documented in `saryolo/evaluation/metrics.py`.
 - **Cross-dataset evaluation refuses to run on incompatible label spaces**, rather than reporting a meaningless low mAP.

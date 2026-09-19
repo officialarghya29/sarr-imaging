@@ -105,7 +105,17 @@ Section~\ref{sec:ablation} isolates each contribution.
         isolates the value of adaptivity (Sec.~\ref{sec:saa}).
   \item An adaptive multi-scale fusion operator that reweights concatenated neck
         branches per sample, with a static-weight control (Sec.~\ref{sec:amf}).
-  \item A comprehensive evaluation protocol covering ablation, scale-wise AP,
+  \item A target prior mechanism (Sec.~\ref{sec:tpm}) that predicts a signed,
+        content-adaptive map of target relevance and \emph{modulates} the
+        detection features with it, evaluated against a classical CFAR statistic,
+        a uniform learned prior, and a \emph{capacity-matched} control that
+        isolates spatial selectivity from parameter count.
+  \item A learnable radial spectral branch (Sec.~\ref{sec:sfr}) that lets
+        training choose the frequency response instead of inheriting a classical
+        filter, parameterised in normalised frequency so one filter transfers
+        across input resolutions.
+  \item A comprehensive evaluation protocol covering cumulative ablation,
+        \emph{removal} ablation, module-level slot comparison, scale-wise AP,
         controlled robustness, efficiency, cross-dataset generalisation and
         multi-seed stability (Sec.~\ref{sec:experiments}).
 \end{itemize}
@@ -113,6 +123,11 @@ Section~\ref{sec:ablation} isolates each contribution.
 \paragraph{A note on honesty.} Every component is initialised as an exact
 identity, and each is compared against the standard component it replaces in the
 same architectural slot. Where an experiment does not support a claim, we say so.
+Two protocol choices follow from that: the cumulative ablation is paired with a
+\emph{removal} ablation, because a component can appear useful merely because of
+the order in which rows were added; and the central claim is tested against a
+capacity-matched control, because otherwise the larger arm could win for reasons
+unrelated to the hypothesis.
 
 % ===========================================================================
 \section{Related Work}
@@ -243,6 +258,64 @@ the model, so it is included only if the dataset's object-size distribution is
 dominated by COCO-small instances; the measurement is reported in
 Sec.~\ref{sec:dataset}.
 
+\subsection{Target prior modulation}
+\label{sec:tpm}
+The components above improve how features are formed. This one asks whether the
+network can be given an explicit, learned representation of \emph{where
+target-like structure is}, and whether that representation is useful when
+applied to the detection features rather than merely visualised. From local
+statistics at a near window $(\mu_n, \sigma_n)$ and a wide window
+$\sigma_w$ we form a one-channel evidence map and convert it to a \emph{signed}
+prior,
+\begin{equation}
+M = 2\,\sigma\!\left(\psi([F ; F - \mu_n ; \sigma_n ; \sigma_w])\right) - 1,
+\qquad F' = F \odot (1 + M),
+\end{equation}
+with $M \in (-1, 1)$: positive values mark target-like structure (amplify),
+negative values mark speckle- or clutter-like structure (suppress). A
+non-negative-only prior can express the first half of that sentence and not the
+second. The modulation is multiplicative because speckle is signal dependent, so
+the correction must scale with local intensity rather than act as a constant
+offset. The module is applied per detection level, \emph{before} attention, so
+attention and context both operate on target-modulated features. The ablation
+includes a capacity-matched arm whose prior is pooled over space: it is identical
+in size to the proposed arm, so $\mathrm{learned}$ vs. $\mathrm{channel}$ isolates
+spatial selectivity, and if the two match, this contribution is not supported.
+
+\subsection{Learnable spectral branch}
+\label{sec:sfr}
+Convolution has a fixed, local, low-pass-biased basis, and SAR contains both
+broadband speckle and spatially localised target returns that are therefore
+spread across the spectrum. We parameterise the spectral gain with $B$ radial
+bands rather than one coefficient per frequency bin:
+\begin{equation}
+r = \lVert f \rVert / \lVert f \rVert_{\mathrm{nyquist}}, \qquad
+F' = \mathrm{irfft2}\!\left(\mathrm{rfft2}(F) \cdot \exp(g(r))\right),
+\end{equation}
+where $g_c(b)$ is a learnable per-channel, per-band log-gain interpolated over
+$r$. Band parameterisation costs $C \times B$ rather than $C \times H \times W/2$
+parameters, and because bands are defined in \emph{normalised} frequency, one
+learnt filter transfers across input resolutions. The proposed arm additionally
+modulates the bands per sample from the feature's global descriptor; it is
+initialised equal to the non-adaptive arm, so the difference between the two arms
+measures the value of input adaptivity alone.
+
+\subsection{Context aggregation}
+\label{sec:cag}
+A SAR target is frequently not identifiable from its own neighbourhood: a bright
+point return on open sea, the same return inside a harbour, and a speckle spike
+on grass can appear nearly identical locally. We gather context at two extents and
+add it as a residual,
+\begin{equation}
+F' = F + \alpha\Big(\underbrace{\psi\big([\mathrm{DWConv}_d(F)]_{d \in \{1,2,4\}}\big)}_{\text{multi-extent spatial}}
++ \underbrace{\phi(\mathrm{GAP}(F))}_{\text{regional}}\Big),
+\end{equation}
+using dilated depth-wise convolutions so context is acquired \emph{without}
+downsampling, at the detection resolution. This is a mechanistic contrast with
+attention, which applies a multiplicative gate rather than adding a context field;
+whether the distinction earns its parameters is answered by the removal ablation
+rather than asserted.
+
 \subsection{SAR-aware objective}
 \begin{equation}
 \mathcal{L} = \mathcal{L}_{\mathrm{box}} + \mathcal{L}_{\mathrm{cls}}
@@ -289,6 +362,13 @@ and hardware are recorded per run in \texttt{results/experiments.jsonl}.
 
 \subsection{Module-level ablation}
 \input{../tables/module_ablation.tex}
+
+\subsection{Removal ablation}
+\input{../tables/removal_ablation.tex}
+The cumulative table shows that each component \emph{can} help. This one removes
+one component at a time from the full model, which is the stronger statement: a
+component that gains in the cumulative table but costs nothing when removed is
+not doing work, and the paper reports it as such.
 
 \subsection{Scale-wise analysis}
 \input{../tables/scale_analysis.tex}

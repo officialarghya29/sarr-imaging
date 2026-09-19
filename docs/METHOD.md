@@ -25,6 +25,28 @@ so `F' == F` exactly, in finite precision, before any training. Consequences:
 * a module that does not train well degrades gracefully toward the baseline
   instead of corrupting it.
 
+**Constraint 1b — identity comes from the gate *alone*.** The residual branch
+must **not** also be zero-initialised. The two together look harmless and are
+fatal:
+
+```
+F' = F + alpha * branch(F)
+
+branch = 0 at init  =>  dL/dalpha   = <dL/dF', branch>      = 0
+                       dL/dbranch  = alpha * dL/dF'          = 0   (alpha = 0)
+```
+
+Both gradients vanish together, so `alpha` never leaves 0 and the branch never
+learns: the module is a permanent no-op that passes every identity test. This is
+not a hypothetical failure mode — it was a real bug in Component 1, where both
+the gate and the residual conv were zero-initialised, so the learned enhancement
+never trained and `+SFE` would have measured only its two affine scalars.
+
+The rule enforced by `tests/test_arch.py::test_no_module_is_frozen_at_init`:
+**the gate provides the identity; the branch provides the gradient.** Branches
+therefore start small-but-non-zero, and the invariant asserted is a non-zero gate
+gradient for every learnable mode.
+
 **Constraint 2 — channel preserving and single-input.** Each module returns the
 same channel count it received and consumes one tensor. This is what allows them
 to be dropped into a YOLO YAML without patching Ultralytics' `parse_model`
@@ -246,6 +268,132 @@ produces (`fg_mask`, `target_bboxes`, `target_gt_idx`, `preds["scores"]`), so
 they cost no extra assignment pass. The weights live in the model YAML's
 `sar_loss` block, so a run is reproducible from the committed YAML, and an
 unknown key raises rather than being silently ignored.
+
+---
+
+## Component 8 — Target Prior Modulation (TPM)
+
+The central hypothesis of the work. Components 1-4 improve *how features are
+formed*; this one asks whether the network can be given an explicit, learned
+representation of **where target-like structure is**, and whether that
+representation is useful when it is actually applied to the detection features
+rather than merely visualised.
+
+```
+mu_n, sd_n = LocalStats_k(F)                 near-scale local statistics
+sd_w       = LocalStats_(2k+1)(F)            wide-scale local statistics
+e          = psi([F ; F - mu_n ; sd_n ; sd_w])   target evidence  (1 channel)
+M          = 2*sigmoid(e) - 1                signed prior, in (-1, 1)
+F'         = F * (1 + M)                     modulate
+F'         = F + alpha * (F * (1 + M) - F)   alpha = 0 at init  =>  identity
+```
+
+**Why `M` is signed.** `M > 0` marks target-like structure (amplify), `M < 0`
+marks speckle/clutter-like structure (suppress). A non-negative-only prior can
+express the first half of that sentence and not the second.
+
+**Why the modulation is multiplicative.** Speckle is signal-dependent, so the
+correction has to scale with local intensity rather than being a constant offset
+— the same reasoning behind the `beta*N*F` term in Component 2.
+
+**Where it sits.** Per detection level, immediately *before* attention, so that
+Components 3 and 10 operate on target-modulated features. That is what makes
+"target-aware" a structural property of the graph here rather than a claim about
+intent.
+
+**The ablation ladder, and the confound it removes:**
+
+| Arm | Prior | Learnable params |
+| --- | --- | --- |
+| `tp_none` | none | gate only |
+| `tp_cfar` | CFAR statistic generalised to features, `tanh(g*((F-mu)/sd - t))` | **none** |
+| `tp_static` | spatially uniform, per-channel logits | `C` per level |
+| `tp_channel` | the proposed evidence network, pooled over space | same as `tp_full` |
+| `tp_full` (learned) | the proposed spatially-varying map | same as `tp_channel` |
+
+Comparing `learned` against `static` alone would confound *spatial selectivity*
+with *capacity*: the larger arm could win for reasons unrelated to the
+hypothesis. `tp_channel` therefore reuses the proposed arm's exact network and
+averages its output over space, so the two are identical in size — asserted, not
+assumed, in `test_target_prior_arms_are_capacity_matched_where_claimed`.
+**This is the falsifying run for the central claim**: if `tp_channel` matches
+`v2_full`, the spatial prior is not what is doing the work, and the paper must
+report that.
+
+---
+
+## Component 9 — Spatial-Frequency Representation (SFR)
+
+Convolution is a spatial operator with a fixed, local, low-pass-biased basis.
+SAR contains two structures it represents poorly: broadband speckle, and target
+returns that are localised in space and therefore spread across the spectrum.
+This component gives the network an explicit spectral branch so that *training*
+decides how much of the spectrum to keep, instead of a classical filter deciding:
+
+```
+F_hat  = rfft2(F)                                (B, C, H, W//2+1) complex
+r      = |f| / |f|_nyquist                       normalised radial frequency per bin
+g_c    = log-gain of channel c in radial band b  learnable, (C, B)
+g_c(r) = linear interpolation of g_c over r      smooth and differentiable
+F'     = irfft2(F_hat * exp(g(r)))
+F'     = F + alpha * (F' - F)                    alpha = 0 at init  =>  identity
+```
+
+**Why radial bands and not a per-bin mask.** Three practical reasons. (1) A
+per-bin mask costs `C x H x W/2` parameters — millions, which would dominate the
+model and overfit long before acting like a filter; bands cost `C x B`. (2) Bands
+are defined in *normalised* frequency, so a filter learned at 640 keeps its
+meaning at 512 or 1024, which the planned multi-resolution test requires. (3)
+`exp(g)` is strictly positive, so the branch is interpretable as a filter
+magnitude response and cannot flip the sign of a coefficient.
+
+**Why it sits on P5/32.** FFT cost scales with spatial resolution. On the deepest
+default stage the transform operates on the smallest feature map; the same module
+at P2/4 would cost roughly 64× more. This is a design decision, and the measured
+consequence is visible in the README: Component 9 adds parameters but essentially
+no FLOPs.
+
+**Ablation:** `fr_none`, `fr_highpass` (fixed classical response, zero learnable
+parameters — it is a buffer), `fr_static` (learnable bands, input-independent),
+and the proposed `fr_sff` (bands modulated per sample by the feature's own global
+descriptor). `sff` starts numerically equal to `static`, so `sff - static`
+measures the value of input adaptivity alone.
+
+---
+
+## Component 10 — Context Aggregation (CAG)
+
+A SAR target is often not identifiable from its own neighbourhood. A bright point
+return on open sea, the same return in a harbour, and a speckle spike on grass can
+look nearly identical locally; what separates them is the *surrounding scene*.
+Standard convolution grows its receptive field by going deeper, spending
+parameters and resolution to approximate context it could gather directly:
+
+```
+c_local    = psi([ DWConv_d(F) for d in (1, 2, 4) ])   multi-extent spatial context
+c_regional = phi(global_avg_pool(F))                   regional channel context
+F'         = F + alpha * (c_local + c_regional)        alpha = 0 at init => identity
+```
+
+Dilated depth-wise convolutions widen the receptive field *without downsampling*,
+so context is acquired at the detection resolution — the same reason the P2 head
+exists. A downsampled context path cannot help a target a few pixels wide.
+
+**Relation to attention, stated plainly.** CAG overlaps in *purpose* with the
+local-contrast branch of Component 3 but not in mechanism: attention produces a
+multiplicative **gate** on the existing feature, while CAG adds a **context field**
+derived from a wider neighbourhood. Whether that distinction earns its parameters
+is empirical, which is why the removal ablation exists and is treated as the
+stronger evidence than the cumulative row.
+
+**Ablation:** `cx_none`, `cx_local`, `cx_regional`, and the proposed `cx_multi`.
+The mode is named `regional` rather than `global` for a concrete reason: mode
+strings pass through `parse_model`'s `ast.literal_eval`, which suppresses
+`ValueError` but **not** `SyntaxError`, and `global` is a Python keyword. Naming it
+`global` aborted model construction with a bare `SyntaxError` from inside
+ultralytics; `test_module_mode_names_are_safe_for_parse_model` now guards the whole
+mode vocabulary against that and against silent collision with a `parse_model`
+local.
 
 ---
 
