@@ -225,7 +225,7 @@ def measure_identity() -> list[dict]:
 #: change on the speckle slot rather than an added module, which is why it is labelled
 #: "+clutter" and not "+SFM2").
 LADDER = ("baseline", "sfe", "speckle", "attention", "amf", "p2", "full",
-          "v2_clutter", "v2_prior", "v2_freq", "v2_ctx", "v2_full")
+          "v2_clutter", "v2_prior", "v2_freq", "v2_ctx", "v2_full", "v2_prior_spectral")
 LADDER_LABELS = {
     "baseline": "YOLO11\nbaseline",
     "sfe": "+SFE",
@@ -239,6 +239,10 @@ LADDER_LABELS = {
     "v2_freq": "+freq",
     "v2_ctx": "+context",
     "v2_full": "FULL v2\n+refine",  # Components 1-11
+    # Appended, so every previously published row keeps its label and meaning. This step
+    # swaps the prior mechanism for the prior-conditioned spectral one rather than adding a
+    # module, which is why it costs parameters but almost no compute.
+    "v2_prior_spectral": "+prior\nspectral (G)",
 }
 
 #: Controlled module-level ablations.
@@ -733,27 +737,44 @@ def chart_datasets(facts: dict) -> None:
 
 
 def chart_coverage(facts: dict) -> None:
-    """Honest status grid: wired experiments vs those with measured results."""
+    """Honest status grid: wired experiments vs those with measured results.
+
+    The geometry is derived from the number of rows rather than fixed. It was fixed, and the
+    grid silently grew into its own labels: at 72 experiments the rows were 0.12in apart while
+    the text needed 0.14in, so consecutive ids overlapped by a third. Any chart whose row count
+    comes from the repository has to compute its size from that count, or it will be correct
+    only for the experiment set it was first written against.
+
+    Two columns rather than one, because 72 rows in a single column would need a canvas around
+    24in tall to stay readable -- which is worse than unreadable, since nobody scrolls it.
+    """
     ids = sorted(p.stem.split("_")[0] for p in (ROOT / "configs" / "exp").glob("EXP-*.yaml"))
     done = set(facts["experiments"]["with_results"])
 
-    fig, ax = plt.subplots(figsize=(15.5, 9.2))
-    for i, eid in enumerate(ids):
-        y = len(ids) - i - 1
-        status = eid in done
-        ax.add_patch(FancyBboxPatch((0, y - 0.3), 4.6, 0.62, boxstyle="round,pad=0.05",
-                                    facecolor=PANEL, edgecolor=GREEN if status else GRID, linewidth=1.3))
-        ax.text(0.15, y, eid, fontsize=10, color=TEXT, va="center", family="monospace")
-        ax.text(2.05, y, "measured" if status else "wired, awaiting GPU",
-                fontsize=9.5, color=GREEN if status else AMBER, va="center")
-    ax.text(0, len(ids) + 0.55,
-            "All 12 experiments are code-complete and reproducible from a committed config. None "
-            "of the accuracy numbers\nexist yet: this repository contains no fabricated results, "
-            "and the table generators refuse to emit a row\nwithout a measured value. Run "
-            "notebook 02 on a GPU and this grid fills itself in.",
+    per_col = (len(ids) + 1) // 2
+    col_w = 3.75
+    fig, ax = plt.subplots(figsize=(15.5, max(6.0, per_col * 0.30 + 2.8)))
+    for c in range(2):
+        x0 = c * col_w
+        for i, eid in enumerate(ids[c * per_col:(c + 1) * per_col]):
+            y = per_col - i - 1
+            status = eid in done
+            ax.add_patch(FancyBboxPatch((x0, y - 0.3), col_w - 0.15, 0.62,
+                                        boxstyle="round,pad=0.05", facecolor=PANEL,
+                                        edgecolor=GREEN if status else GRID, linewidth=1.3))
+            ax.text(x0 + 0.13, y, eid, fontsize=10, color=TEXT, va="center", family="monospace")
+            ax.text(x0 + 1.65, y, "measured" if status else "wired, awaiting GPU",
+                    fontsize=9.5, color=GREEN if status else AMBER, va="center")
+    # The count is interpolated, not typed: the caption previously claimed "all 12 experiments"
+    # while the grid below it drew seventy rows.
+    ax.text(0, per_col + 0.7,
+            f"All {len(ids)} experiments are code-complete and reproducible from a committed "
+            "config. None of the accuracy numbers\nexist yet: this repository contains no "
+            "fabricated results, and the table generators refuse to emit a row without\n"
+            "a measured value. Run notebook 02 on a GPU and this grid fills itself in.",
             fontsize=10, color=CYAN, va="bottom")
-    ax.set_xlim(0, 7.4)
-    ax.set_ylim(-0.5, len(ids) + 2.5)
+    ax.set_xlim(0, 2 * col_w - 0.2)
+    ax.set_ylim(-0.5, per_col + 2.6)
     ax.axis("off")
     _save(fig, "coverage.svg")
 

@@ -266,6 +266,9 @@ README_COST_ROWS: dict[str, str] = {
     "+ freq": "v2_freq",
     "+ context": "v2_ctx",
     "FULL v2": "v2_full",
+    # Module G: the prior also selects the radial spectral bands. Appended so every row above
+    # keeps its label and therefore its meaning.
+    "+ prior spectral": "v2_prior_spectral",
 }
 
 
