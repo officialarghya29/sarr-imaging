@@ -67,9 +67,13 @@ class SARFeatureEnhancement(nn.Module):
             hidden = max(self.c1 // max(reduction, 1), 8)
             self.reduce = ConvBNAct(3 * self.c1, hidden, k=1)
             self.expand = ConvBNAct(hidden, self.c1, k=1, act=False)
-            # Zero-init the last conv so the residual branch contributes nothing at init.
-            nn.init.zeros_(self.expand.conv.weight)
-            nn.init.zeros_(self.expand.bn.weight)
+            # The residual branch is deliberately NOT zero-initialised. Exact identity at
+            # init comes from the gate alone (alpha = 0 => F' = F + 0*z), and that is
+            # *sufficient*. Zero-initialising z as well would make the branch permanently
+            # dead rather than merely quiet: with z == 0 the gate gradient is
+            # dL/dalpha = <dL/dout, z> = 0, so alpha can never leave 0, and dL/dz =
+            # alpha*dL/dout = 0 freezes the branch too. Both quantities vanish together.
+            # See tests/test_arch.py::test_no_module_is_frozen_at_init.
             self.gamma = nn.Parameter(torch.ones(1, self.c1, 1, 1))
             self.beta = nn.Parameter(torch.zeros(1, self.c1, 1, 1))
             self.alpha = ZeroGate(alpha_init)

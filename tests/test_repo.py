@@ -202,8 +202,46 @@ def test_every_registry_dataset_has_a_matching_data_config():
         )
 
 
-@pytest.mark.parametrize("exp_id", ["EXP-001", "EXP-007"])
+@pytest.mark.parametrize("exp_id", ["EXP-001", "EXP-007", "EXP-016"])
 def test_core_experiments_exist(exp_id):
-    """The two experiments every table depends on must be present."""
+    """The experiments every table depends on must be present."""
     matches = [p for p in EXP_DIR.glob("*.yaml") if p.name.startswith(exp_id)]
     assert matches, f"missing experiment config for {exp_id}"
+
+
+def test_every_ablation_arm_has_a_runnable_experiment_config():
+    """Each ablation arm needs a config, or its table row can never be filled.
+
+    The arms previously had model YAMLs but no experiment configs, so the ablation tables
+    had nothing to consume: a cell can only be filled by a run, and a run needs a committed
+    config. This pins the generator's coverage against the variant registry so a newly added
+    arm cannot be quietly unrunnable.
+    """
+    import sys
+
+    sys.path.insert(0, str(REPO_ROOT / "scripts"))
+    import make_exp_configs as G
+
+    arms = sorted({variant for _slot, variants in G.ABLATION_SLOTS for variant in variants})
+    assert arms, "the ablation matrix is empty"
+    for variant in arms:
+        assert variant in VARIANTS, f"ablation arm {variant!r} is not a declared model variant"
+        model = MODELS_DIR / variant_filename(VARIANTS[variant])
+        assert model.exists(), f"ablation arm {variant!r} has no model YAML: {model.name}"
+        configs = sorted(EXP_DIR.glob(f"*_{variant}.yaml"))
+        assert configs, f"ablation arm {variant!r} has no experiment config, so it can never be run"
+
+
+def test_paper_table_rows_reference_real_models():
+    """Every variant named in a paper table must exist in the variant registry.
+
+    The table builders match variants by name, so a typo produces a row that is
+    permanently ``TBD`` while looking entirely healthy -- the worst kind of error in a
+    results table, because nothing about the output suggests a bug.
+    """
+    from saryolo.paper.tables import MODULE_ABLATION_GROUPS, REMOVAL_ABLATION_ROWS
+
+    named = [v for arms in MODULE_ABLATION_GROUPS.values() for v in arms]
+    named += [v for _label, v in REMOVAL_ABLATION_ROWS]
+    unknown = sorted({v for v in named if v not in VARIANTS})
+    assert not unknown, f"paper tables name variants that do not exist: {unknown}"

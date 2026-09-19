@@ -1,0 +1,34 @@
+# PIPELINE SMOKE TEST (not a research experiment).
+#
+# Trains the FULL v2 SAR-YOLO (Components 1-7: enhancement, clutter-aware speckle,
+# target prior, spatial-frequency, attention, context, adaptive fusion + P2 head +
+# SAR-aware loss) for 2 epochs at 128px on synthetic data on CPU.
+#
+# It exists to prove three things that unit tests cannot:
+#   1. every new module survives `parse_model` in a real model, at real channel widths;
+#   2. the target prior, spectral branch and context block receive backward gradients
+#      and their gates actually leave zero during training (the frozen-module failure
+#      mode that the unit test guards statically is caught here dynamically);
+#   3. the checkpoint can be written and reloaded, which requires `saryolo` to be
+#      importable for unpickling.
+#
+#   python -m saryolo synth-data --out datasets/processed/synthetic_smoke
+#   python -m saryolo train --exp configs/exp/_smoke_v2.yaml
+#
+# Any number produced by this config is meaningless as a research result.
+experiment:
+  id: SMOKE-003
+  name: pipeline smoke test (full v2 SAR-YOLO)
+  description: 2 epochs at 128px on synthetic data, CPU-only, exercising Components 1-7 and the SAR loss.
+model: ../models/yolo11n_v2_full_n.yaml
+dataset: ../datasets/synthetic_smoke.yaml
+train:
+  epochs: 2
+  imgsz: 128
+  batch: 4
+  seed: 0
+  workers: 0
+  patience: 50
+  plots: false
+  cos_lr: true
+notes: Pipeline verification only; synthetic data; not reportable.

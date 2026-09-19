@@ -19,9 +19,10 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-__all__ = ["TBD", "Table", "build_baseline_comparison", "build_ablation", "build_module_ablation",
-           "build_scale_analysis", "build_robustness", "build_efficiency", "build_multi_seed",
-           "write_tables"]
+__all__ = ["TBD", "Table", "MODULE_ABLATION_GROUPS", "REMOVAL_ABLATION_ROWS",
+           "build_baseline_comparison", "build_ablation", "build_module_ablation",
+           "build_removal_ablation", "build_scale_analysis", "build_robustness", "build_efficiency",
+           "build_multi_seed", "write_tables"]
 
 #: Placeholder rendered for any unmeasured value.
 TBD = "TBD"
@@ -92,6 +93,24 @@ def _ledger_rows(ledger):
     return ledger.completed()
 
 
+def _match_variant(records, variant: str):
+    """The completed record whose model file is exactly ``variant``, or ``None``.
+
+    Matched on the model file *stem* at a ``_`` boundary rather than by substring
+    containment. This matters: ``"v2_full"`` is a substring of ``"v2_full_s"``,
+    ``"v2_full_l"`` and ``"v2_full_p35_s"``, so a containment test could quietly report a
+    different model's score in the ablation table -- and a wrong number in a table is worse
+    than a missing one, because nothing downstream can tell it is wrong.
+    """
+    for record in records:
+        if record.status != "completed":
+            continue
+        stem = Path(str(record.model)).stem
+        if stem == variant or stem.endswith(f"_{variant}"):
+            return record
+    return None
+
+
 def _latest_by_experiment(records) -> dict[str, object]:
     """Best completed record per experiment id (highest mAP50:95, or the latest)."""
     best: dict[str, object] = {}
@@ -136,21 +155,29 @@ def build_baseline_comparison(ledger, efficiency: dict | None = None) -> Table:
 def build_ablation(ledger) -> Table:
     """TABLE 3 — the main ablation, one component added per row."""
     best = _latest_by_experiment(_ledger_rows(ledger))
+    #: ``(exp id, label, (sfe, clutter, attention, amf, p2, sar loss, prior, frequency, context))``
+    #: The clutter row is a mode change on the speckle slot rather than a new component, so it
+    #: keeps ``speckle`` set and adds ``clutter``.
     chain = (
-        ("EXP-001", "YOLO baseline", (False, False, False, False, False, False)),
-        ("EXP-002", "+ SFE", (True, False, False, False, False, False)),
-        ("EXP-003", "+ Speckle", (True, True, False, False, False, False)),
-        ("EXP-004", "+ Attention", (True, True, True, False, False, False)),
-        ("EXP-005", "+ AMF", (True, True, True, True, False, False)),
-        ("EXP-006", "+ Small head", (True, True, True, True, True, False)),
-        ("EXP-007", "Full", (True, True, True, True, True, True)),
+        ("EXP-001", "YOLO baseline", (False, False, False, False, False, False, False, False, False)),
+        ("EXP-002", "+ SFE", (True, False, False, False, False, False, False, False, False)),
+        ("EXP-003", "+ Speckle", (True, False, False, False, False, False, False, False, False)),
+        ("EXP-004", "+ Attention", (True, False, True, False, False, False, False, False, False)),
+        ("EXP-005", "+ AMF", (True, False, True, True, False, False, False, False, False)),
+        ("EXP-006", "+ Small head", (True, False, True, True, True, False, False, False, False)),
+        ("EXP-007", "Full (v1)", (True, False, True, True, True, True, False, False, False)),
+        ("EXP-013", "+ Clutter-aware", (True, True, True, True, True, True, False, False, False)),
+        ("EXP-014", "+ Target prior", (True, True, True, True, True, True, True, False, False)),
+        ("EXP-015", "+ Spatial-frequency", (True, True, True, True, True, True, True, True, False)),
+        ("EXP-016", "Full (v2)", (True, True, True, True, True, True, True, True, True)),
     )
     table = Table(
         "main_ablation",
-        "Main ablation. Each row adds exactly one component, so every delta is attributable "
-        "to that component alone.",
-        ["Model", "SFE", "Speckle", "Attention", "AMF", "P2 head", "SAR loss",
-         "mAP50", "mAP50:95", "Params (M)", "FPS"],
+        "Main ablation. Each row adds exactly one component over the row above, so every delta "
+        "is attributable to that component alone. The clutter row is a mode change on the "
+        "speckle slot rather than an added module.",
+        ["Model", "SFE", "Clutter", "Attention", "AMF", "P2 head", "SAR loss",
+         "Prior", "Frequency", "Context", "mAP50", "mAP50:95", "Params (M)", "FPS"],
     )
     for exp_id, label, flags in chain:
         record = best.get(exp_id)
@@ -164,15 +191,35 @@ def build_ablation(ledger) -> Table:
     return table
 
 
+#: Module-level ablation slots: ``slot -> arms``. Each arm sits in the same slot with every
+#: other component held fixed. Kept at module level so ``tests/test_repo.py`` can assert that
+#: every named variant actually exists -- a typo here would produce a permanently ``TBD`` row
+#: with no other symptom.
+MODULE_ABLATION_GROUPS: dict[str, tuple[str, ...]] = {
+    "Attention": ("att_none", "att_se", "att_eca", "att_cbam", "att_saa_static", "attention"),
+    "Fusion": ("fus_concat", "fus_add", "fus_static", "amf"),
+    "Preprocessing": ("pre_identity", "pre_log", "pre_clahe", "pre_standardize", "sfe"),
+    "Speckle": ("spk_none", "spk_lee", "spk_denoise", "speckle"),
+    # Component 8's own study. `tp_channel` is the capacity-matched control for `v2_full`:
+    # the same evidence network, with spatial variation pooled away.
+    "Target prior": ("tp_none", "tp_cfar", "tp_static", "tp_channel", "v2_full"),
+    "Frequency": ("fr_none", "fr_highpass", "fr_static", "v2_full"),
+    "Context": ("cx_none", "cx_local", "cx_regional", "v2_full"),
+}
+
+#: Removal ablation rows: ``(label, variant)``. Exposed for the same reason as above.
+REMOVAL_ABLATION_ROWS: tuple[tuple[str, str], ...] = (
+    ("Full (v2)", "v2_full"),
+    ("- clutter branch", "v2_noclutter"),
+    ("- target prior", "v2_noprior"),
+    ("- spatial-frequency", "v2_nofreq"),
+    ("- context", "v2_noctx"),
+)
+
+
 def build_module_ablation(ledger, suffix: str = "_s") -> Table:
     """TABLE 4 — module-level ablation: ours vs the standard component in the same slot."""
-    best = _latest_by_experiment(_ledger_rows(ledger))
-    groups = {
-        "Attention": ("att_none", "att_se", "att_eca", "att_cbam", "att_saa_static", "attention"),
-        "Fusion": ("fus_concat", "fus_add", "fus_static", "amf"),
-        "Preprocessing": ("pre_identity", "pre_log", "pre_clahe", "pre_standardize", "sfe"),
-        "Speckle": ("spk_none", "spk_lee", "spk_denoise", "speckle"),
-    }
+    groups = MODULE_ABLATION_GROUPS
     table = Table(
         "module_ablation",
         "Module-level comparison. Each proposed block is compared against the standard "
@@ -180,9 +227,10 @@ def build_module_ablation(ledger, suffix: str = "_s") -> Table:
         "the mechanism rather than the added parameters.",
         ["Slot", "Variant", "mAP50", "mAP50:95", "Params (M)"],
     )
+    rows = _ledger_rows(ledger)
     for slot, variants in groups.items():
         for variant in variants:
-            record = next((r for r in best.values() if variant in r.model), None)
+            record = _match_variant(rows, variant)
             metrics = record.metrics if record else {}
             table.rows.append([
                 slot, variant,
@@ -190,6 +238,34 @@ def build_module_ablation(ledger, suffix: str = "_s") -> Table:
                 _fmt(metrics.get("params_M"), 3),
             ])
             table.provenance.append(f"{variant}: {getattr(record, 'run_id', 'not run')}")
+    return table
+
+
+def build_removal_ablation(ledger) -> Table:
+    """TABLE 4b -- removal ablation: drop one component from the full v2 model.
+
+    The cumulative ladder shows that each component *can* help; this shows whether it still
+    does once the others are present. Both are reported because a component can look useful
+    in a cumulative table purely because of the order the rows were added in.
+    """
+    rows = _ledger_rows(ledger)
+    table = Table(
+        "removal_ablation",
+        "Removal ablation on the full v2 model. 'Full' is EXP-016; each row removes exactly "
+        "one component, so a *drop* in this table contradicts the corresponding gain in the "
+        "cumulative ladder.",
+        ["Model", "mAP50", "mAP50:95", "AP_small", "Params (M)", "FPS"],
+    )
+    for label, variant in REMOVAL_ABLATION_ROWS:
+        record = _match_variant(rows, variant)
+        metrics = record.metrics if record else {}
+        table.rows.append([
+            label,
+            _fmt(metrics.get("mAP50")), _fmt(metrics.get("mAP50_95")),
+            _fmt(metrics.get("AP_small")), _fmt(metrics.get("params_M"), 3),
+            _fmt(metrics.get("fps"), 1),
+        ])
+        table.provenance.append(f"{variant}: {getattr(record, 'run_id', 'not run')}")
     return table
 
 

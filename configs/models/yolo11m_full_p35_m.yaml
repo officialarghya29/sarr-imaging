@@ -1,6 +1,6 @@
 # SAR-YOLO / full_p35_m  -- GENERATED FILE, do not edit by hand.
 # Regenerate with:  python -m saryolo arch --variant full_p35_m
-# scale=m  levels=p3-p4-p5  modules=sfe, speckle, attention, fusion
+# scale=m  levels=p3-p4-p5  modules=sfe, speckle, fusion, attention
 # sar_loss={'w_sep': 0.2, 'w_small': 0.5, 'w_smooth': 0.05, 'margin': 1.0, 'bg_frac': 0.25}
 #
 # NOTE: when this file is loaded, ultralytics derives the compound scale from the

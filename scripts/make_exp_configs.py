@@ -1,12 +1,24 @@
 #!/usr/bin/env python
 """Generate the EXPERIMENT MATRIX configs under ``configs/exp/``.
 
-The experiment matrix is the backbone of the paper: EXP-001..012 walk from the
+The experiment matrix is the backbone of the paper: EXP-001..016 walk from the
 baseline to the full model, then ablation, robustness, efficiency,
 generalization and multi-seed validation. Generating them from one table instead
-of hand-writing twelve YAMLs keeps them consistent (same seeds, same schedule,
+of hand-writing dozens of YAMLs keeps them consistent (same seeds, same schedule,
 same dataset) — which is what makes the ablation table a controlled comparison
-rather than twelve unrelated runs.
+rather than a pile of unrelated runs.
+
+Two id ranges are emitted:
+
+``EXP-0xx``
+    The main ladder and the evaluation studies, one config per row of
+    :data:`MATRIX`.
+``EXP-2xx``
+    Module-level ablation arms. These used to have model YAMLs but no configs, so
+    the ablation tables had nothing to consume: a table can only be filled by a
+    run, and a run needs a config. The scheme is ``EXP-2<slot><arm>``, e.g.
+    ``EXP-251``..``EXP-255`` for the target-prior slot, which keeps every arm
+    individually traceable in the ledger.
 
 Usage
 -----
@@ -40,10 +52,32 @@ MATRIX: tuple[tuple[str, str, str, str], ...] = (
     ("EXP-010", "full", "Efficiency study", "Uses the EXP-007 checkpoint; no separate training is needed."),
     ("EXP-011", "full", "Cross-dataset generalization", "Uses the EXP-007 checkpoint; no separate training is needed."),
     ("EXP-012", "full", "Multi-seed validation", "Three seeds for mean +/- std on the headline metric."),
+    # --- v2 extension: the target-prior / clutter / frequency / context components, appended
+    # rather than renumbered, so the already-published EXP-001..008 keep their exact meaning.
+    ("EXP-013", "v2_clutter", "+ Clutter-aware representation",
+     "Component 2 extension: clutter modelled separately from speckle."),
+    ("EXP-014", "v2_prior", "+ Target prior modulation", "Component 8: the project's central hypothesis."),
+    ("EXP-015", "v2_freq", "+ Spatial-frequency representation", "Component 9: explicit spectral branch."),
+    ("EXP-016", "v2_full", "FULL v2 SAR-YOLO", "Component 10: context aggregation, completing the v2 model."),
 )
 
 #: Experiment ids that are evaluated rather than trained.
 EVAL_ONLY = {"EXP-009", "EXP-010", "EXP-011"}
+
+#: Module-level ablation slots. Each arm sits in the *same slot* with every other
+#: component held fixed, so a difference between arms is attributable to that slot's
+#: mechanism rather than to a change elsewhere in the graph. The last entry of each slot
+#: is the proposed arm (except the removal slot, where every row is a removal).
+ABLATION_SLOTS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("attention", ("att_none", "att_se", "att_eca", "att_cbam", "att_saa_static", "attention")),
+    ("fusion", ("fus_concat", "fus_add", "fus_static", "amf")),
+    ("speckle", ("spk_none", "spk_lee", "spk_denoise", "speckle")),
+    ("enhancement", ("pre_identity", "pre_log", "pre_clahe", "pre_standardize", "sfe")),
+    ("target prior", ("tp_none", "tp_cfar", "tp_static", "tp_channel", "v2_full")),
+    ("frequency", ("fr_none", "fr_highpass", "fr_static", "v2_full")),
+    ("context", ("cx_none", "cx_local", "cx_regional", "v2_full")),
+    ("removal", ("v2_noclutter", "v2_noprior", "v2_nofreq", "v2_noctx")),
+)
 
 
 def _write(path: Path, payload: dict, note: str) -> None:
@@ -52,6 +86,23 @@ def _write(path: Path, payload: dict, note: str) -> None:
         f"# {note}\n"
     )
     path.write_text(header + yaml.safe_dump(payload, sort_keys=False))
+
+
+def _train_block(args: argparse.Namespace) -> dict:
+    train = {
+        "epochs": args.epochs,
+        "imgsz": args.imgsz,
+        "batch": args.batch,
+        "seed": args.seeds[0],
+        "optimizer": "auto",
+        "cos_lr": True,
+        "patience": 30,
+        "workers": 8,
+        "deterministic": True,
+    }
+    if args.scale in ("m", "l", "x"):
+        train["batch"] = max(args.batch // 2, 1)
+    return train
 
 
 def main() -> int:
@@ -71,34 +122,25 @@ def main() -> int:
     out.mkdir(parents=True, exist_ok=True)
     written, missing = [], []
 
-    for exp_id, variant, name, purpose in MATRIX:
+    def model_rel(variant: str) -> str | None:
+        """Fractional model path for a variant, or ``None`` if its YAML was never emitted."""
         model_file = Path(args.models_dir) / variant_filename(VARIANTS[variant])
         if not model_file.exists():
             missing.append(str(model_file))
+            return None
+        return str(Path("..") / "models" / model_file.name)
+
+    rel_dataset = str(Path("..") / "datasets" / f"{args.dataset}.yaml")
+
+    for exp_id, variant, name, purpose in MATRIX:
+        rel_model = model_rel(variant)
+        if rel_model is None:
             continue
-
-        rel_model = Path("..") / "models" / model_file.name
-        rel_dataset = Path("..") / "datasets" / f"{args.dataset}.yaml"
-
-        train = {
-            "epochs": args.epochs,
-            "imgsz": args.imgsz,
-            "batch": args.batch,
-            "seed": args.seeds[0],
-            "optimizer": "auto",
-            "cos_lr": True,
-            "patience": 30,
-            "workers": 8,
-            "deterministic": True,
-        }
-        if args.scale in ("m", "l", "x"):
-            train["batch"] = max(args.batch // 2, 1)
-
         payload = {
             "experiment": {"id": exp_id, "name": name, "description": purpose},
-            "model": str(rel_model),
-            "dataset": str(rel_dataset),
-            "train": train,
+            "model": rel_model,
+            "dataset": rel_dataset,
+            "train": _train_block(args),
             "evaluation_only": exp_id in EVAL_ONLY,
             "notes": purpose,
         }
@@ -111,13 +153,31 @@ def main() -> int:
             "experiment": {"id": "EXP-012", "name": f"Multi-seed validation (seed {seed})",
                            "description": "Repeat of EXP-007 with a different seed."},
             "model": f"../models/{variant_filename(VARIANTS[f'full_{args.scale}'])}",
-            "dataset": f"../datasets/{args.dataset}.yaml",
+            "dataset": rel_dataset,
             "train": {"epochs": args.epochs, "imgsz": args.imgsz, "batch": args.batch, "seed": seed,
                       "cos_lr": True, "patience": 30, "workers": 8, "deterministic": True},
             "notes": f"EXP-007 repeated with seed {seed}; EXP-012 reports mean +/- std over all seeds.",
         }
         _write(out / f"EXP-012_seed{seed}_full_{args.scale}.yaml", payload, f"multi-seed seed {seed}")
         written.append(f"EXP-012_seed{seed}_full_{args.scale}.yaml")
+
+    # Module-level ablation arms: EXP-2<slot><arm>.
+    for slot_index, (slot, variants) in enumerate(ABLATION_SLOTS, start=1):
+        for arm_index, variant in enumerate(variants, start=1):
+            exp_id = f"EXP-2{slot_index}{arm_index}"
+            rel_model = model_rel(variant)
+            if rel_model is None:
+                continue
+            purpose = f"Module ablation -- {slot} slot, arm {arm_index}/{len(variants)} ({variant})."
+            payload = {
+                "experiment": {"id": exp_id, "name": f"{slot}: {variant}", "description": purpose},
+                "model": rel_model,
+                "dataset": rel_dataset,
+                "train": _train_block(args),
+                "notes": purpose,
+            }
+            _write(out / f"{exp_id}_{slot.replace(' ', '_')}_{variant}.yaml", payload, purpose)
+            written.append(f"{exp_id}_{slot.replace(' ', '_')}_{variant}.yaml")
 
     print(f"wrote {len(written)} configs to {out}")
     for name in written:

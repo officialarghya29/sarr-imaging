@@ -1,6 +1,6 @@
 # SAR-YOLO / full_noloss  -- GENERATED FILE, do not edit by hand.
 # Regenerate with:  python -m saryolo arch --variant full_noloss
-# scale=s  levels=p2-p3-p4-p5  modules=sfe, speckle, attention, fusion, p2_head
+# scale=s  levels=p2-p3-p4-p5  modules=sfe, speckle, fusion, attention, p2_head
 # sar_loss=off
 #
 # NOTE: when this file is loaded, ultralytics derives the compound scale from the

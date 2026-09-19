@@ -1,5 +1,5 @@
 {
-  "variants": 35,
+  "variants": 58,
   "zoo": {
     "baseline_n": {
       "variant": "baseline",
@@ -35,6 +35,26 @@
       "variant": "full",
       "scale": "n",
       "params_M": 3.846901
+    },
+    "v2_clutter_n": {
+      "variant": "v2_clutter",
+      "scale": "n",
+      "params_M": 3.88927
+    },
+    "v2_prior_n": {
+      "variant": "v2_prior",
+      "scale": "n",
+      "params_M": 3.935614
+    },
+    "v2_freq_n": {
+      "variant": "v2_freq",
+      "scale": "n",
+      "params_M": 3.962535
+    },
+    "v2_full_n": {
+      "variant": "v2_full",
+      "scale": "n",
+      "params_M": 4.261643
     },
     "baseline_s": {
       "variant": "baseline",
@@ -77,6 +97,30 @@
       "scale": "s",
       "params_M": 14.237229,
       "flops_G": 50.572854536
+    },
+    "v2_clutter_s": {
+      "variant": "v2_clutter",
+      "scale": "s",
+      "params_M": 14.405934,
+      "flops_G": 50.741986568
+    },
+    "v2_prior_s": {
+      "variant": "v2_prior",
+      "scale": "s",
+      "params_M": 14.587142,
+      "flops_G": 51.896705288
+    },
+    "v2_freq_s": {
+      "variant": "v2_freq",
+      "scale": "s",
+      "params_M": 14.690127,
+      "flops_G": 51.89690292
+    },
+    "v2_full_s": {
+      "variant": "v2_full",
+      "scale": "s",
+      "params_M": 15.853571,
+      "flops_G": 54.65327636
     }
   },
   "slots": {
@@ -201,6 +245,122 @@
         "ours": true,
         "params_M": 13.839574
       }
+    ],
+    "prior": [
+      {
+        "variant": "tp_none",
+        "label": "no modulation",
+        "ours": false,
+        "params_M": 15.672367
+      },
+      {
+        "variant": "tp_cfar",
+        "label": "CFAR statistic (no learning)",
+        "ours": false,
+        "params_M": 15.672367
+      },
+      {
+        "variant": "tp_static",
+        "label": "learned, spatially uniform",
+        "ours": false,
+        "params_M": 15.673327
+      },
+      {
+        "variant": "tp_channel",
+        "label": "learned, capacity-matched",
+        "ours": false,
+        "params_M": 15.853571
+      },
+      {
+        "variant": "v2_full",
+        "label": "ours, spatial prior",
+        "ours": true,
+        "params_M": 15.853571
+      }
+    ],
+    "frequency": [
+      {
+        "variant": "fr_none",
+        "label": "no spectral branch",
+        "ours": false,
+        "params_M": 15.750587
+      },
+      {
+        "variant": "fr_highpass",
+        "label": "fixed high-pass",
+        "ours": false,
+        "params_M": 15.750587
+      },
+      {
+        "variant": "fr_static",
+        "label": "learned bands, fixed filter",
+        "ours": false,
+        "params_M": 15.754683
+      },
+      {
+        "variant": "v2_full",
+        "label": "ours, input-adaptive",
+        "ours": true,
+        "params_M": 15.853571
+      }
+    ],
+    "context": [
+      {
+        "variant": "cx_none",
+        "label": "no context",
+        "ours": false,
+        "params_M": 14.690131
+      },
+      {
+        "variant": "cx_local",
+        "label": "local, dilated",
+        "ours": false,
+        "params_M": 15.766291
+      },
+      {
+        "variant": "cx_regional",
+        "label": "regional only",
+        "ours": false,
+        "params_M": 14.777411
+      },
+      {
+        "variant": "v2_full",
+        "label": "ours, both extents",
+        "ours": true,
+        "params_M": 15.853571
+      }
+    ],
+    "removal": [
+      {
+        "variant": "v2_noclutter",
+        "label": "- clutter branch",
+        "ours": false,
+        "params_M": 15.684866
+      },
+      {
+        "variant": "v2_noprior",
+        "label": "- target prior",
+        "ours": false,
+        "params_M": 15.672363
+      },
+      {
+        "variant": "v2_nofreq",
+        "label": "- spatial-frequency",
+        "ours": false,
+        "params_M": 15.750586
+      },
+      {
+        "variant": "v2_noctx",
+        "label": "- context",
+        "ours": false,
+        "params_M": 14.690127
+      },
+      {
+        "variant": "v2_full",
+        "label": "full v2",
+        "ours": true,
+        "params_M": 15.853571
+      }
     ]
   },
   "identity": [
@@ -225,6 +385,24 @@
     {
       "short": "AMF",
       "label": "Component 4 - multi-scale fusion",
+      "max_abs_deviation": 0.0,
+      "identical": true
+    },
+    {
+      "short": "TPM",
+      "label": "Component 8 - target prior",
+      "max_abs_deviation": 0.0,
+      "identical": true
+    },
+    {
+      "short": "SFR",
+      "label": "Component 9 - spatial-frequency",
+      "max_abs_deviation": 0.0,
+      "identical": true
+    },
+    {
+      "short": "CAG",
+      "label": "Component 10 - context aggregation",
       "max_abs_deviation": 0.0,
       "identical": true
     }
@@ -273,23 +451,24 @@
   },
   "dataset_count": 5,
   "experiments": {
-    "total": 12,
-    "config_files": 14,
+    "total": 52,
+    "config_files": 54,
     "with_results": [],
-    "ledger_runs": 4,
+    "ledger_runs": 6,
     "non_experiment_runs": [
       "SMOKE-001",
-      "SMOKE-002"
+      "SMOKE-002",
+      "SMOKE-003"
     ]
   },
   "tests": {
-    "total": 66,
+    "total": 82,
     "by_file": {
-      "tests/test_arch.py": 15,
+      "tests/test_arch.py": 28,
       "tests/test_data.py": 19,
       "tests/test_losses.py": 10,
       "tests/test_metrics.py": 9,
-      "tests/test_repo.py": 13
+      "tests/test_repo.py": 16
     }
   }
 }

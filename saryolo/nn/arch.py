@@ -48,7 +48,14 @@ class ModelSpec:
         nc: Number of classes.
         enhancement: SFE variant; ``None`` disables the module.
         speckle: SFM variant; ``None`` disables the module.
+        frequency: SFR variant, on the deepest backbone stage; ``None`` disables.
+        prior: TPM variant, inserted per detection level *before* attention;
+            ``None`` disables the module. Placed upstream of attention on purpose:
+            attention then operates on target-modulated features, which is the
+            structural form of the "target-aware attention" claim.
         attention: Attention variant inserted before the head; ``None`` disables.
+        context: CAG variant, inserted per detection level after attention;
+            ``None`` disables.
         fusion: Fusion variant inserted after each ``Concat``; ``None`` disables.
         levels: Detection levels, a subset of ``("p2", "p3", "p4", "p5")``.
         sar_loss: Optional Component-7 loss block, emitted as a top-level
@@ -62,7 +69,10 @@ class ModelSpec:
     nc: int = 1
     enhancement: str | None = None
     speckle: str | None = None
+    frequency: str | None = None
+    prior: str | None = None
     attention: str | None = None
+    context: str | None = None
     fusion: str | None = None
     levels: tuple[str, ...] = ("p3", "p4", "p5")
     sar_loss: dict[str, float] | None = None
@@ -82,16 +92,22 @@ class ModelSpec:
 
     @property
     def module_names(self) -> list[str]:
-        """Enabled module slugs, in the order the paper's ablation table adds them."""
+        """Enabled module slugs, in the order they appear along the forward graph."""
         mods = []
         if self.enhancement:
             mods.append("sfe")
         if self.speckle:
             mods.append("speckle")
-        if self.attention:
-            mods.append("attention")
+        if self.frequency:
+            mods.append("frequency")
         if self.fusion:
             mods.append("fusion")
+        if self.prior:
+            mods.append("prior")
+        if self.attention:
+            mods.append("attention")
+        if self.context:
+            mods.append("context")
         if self.has_p2:
             mods.append("p2_head")
         return mods
@@ -174,6 +190,13 @@ def build_yaml_dict(spec: ModelSpec) -> dict[str, Any]:
     if spec.speckle:
         spp = b.add("backbone", -1, 1, "SpeckleAwareFeatureModule", ["ch", spec.speckle, 8, 3])
 
+    # Component 9 (SFR): spatial-frequency branch on the deepest backbone stage. Placed
+    # here deliberately: the FFT cost scales with spatial resolution, so P5/32 is the
+    # cheapest stage to attach it to, and it is also where speckle/clutter statistics are
+    # already aggregated. Both modules preserve channels, so `spp` stays the P5 lateral.
+    if spec.frequency:
+        spp = b.add("backbone", -1, 1, "SpatialFrequencyRepresentation", ["ch", spec.frequency, 8, 8])
+
     def fuse(src_a: int, src_b: int, c_out: int, c3k: bool) -> int:
         """Emit ``Upsample/Conv -> Concat -> [fusion] -> C3k2`` and return the output index."""
         # The fusion block reads the Concat output via `-1`, so no index binding is needed.
@@ -210,17 +233,27 @@ def build_yaml_dict(spec: ModelSpec) -> dict[str, Any]:
         out_p5 = fuse(down, spp, 1024, True)
         out_p3 = n_p3
 
-    # Component 3 (SAA): one attention slot per detection level, immediately pre-head.
+    # Per-level research slots, immediately pre-head, in the order they act on the feature:
+    #   Component 8 (TPM) -> Component 3 (SAA) -> Component 10 (CAG)
+    # The prior comes first so attention and context both operate on target-modulated
+    # features. Every slot passes its source index explicitly: these rows use an explicit
+    # `from`, so `ch[-1]` would resolve to an unrelated layer and silently mis-wire.
     heads = {"p3": out_p3, "p4": out_p4, "p5": out_p5}
     if n_p2 is not None:
         heads["p2"] = n_p2
-    if spec.attention:
-        for lvl in spec.levels:
+    for lvl in spec.levels:
+        if spec.prior:
+            heads[lvl] = b.add(
+                "head", heads[lvl], 1, "TargetPriorModulation", ["ch", heads[lvl], spec.prior, 3, 8]
+            )
+        if spec.attention:
             gate = "static" if spec.attention == "saa_static" else "adaptive"
-            # The source index must be passed explicitly: this row's `from` is an
-            # explicit index, so `ch[-1]` would resolve to an unrelated layer.
             heads[lvl] = b.add(
                 "head", heads[lvl], 1, "SARAdaptiveAttention", ["ch", heads[lvl], 16, 7, gate]
+            )
+        if spec.context:
+            heads[lvl] = b.add(
+                "head", heads[lvl], 1, "ContextAggregation", ["ch", heads[lvl], spec.context, 8]
             )
 
     b.add("head", [heads[lvl] for lvl in spec.levels], 1, "Detect", ["nc"])
@@ -339,6 +372,91 @@ VARIANTS: dict[str, ModelSpec] = {
     "spk_denoise": _v("spk_denoise", enhancement="sfe", speckle="denoise", attention="saa", fusion="amf",
                       notes="Module ablation: fixed low-pass despeckling."),
 }
+
+# ------------------------------------------------------------------- v2 components
+#: Configuration of the full v2 model: the v1 full model plus the target-prior,
+#: spatial-frequency and context components.
+V2_FULL: dict[str, Any] = {
+    "enhancement": "sfe",
+    "speckle": "sfm_clutter",
+    "frequency": "sff",
+    "prior": "learned",
+    "attention": "saa",
+    "context": "multi",
+    "fusion": "amf",
+    "levels": ("p2", "p3", "p4", "p5"),
+}
+
+
+def _v2(name: str, scale: str = "s", notes: str = "", **overrides: Any) -> ModelSpec:
+    """Build a v2 variant: the full v2 configuration with the named slots overridden.
+
+    Passing ``slot=None`` removes the module; passing ``slot="none"`` keeps the module
+    in the graph with its mechanism switched off. Both controls are used below, because
+    they answer different questions -- see the note on the slot studies.
+    """
+    cfg = dict(V2_FULL)
+    cfg.update(overrides)
+    return ModelSpec(name=name, scale=scale, sar_loss=dict(SAR_LOSS_FULL), notes=notes, **cfg)
+
+
+#: EXP-013..016 -- the v2 cumulative ladder. Each row adds exactly one new component.
+#: The v1 ladder (EXP-001..008) is left untouched: those configs are already committed
+#: and referenced by the paper tables, and rewriting their meaning would break the
+#: traceability between a published number and the run that produced it.
+VARIANTS.update({
+    "v2_clutter": _v2("v2_clutter", frequency=None, prior=None, context=None,
+                      notes="EXP-013 v1 FULL + clutter-aware three-branch SFM."),
+    "v2_prior": _v2("v2_prior", frequency=None, context=None,
+                    notes="EXP-014 + target prior modulation (Component 8)."),
+    "v2_freq": _v2("v2_freq", context=None,
+                   notes="EXP-015 + spatial-frequency representation (Component 9)."),
+    "v2_full": _v2("v2_full", notes="EXP-016 FULL v2: v1 + clutter + prior + frequency + context (Components 1-10)."),
+
+    # --- removal ablation (SEC. 23 of the brief): drop one component from the full model.
+    # These differ from the slot studies below in that the *module is absent*, so they
+    # answer "does this component earn its place in the architecture?" rather than
+    # "which mechanism inside this slot is better?".
+    "v2_noclutter": _v2("v2_noclutter", speckle="sfm",
+                        notes="Removal ablation: v2 without the clutter-aware branch."),
+    "v2_noprior": _v2("v2_noprior", prior=None,
+                      notes="Removal ablation: v2 without target prior modulation."),
+    "v2_nofreq": _v2("v2_nofreq", frequency=None,
+                     notes="Removal ablation: v2 without the spatial-frequency branch."),
+    "v2_noctx": _v2("v2_noctx", context=None,
+                    notes="Removal ablation: v2 without context aggregation."),
+
+    # --- Component 5 slot study. Every arm keeps the module in the graph and holds every
+    # other slot at its v2 setting, so the arms differ only in how the prior is produced.
+    # `channel` is the matched-capacity control for `learned` (same network, spatially
+    # pooled prior); `cfar` is the classical non-learned reference; `static` is uniform.
+    "tp_none": _v2("tp_none", prior="none", notes="TPM slot: modulation disabled (inert slot)."),
+    "tp_cfar": _v2("tp_cfar", prior="cfar", notes="TPM slot: classical CFAR-style prior."),
+    "tp_static": _v2("tp_static", prior="static", notes="TPM slot: spatially uniform learned prior."),
+    "tp_channel": _v2("tp_channel", prior="channel",
+                      notes="TPM slot: capacity-matched control -- spatial variation removed."),
+
+    # --- Component 6 slot study.
+    "fr_none": _v2("fr_none", frequency="none", notes="SFR slot: spectral branch disabled."),
+    "fr_highpass": _v2("fr_highpass", frequency="highpass", notes="SFR slot: fixed high-pass filter."),
+    "fr_static": _v2("fr_static", frequency="static", notes="SFR slot: learnable, input-independent."),
+
+    # --- Component 7 slot study.
+    "cx_none": _v2("cx_none", context="none", notes="CAG slot: context disabled."),
+    "cx_local": _v2("cx_local", context="local", notes="CAG slot: local (dilated) context only."),
+    "cx_regional": _v2("cx_regional", context="regional", notes="CAG slot: regional context only."),
+})
+
+#: v2 at the scales used for the main benchmark, plus `n` for the CPU pipeline smoke test
+#: and for development-scale module triage (the project's phase-1 rule: debug on the
+#: smallest model, promote to `s`/`m` only once a component shows signal).
+for _s in ("n", "s", "m", "l"):
+    VARIANTS[f"v2_full_{_s}"] = _v2(f"v2_full_{_s}", scale=_s, notes=f"v2 full model at scale {_s}.")
+
+VARIANTS["v2_full_p35_s"] = _v2(
+    "v2_full_p35_s", levels=("p3", "p4", "p5"),
+    notes="v2 full model without the P2 detection level (multi-scale ablation).",
+)
 
 #: Baseline comparison variants (EXP-001b): scales of the stock detector.
 for _s in ("n", "s", "m", "l"):

@@ -55,6 +55,12 @@ markers = [
 [tool.ruff]
 line-length = 120
 target-version = "py310"
+# Notebooks are execution-ordered cell scripts, not importable modules, so the rules that
+# assume a file is imported in source order (I001 import sorting, E402 module-level import
+# placement) do not apply to them, and cell idioms such as `import os, glob` or
+# `open(f).read()` for a one-shot display are deliberate. Linting the library, scripts and
+# tests instead keeps `ruff check .` clean -- and makes that result mean something.
+extend-exclude = ["notebooks"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]

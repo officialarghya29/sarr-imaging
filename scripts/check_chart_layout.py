@@ -40,11 +40,14 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import make_readme_assets as M  # noqa: E402
 
-#: Chart functions, in the order the generator runs them.
+#: Chart functions, in the order the generator runs them. Each must render exactly one
+#: figure: this checker captures only the last figure a function saves, so a function that
+#: draws two charts would leave the first unchecked.
 CHARTS = (
     M.chart_ladder_params,
     M.chart_accuracy_cost,
     M.chart_slot_ablations,
+    M.chart_slot_ablations_v2,
     M.chart_identity,
     M.chart_datasets,
     M.chart_coverage,

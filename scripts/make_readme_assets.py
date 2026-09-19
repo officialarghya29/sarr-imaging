@@ -199,9 +199,12 @@ def measure_identity() -> list[dict]:
     x = torch.randn(2, c, 16, 16)
     cases = [
         ("SFE", "Component 1 - feature enhancement", M.SARFeatureEnhancement(c)),
-        ("SFM", "Component 2 - speckle-aware", M.SpeckleAwareFeatureModule(c)),
+        ("SFM", "Component 2 - speckle-aware", M.SpeckleAwareFeatureModule(c, mode="sfm_clutter")),
         ("SAA", "Component 3 - adaptive attention", M.SARAdaptiveAttention(c)),
         ("AMF", "Component 4 - multi-scale fusion", M.AdaptiveMultiScaleFusion(c, groups=[c // 2, c // 2], mode="amf")),
+        ("TPM", "Component 8 - target prior", M.TargetPriorModulation(c)),
+        ("SFR", "Component 9 - spatial-frequency", M.SpatialFrequencyRepresentation(c)),
+        ("CAG", "Component 10 - context aggregation", M.ContextAggregation(c)),
     ]
     rows = []
     for short, label, module in cases:
@@ -213,8 +216,11 @@ def measure_identity() -> list[dict]:
     return rows
 
 
-#: The ablation ladder: each step adds exactly one module.
-LADDER = ("baseline", "sfe", "speckle", "attention", "amf", "p2", "full")
+#: The ablation ladder: each step adds exactly one module (the v2 clutter row is a mode
+#: change on the speckle slot rather than an added module, which is why it is labelled
+#: "+clutter" and not "+SFM2").
+LADDER = ("baseline", "sfe", "speckle", "attention", "amf", "p2", "full",
+          "v2_clutter", "v2_prior", "v2_freq", "v2_full")
 LADDER_LABELS = {
     "baseline": "YOLO11\nbaseline",
     "sfe": "+SFE",
@@ -222,7 +228,10 @@ LADDER_LABELS = {
     "attention": "+SAA",
     "amf": "+AMF",
     "p2": "+P2 head",
-    "full": "FULL\n+SAR loss",
+    "full": "FULL v1\n+SAR loss",
+    "v2_clutter": "+clutter",
+    "v2_prior": "+prior",
+    "v2_freq": "+freq",        "v2_full": "FULL v2\n+context",  # Components 1-10
 }
 
 #: Controlled module-level ablations.
@@ -274,6 +283,49 @@ SLOT_SETS: dict[str, tuple[str, list[tuple[str, str, bool]]]] = {
     ),
 }
 
+#: The v2 components' slot studies. Every arm sits in the same slot with all other
+#: components held at their v2 settings, so a difference is attributable to that slot.
+SLOT_SETS_V2: dict[str, tuple[str, list[tuple[str, str, bool]]]] = {
+    "prior": (
+        "Component 8 - target prior slot   (held fixed: full v2 setting)",
+        [
+            ("tp_none", "no modulation", False),
+            ("tp_cfar", "CFAR statistic (no learning)", False),
+            ("tp_static", "learned, spatially uniform", False),
+            ("tp_channel", "learned, capacity-matched", False),
+            ("v2_full", "ours, spatial prior", True),
+        ],
+    ),
+    "frequency": (
+        "Component 9 - spatial-frequency slot   (held fixed: full v2 setting)",
+        [
+            ("fr_none", "no spectral branch", False),
+            ("fr_highpass", "fixed high-pass", False),
+            ("fr_static", "learned bands, fixed filter", False),
+            ("v2_full", "ours, input-adaptive", True),
+        ],
+    ),
+    "context": (
+        "Component 10 - context slot   (held fixed: full v2 setting)",
+        [
+            ("cx_none", "no context", False),
+            ("cx_local", "local, dilated", False),
+            ("cx_regional", "regional only", False),
+            ("v2_full", "ours, both extents", True),
+        ],
+    ),
+    "removal": (
+        "Removal ablation   (v2 full minus one component)",
+        [
+            ("v2_noclutter", "- clutter branch", False),
+            ("v2_noprior", "- target prior", False),
+            ("v2_nofreq", "- spatial-frequency", False),
+            ("v2_noctx", "- context", False),
+            ("v2_full", "full v2", True),
+        ],
+    ),
+}
+
 
 def build_facts() -> dict:
     """Measure the model zoo and collect repository facts."""
@@ -290,7 +342,7 @@ def build_facts() -> dict:
 
     print("Measuring controlled module-level ablations ...")
     facts["slots"] = {}
-    for group, (_, arms) in SLOT_SETS.items():
+    for group, (_, arms) in {**SLOT_SETS, **SLOT_SETS_V2}.items():
         facts["slots"][group] = [
             {"variant": v, "label": label, "ours": ours, "params_M": measure(v, "s")["params_M"]}
             for v, label, ours in arms
@@ -345,7 +397,9 @@ def build_facts() -> dict:
 # --------------------------------------------------------------------- charts
 def chart_ladder_params(facts: dict) -> None:
     """Grouped bars: parameters of each ablation-ladder step, scale n vs s."""
-    fig, ax = plt.subplots(figsize=(14.5, 8.2))
+    # Wide enough for eleven ladder steps: at the original width the tick labels for the
+    # later v2 steps crowd each other even when they do not strictly overlap.
+    fig, ax = plt.subplots(figsize=(18.5, 8.6))
     xs = range(len(LADDER))
     w = 0.38
     for offset, scale, color in ((-w / 2, "n", CYAN), (w / 2, "s", MAGENTA)):
@@ -477,14 +531,29 @@ def chart_accuracy_cost(facts: dict) -> None:
     _save(fig, "accuracy_cost.svg")
 
 
-def chart_slot_ablations(facts: dict) -> None:
-    """Parameter cost of every alternative inside each module slot."""
-    # A 2x2 grid with generous spacing: each panel carries its own two-line caption
-    # in the title, which is what used to collide with the panel above it.
-    fig, axes = plt.subplots(2, 2, figsize=(17.5, 13.5))
-    fig.subplots_adjust(left=0.13, right=0.97, top=0.80, bottom=0.07, hspace=0.42, wspace=0.34)
-    for ax, group in zip(axes.ravel(), SLOT_SETS, strict=True):
-        title, arms = SLOT_SETS[group]
+def _render_slot_panels(facts: dict, slot_sets: dict, filename: str, suptitle: str, blurb: str) -> None:
+    """One panel per slot: the parameter cost of every alternative within that slot.
+
+    The grid is computed from the number of slots rather than hard-coded, and the header
+    band is a fixed physical height regardless of panel count. That constant band is what
+    keeps a panel's title from colliding with the row above it when the grid grows -- the
+    collision the first version of this chart actually had.
+    """
+    names = list(slot_sets)
+    ncols = min(len(names), 2)
+    nrows = (len(names) + ncols - 1) // ncols
+    height = 6.75 * nrows
+    header_in = 2.7  # inches reserved above the panels for the title, caption and blurb
+
+    fig, axes = plt.subplots(nrows, ncols, figsize=(17.5, height), squeeze=False)
+    fig.subplots_adjust(left=0.13, right=0.97, top=1 - (header_in / height), bottom=0.055,
+                        hspace=0.42, wspace=0.34)
+    flat = list(axes.ravel())
+    for unused in flat[len(names):]:
+        unused.set_visible(False)
+
+    for ax, group in zip(flat, names, strict=False):
+        title, arms = slot_sets[group]
         rows = facts["slots"][group]
         labels = [r["label"] for r in rows]
         vals = [r["params_M"] for r in rows]
@@ -511,19 +580,40 @@ def chart_slot_ablations(facts: dict) -> None:
             f"{len(arms)} arms · spread across arms: {span:.3f}M",
             title_size=13,
         )
-    fig.suptitle(
+    fig.suptitle(suptitle, color=TEXT, fontsize=19, fontweight="bold", x=0.02, ha="left",
+                 y=1 - (0.35 / height))
+    fig.text(0.02, 1 - (0.9 / height), blurb, color=MUTED, fontsize=11.5, ha="left", va="top",
+             linespacing=1.5)
+    _save(fig, filename)
+
+
+def chart_slot_ablations(facts: dict) -> None:
+    """Parameter cost of every alternative inside Components 1-4's slots."""
+    _render_slot_panels(
+        facts,
+        SLOT_SETS,
+        "slot_ablations.svg",
         "Every component is compared inside the same slot, at equal budget",
-        color=TEXT, fontsize=19, fontweight="bold", x=0.02, ha="left", y=0.965,
-    )
-    fig.text(
-        0.02, 0.935,
         "The claim is never \"attention helps\". It is \"our attention beats SE, ECA and CBAM when "
         "each sits in the identical slot on the identical backbone\".\nEach group holds every other "
         "component fixed; only the named slot varies. Magenta = proposed.\nWhere the spread is ~0 "
         "(Components 1 and 2's classical arms) the comparison is about accuracy, not size.",
-        color=MUTED, fontsize=11.5, ha="left", va="top", linespacing=1.5,
     )
-    _save(fig, "slot_ablations.svg")
+
+
+def chart_slot_ablations_v2(facts: dict) -> None:
+    """Parameter cost of every alternative inside the v2 components' slots."""
+    _render_slot_panels(
+        facts,
+        SLOT_SETS_V2,
+        "slot_ablations_v2.svg",
+        "The v2 components, held to the same standard as the first four",
+        "Components 5-7 are ablated the same way as 1-4: one slot varies while everything else "
+        "stays at its v2 setting.\nThe 'capacity-matched' prior arm reuses the proposed arm's exact "
+        "evidence network and pools its output over space, so 'ours vs\ncapacity-matched' isolates "
+        "spatial selectivity rather than size. The removal group asks the complementary question: "
+        "does a component still\nearn its place once the others are already present?",
+    )
 
 
 def chart_identity(facts: dict) -> None:
@@ -671,6 +761,7 @@ def main() -> None:
     chart_ladder_params(facts)
     chart_accuracy_cost(facts)
     chart_slot_ablations(facts)
+    chart_slot_ablations_v2(facts)
     chart_identity(facts)
     chart_datasets(facts)
     chart_coverage(facts)

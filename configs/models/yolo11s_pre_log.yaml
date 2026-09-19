@@ -1,6 +1,6 @@
 # SAR-YOLO / pre_log  -- GENERATED FILE, do not edit by hand.
 # Regenerate with:  python -m saryolo arch --variant pre_log
-# scale=s  levels=p3-p4-p5  modules=sfe, speckle, attention, fusion
+# scale=s  levels=p3-p4-p5  modules=sfe, speckle, fusion, attention
 # sar_loss=off
 #
 # NOTE: when this file is loaded, ultralytics derives the compound scale from the
