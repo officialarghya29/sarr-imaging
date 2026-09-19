@@ -90,7 +90,13 @@ from __future__ import annotations
 import torch
 from torch import nn
 
-from ._common import ChannelDescriptor, ZeroGate, resolve_c1
+from ._common import (
+    ChannelDescriptor,
+    ZeroGate,
+    interp_weights,
+    radial_band_index,
+    resolve_c1,
+)
 
 __all__ = ["SpatialFrequencyRepresentation"]
 
@@ -100,27 +106,11 @@ __all__ = ["SpatialFrequencyRepresentation"]
 _DCT_BLOCK = 8
 
 
-def _interp_weights(radius: torch.Tensor, bands: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Two-band interpolation weights for each coefficient, from its normalised radius.
-
-    Returns ``(lo, hi, w)`` flattened, where the gain for a coefficient is
-    ``g[lo] * (1 - w) + g[hi] * w``. Using the two *nearest* bands (rather than
-    hard-assigning coefficients to bands) keeps the gain a continuous, differentiable
-    function of the band parameters, so every band receives gradient.
-    """
-    pos = (radius.clamp(0.0, 1.0) * (bands - 1)).clamp(0.0, bands - 1.0)
-    lo = pos.floor()
-    hi = (lo + 1).clamp(max=bands - 1)
-    return lo.flatten().long(), hi.flatten().long(), (pos - lo).flatten()
-
-
-def _radial_band_index(h: int, w: int, bands: int, device, dtype) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Two-band interpolation weights for each rfft2 bin."""
-    fy = torch.fft.fftfreq(h, device=device, dtype=dtype)  # cycles/sample in [-0.5, 0.5)
-    fx = torch.fft.rfftfreq(w, device=device, dtype=dtype)  # cycles/sample in [0, 0.5]
-    # Normalise by the Nyquist radius sqrt(0.5^2 + 0.5^2) so r == 1 sits at the corner.
-    radius = torch.sqrt(fy[:, None] ** 2 + fx[None, :] ** 2) / (0.5 * (2.0**0.5))
-    return _interp_weights(radius, bands)
+# `interp_weights` / `radial_band_index` now live in `_common`, because the prior module's
+# `spectral` arm needs the same interpolation and a second copy would let the two slots'
+# band counts drift apart without anything noticing.
+_interp_weights = interp_weights
+_radial_band_index = radial_band_index
 
 
 def _block_band_index(bands: int, device, dtype) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:

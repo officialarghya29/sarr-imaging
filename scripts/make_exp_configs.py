@@ -64,6 +64,9 @@ MATRIX: tuple[tuple[str, str, str, str], ...] = (
     ("EXP-015", "v2_freq", "+ Spatial-frequency representation", "Component 9: explicit spectral branch."),
     ("EXP-016", "v2_ctx", "+ Context aggregation", "Component 10: multi-extent context."),
     ("EXP-017", "v2_full", "FULL v2 SAR-YOLO", "Component 11: target-aware deformable refinement, completing the v2 model."),
+    ("EXP-018", "v2_prior_spectral", "+ prior-conditioned spectral selection",
+     "Module G: the target prior chooses the radial frequency bands. Added rather than folded "
+     "into EXP-017 so the ladder row and the slot study measure the same graph."),
 )
 
 #: Experiment ids that are evaluated rather than trained.
@@ -86,7 +89,17 @@ ABLATION_SLOTS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("fusion", "22", ("fus_concat", "fus_add", "fus_static", "amf")),
     ("speckle", "23", ("spk_none", "spk_lee", "spk_denoise", "speckle")),
     ("enhancement", "24", ("pre_identity", "pre_log", "pre_clahe", "pre_standardize", "sfe")),
-    ("target prior", "25", ("tp_none", "tp_cfar", "tp_static", "tp_channel", "v2_full")),
+    # The two `tp_spectral*` arms answer Module G of the brief. They are capacity matched --
+    # same band head, same band count, same descriptor width -- so the only difference is
+    # whether the head is fed the *prior evidence* or the raw feature. Without that control,
+    # "the prior conditions the spectrum" would be indistinguishable from "any input-adaptive
+    # filter does".
+    # Appended *after* `v2_full`, not inserted before it: the generator numbers arms by
+    # position, so inserting the new arms would have moved `v2_full` off EXP-255 and silently
+    # repointed that id at a different graph. Ids are referenced by the ledger and the paper
+    # tables, so a renumber is indistinguishable from a changed result.
+    ("target prior", "25", ("tp_none", "tp_cfar", "tp_static", "tp_channel", "v2_full",
+                            "tp_spectral_feat", "tp_spectral", "v2_prior_spectral")),
     # Appended (not inserted) so the arms above keep their ids: SEC. 14 of the brief asks for
     # the alternative-frequency study explicitly, so the transform arms join this slot.
     ("frequency", "26", ("fr_none", "fr_highpass", "fr_static", "fr_dct", "fr_wavelet", "v2_full")),

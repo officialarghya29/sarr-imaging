@@ -450,6 +450,12 @@ VARIANTS.update({
                   notes="EXP-016 + context aggregation (Component 10)."),
     "v2_full": _v2("v2_full",
                    notes="EXP-017 FULL v2: v1 + clutter + prior + frequency + context + refinement (Components 1-11)."),
+    "v2_prior_spectral": _v2(
+        "v2_prior_spectral", prior="spectral",
+        notes=("Module G: the target prior also selects the radial frequency bands. This is "
+               "where 'target-conditioned frequency selection' can actually be expressed, "
+               "because the prior exists here; the backbone spectral slot runs before it."),
+    ),
 
     # --- removal ablation (SEC. 23 of the brief): drop one component from the full model.
     # These differ from the slot studies below in that the *module is absent*, so they
@@ -475,6 +481,12 @@ VARIANTS.update({
     "tp_static": _v2("tp_static", prior="static", notes="TPM slot: spatially uniform learned prior."),
     "tp_channel": _v2("tp_channel", prior="channel",
                       notes="TPM slot: capacity-matched control -- spatial variation removed."),
+    "tp_spectral": _v2("tp_spectral", prior="spectral",
+                       notes="TPM slot: the prior also selects the radial spectral bands "
+                             "(Module G -- target-conditioned frequency selection)."),
+    "tp_spectral_feat": _v2("tp_spectral_feat", prior="spectral_feat",
+                            notes="TPM slot: same band head and band count, but conditioned on "
+                                  "the raw feature instead of the prior (matched-capacity control)."),
 
     # --- Component 6 slot study.
     "fr_none": _v2("fr_none", frequency="none", notes="SFR slot: spectral branch disabled."),

@@ -1,0 +1,260 @@
+# SAR-YOLO / v2_prior_spectral  -- GENERATED FILE, do not edit by hand.
+# Regenerate with:  python -m saryolo arch --variant v2_prior_spectral
+# scale=s  levels=p2-p3-p4-p5  modules=sfe, speckle, frequency, fusion, prior, attention, context, refine, p2_head
+# sar_loss={'w_sep': 0.2, 'w_small': 0.5, 'w_smooth': 0.05, 'margin': 1.0, 'bg_frac': 0.25}
+#
+# NOTE: when this file is loaded, ultralytics derives the compound scale from the
+# FILE NAME (guess_model_scale), overwriting the 'scale' key below. The file must
+# therefore keep its 'yolo11s_' prefix or it will silently build at scale 'n'.
+# Module G: the target prior also selects the radial frequency bands. This is where 'target-conditioned frequency selection' can actually be expressed, because the prior exists here; the backbone spectral slot runs before it.
+#
+# [from, repeats, module, args]
+nc: 1
+scale: s
+scales:
+  n: [0.5, 0.25, 1024]
+  s: [0.5, 0.5, 1024]
+  m: [0.5, 1.0, 512]
+  l: [1.0, 1.0, 512]
+  x: [1.0, 1.5, 512]
+backbone:
+- - -1
+  - 1
+  - Conv
+  - [64, 3, 2]
+- - -1
+  - 1
+  - Conv
+  - [128, 3, 2]
+- - -1
+  - 2
+  - C3k2
+  - [256, false, 0.25]
+- - -1
+  - 1
+  - SARFeatureEnhancement
+  - [ch, sfe, 3, 8]
+- - -1
+  - 1
+  - Conv
+  - [256, 3, 2]
+- - -1
+  - 2
+  - C3k2
+  - [512, false, 0.25]
+- - -1
+  - 1
+  - Conv
+  - [512, 3, 2]
+- - -1
+  - 2
+  - C3k2
+  - [512, true]
+- - -1
+  - 1
+  - Conv
+  - [1024, 3, 2]
+- - -1
+  - 2
+  - C3k2
+  - [1024, true]
+- - -1
+  - 1
+  - SPPF
+  - [1024, 5]
+- - -1
+  - 2
+  - C2PSA
+  - [1024]
+- - -1
+  - 1
+  - SpeckleAwareFeatureModule
+  - [ch, sfm_clutter, 8, 3]
+- - -1
+  - 1
+  - SpatialFrequencyRepresentation
+  - [ch, sff, 8, 8]
+head:
+- - -1
+  - 1
+  - nn.Upsample
+  - [null, 2, nearest]
+- - [14, 7]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 1
+  - AdaptiveMultiScaleFusion
+  - - ch
+    - [14, 7]
+    - 8
+    - amf
+- - -1
+  - 2
+  - C3k2
+  - [512, false]
+- - -1
+  - 1
+  - nn.Upsample
+  - [null, 2, nearest]
+- - [18, 5]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 1
+  - AdaptiveMultiScaleFusion
+  - - ch
+    - [18, 5]
+    - 8
+    - amf
+- - -1
+  - 2
+  - C3k2
+  - [256, false]
+- - -1
+  - 1
+  - nn.Upsample
+  - [null, 2, nearest]
+- - [22, 3]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 1
+  - AdaptiveMultiScaleFusion
+  - - ch
+    - [22, 3]
+    - 8
+    - amf
+- - -1
+  - 2
+  - C3k2
+  - [128, false]
+- - -1
+  - 1
+  - Conv
+  - [128, 3, 2]
+- - [26, 21]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 1
+  - AdaptiveMultiScaleFusion
+  - - ch
+    - [26, 21]
+    - 8
+    - amf
+- - -1
+  - 2
+  - C3k2
+  - [256, false]
+- - -1
+  - 1
+  - Conv
+  - [256, 3, 2]
+- - [30, 17]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 1
+  - AdaptiveMultiScaleFusion
+  - - ch
+    - [30, 17]
+    - 8
+    - amf
+- - -1
+  - 2
+  - C3k2
+  - [512, false]
+- - -1
+  - 1
+  - Conv
+  - [512, 3, 2]
+- - [34, 13]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 1
+  - AdaptiveMultiScaleFusion
+  - - ch
+    - [34, 13]
+    - 8
+    - amf
+- - -1
+  - 2
+  - C3k2
+  - [1024, true]
+- - 25
+  - 1
+  - TargetPriorModulation
+  - [ch, 25, spectral, 3, 8]
+- - 38
+  - 1
+  - SARAdaptiveAttention
+  - [ch, 38, 16, 7, adaptive]
+- - 39
+  - 1
+  - ContextAggregation
+  - [ch, 39, multi, 8]
+- - 40
+  - 1
+  - TargetAwareRefinement
+  - [ch, 40, deform, 3, 0.5]
+- - 29
+  - 1
+  - TargetPriorModulation
+  - [ch, 29, spectral, 3, 8]
+- - 42
+  - 1
+  - SARAdaptiveAttention
+  - [ch, 42, 16, 7, adaptive]
+- - 43
+  - 1
+  - ContextAggregation
+  - [ch, 43, multi, 8]
+- - 44
+  - 1
+  - TargetAwareRefinement
+  - [ch, 44, deform, 3, 0.5]
+- - 33
+  - 1
+  - TargetPriorModulation
+  - [ch, 33, spectral, 3, 8]
+- - 46
+  - 1
+  - SARAdaptiveAttention
+  - [ch, 46, 16, 7, adaptive]
+- - 47
+  - 1
+  - ContextAggregation
+  - [ch, 47, multi, 8]
+- - 48
+  - 1
+  - TargetAwareRefinement
+  - [ch, 48, deform, 3, 0.5]
+- - 37
+  - 1
+  - TargetPriorModulation
+  - [ch, 37, spectral, 3, 8]
+- - 50
+  - 1
+  - SARAdaptiveAttention
+  - [ch, 50, 16, 7, adaptive]
+- - 51
+  - 1
+  - ContextAggregation
+  - [ch, 51, multi, 8]
+- - 52
+  - 1
+  - TargetAwareRefinement
+  - [ch, 52, deform, 3, 0.5]
+- - [41, 45, 49, 53]
+  - 1
+  - Detect
+  - [nc]
+sar_loss: {w_sep: 0.2, w_small: 0.5, w_smooth: 0.05, margin: 1.0, bg_frac: 0.25}

@@ -36,6 +36,8 @@ __all__ = [
     "LocalStats",
     "ChannelDescriptor",
     "ZeroGate",
+    "interp_weights",
+    "radial_band_index",
 ]
 
 
@@ -137,6 +139,36 @@ class ChannelDescriptor(nn.Module):
         mx = flat.amax(-1)
         std = flat.std(-1, unbiased=False)
         return torch.cat((avg, mx, std), dim=1).view(b, 3 * c)
+
+
+def interp_weights(radius: torch.Tensor, bands: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Two-band interpolation weights for each coefficient, from its normalised radius.
+
+    Returns ``(lo, hi, w)`` flattened, where the gain for a coefficient is
+    ``g[lo] * (1 - w) + g[hi] * w``. Using the two *nearest* bands (rather than
+    hard-assigning coefficients to bands) keeps the gain a continuous, differentiable
+    function of the band parameters, so every band receives gradient.
+
+    Lives here rather than in either consumer because both the backbone spectral filter
+    (Component 9) and the prior-conditioned spectral selection (Component 8's ``spectral``
+    arm) need it. Two copies of an interpolation rule would let the two slots drift apart
+    and make their band counts silently incomparable.
+    """
+    pos = (radius.clamp(0.0, 1.0) * (bands - 1)).clamp(0.0, bands - 1.0)
+    lo = pos.floor()
+    hi = (lo + 1).clamp(max=bands - 1)
+    return lo.flatten().long(), hi.flatten().long(), (pos - lo).flatten()
+
+
+def radial_band_index(
+    h: int, w: int, bands: int, device, dtype
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Two-band interpolation weights for each ``rfft2`` bin of an ``(h, w)`` map."""
+    fy = torch.fft.fftfreq(h, device=device, dtype=dtype)  # cycles/sample in [-0.5, 0.5)
+    fx = torch.fft.rfftfreq(w, device=device, dtype=dtype)  # cycles/sample in [0, 0.5]
+    # Normalise by the Nyquist radius sqrt(0.5^2 + 0.5^2) so r == 1 sits at the corner.
+    radius = torch.sqrt(fy[:, None] ** 2 + fx[None, :] ** 2) / (0.5 * (2.0**0.5))
+    return interp_weights(radius, bands)
 
 
 class ZeroGate(nn.Module):

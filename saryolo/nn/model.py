@@ -47,3 +47,52 @@ class SARYOLODetectionModel(DetectionModel):
         if not isinstance(sar_cfg, dict):
             raise TypeError(f"model YAML 'sar_loss' must be a mapping, got {type(sar_cfg).__name__}")
         return build_criterion(self, sar_cfg)
+
+    # ---------------------------------------------------- representation consistency
+    def loss(self, batch, preds=None):
+        """``DetectionModel.loss`` plus SEC. 4's consistency view, when it is enabled.
+
+        With ``w_consistency = 0`` (the default) this is bit-for-bit the parent behaviour: one
+        forward pass, one criterion call. Only when the weight is non-zero does a *second*
+        forward run on a degraded copy of the same batch, and its feature maps are handed to
+        the criterion so the representation is penalised for changing.
+
+        The second pass deliberately does **not** update BatchNorm running statistics. A second
+        forward in training mode would otherwise move every BN buffer twice per step, so
+        enabling consistency would silently change the normalisation of the whole network --
+        and the ablation would be measuring that, not the consistency term. The BN modules are
+        switched to eval mode for the perturbed pass and restored afterwards.
+        """
+        if getattr(self, "criterion", None) is None:
+            self.criterion = self.init_criterion()
+        preds = self.forward(batch["img"]) if preds is None else preds
+
+        weight = getattr(self.criterion, "w_consistency", 0.0)
+        if weight and "feats" in preds and batch.get("img") is not None:
+            from torch import nn
+
+            from saryolo.nn.losses import perturb_batch
+
+            cfg = getattr(self.criterion, "sar_cfg", {})
+            # The draw changes each step so the model is not fitted to one fixed noise
+            # realisation, but the sequence is a pure function of the call order, which the
+            # training seed already fixes.
+            self._consistency_step = getattr(self, "_consistency_step", 0) + 1
+            perturbed = perturb_batch(
+                batch["img"],
+                kind=str(cfg.get("consistency_kind", "speckle")),
+                severity=float(cfg.get("consistency_severity", 4.0)),
+                seed=self._consistency_step,
+            )
+            bns = [m for m in self.modules() if isinstance(m, nn.modules.batchnorm._BatchNorm)]
+            was_training = [m.training for m in bns]
+            for m in bns:
+                m.eval()
+            try:
+                preds_b = self.forward(perturbed)
+            finally:
+                for m, state in zip(bns, was_training, strict=True):
+                    m.train(state)
+            if "feats" in preds_b:
+                self.criterion.set_views(preds["feats"], preds_b["feats"])
+        return self.criterion(preds, batch)

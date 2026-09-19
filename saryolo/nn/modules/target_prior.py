@@ -49,6 +49,16 @@ The ablation ladder, and why it is shaped this way
     "channel"  the same evidence network as "learned", but its spatial extent is
                average-pooled away, so the resulting prior is spatially uniform.
     "learned"  the proposed spatially-varying, content-adaptive prior map.
+    "spectral"  the prior also *selects the radial frequency bands*: a small head maps
+               pooled prior-evidence statistics to a per-channel log-gain for each band,
+               the feature is filtered with those gains, and the result is modulated by
+               the prior map. This is Module G of the brief (target-conditioned frequency
+               selection), placed here rather than in the backbone spectral slot because
+               that slot runs *before* the prior exists.
+    "spectral_feat"  identical network, identical head, identical band count -- only the
+               head's *input* differs: pooled raw-feature statistics instead of pooled
+               prior evidence. It is the matched-capacity control that separates
+               "the prior conditions the spectrum" from "the input does".
 
 ``"channel"`` exists to remove a confound that a reviewer would otherwise be right
 to raise: comparing ``"static"`` (about ``C`` parameters) against ``"learned"``
@@ -57,9 +67,22 @@ the same network as ``"learned"`` and differs only in whether the prior is allow
 to vary across space, so ``learned`` vs ``channel`` isolates spatial selectivity at
 matched capacity, while ``learned`` vs ``static`` answers the coarser question.
 
-All five arms are exact identities at initialisation (``alpha = 0``), so every arm
-starts from the baseline function and the comparison is about what training does
-with the extra structure -- not about who starts with a larger perturbation.
+Every arm is an exact identity at initialisation (``alpha = 0``), so every arm starts
+from the baseline function and the comparison is about what training does with the
+extra structure -- not about who starts with a larger perturbation.
+
+Why Module G lives in this module rather than in the spectral slot
+------------------------------------------------------------------
+The brief asks for the target prior to drive frequency-band selection. The obvious
+wiring -- prior -> spectral slot -- is not expressible in an Ultralytics graph: a custom
+module cannot take two inputs (``parse_model`` resolves ``c2 = ch[f]``, and only a
+hardcoded set of names such as ``CBFuse`` receives a channel *list*), and more
+fundamentally the backbone spectral slot runs at P5/32 *before* any prior exists, so a
+backward connection would be needed to condition it. Rather than fake the wiring, the
+conditioning is implemented where the prior actually is: the same module produces the
+prior and lets it choose the spectrum. ``spectral_feat`` then removes the confound that
+would otherwise apply -- a reviewer could correctly object that any input-adaptive
+filter would do just as well.
 
 Visualisation contract
 ----------------------
@@ -75,7 +98,14 @@ from __future__ import annotations
 import torch
 from torch import nn
 
-from ._common import ConvBNAct, DWConvBNAct, LocalStats, ZeroGate, resolve_c1
+from ._common import (
+    ConvBNAct,
+    DWConvBNAct,
+    LocalStats,
+    ZeroGate,
+    radial_band_index,
+    resolve_c1,
+)
 
 __all__ = ["TargetPriorModulation"]
 
@@ -88,18 +118,21 @@ class TargetPriorModulation(nn.Module):
         source: Index into ``ch`` for the layer actually consumed. Required because
             this module is wired from an explicit layer index (not ``-1``).
         mode: Prior construction, one of
-            ``"learned"`` (proposed), ``"channel"``, ``"static"``, ``"cfar"``, ``"none"``.
+            ``"learned"`` (proposed), ``"channel"``, ``"static"``, ``"cfar"``,
+            ``"spectral"``, ``"spectral_feat"``, ``"none"``.
         kernel: Near-scale local-statistics window.
         reduction: Bottleneck ratio of the evidence network.
+        bands: Number of radial frequency bands for the ``spectral`` arms.
         cfar_threshold: CFAR arm only -- how many local standard deviations above the
             local mean a response must sit to count as target-like.
         cfar_gain: CFAR arm only -- slope of the logistic transfer.
         alpha_init: Initial residual gate (0 => exact identity at init).
     """
 
-    MODES = ("learned", "channel", "static", "cfar", "none")
+    MODES = ("learned", "channel", "static", "cfar", "spectral", "spectral_feat", "none")
     #: Bumped whenever the parameter layout changes, so checkpoints can be validated.
-    version = 1
+    #: v2: added the prior-conditioned spectral arms and their descriptor head.
+    version = 2
 
     def __init__(
         self,
@@ -108,6 +141,7 @@ class TargetPriorModulation(nn.Module):
         mode: str = "learned",
         kernel: int = 3,
         reduction: int = 8,
+        bands: int = 8,
         cfar_threshold: float = 1.0,
         cfar_gain: float = 1.0,
         alpha_init: float = 0.0,
@@ -119,6 +153,9 @@ class TargetPriorModulation(nn.Module):
         self.mode = mode
         self.cfar_threshold = float(cfar_threshold)
         self.cfar_gain = float(cfar_gain)
+        if bands < 2:
+            raise ValueError(f"bands must be >= 2 to interpolate between bands, got {bands}")
+        self.bands = int(bands)
 
         # Near- and wide-scale statistics. Only the learned/channel arms consume the
         # wide window, but LocalStats has no parameters, so declaring it once keeps the
@@ -126,7 +163,7 @@ class TargetPriorModulation(nn.Module):
         self.stats = LocalStats(k=kernel)
         self.wide = LocalStats(k=2 * kernel + 1)
 
-        if mode in ("learned", "channel"):
+        if mode in ("learned", "channel", "spectral", "spectral_feat"):
             hidden = max(self.c1 // max(reduction, 1), 8)
             # [F ; high-pass ; near sd ; wide sd]: raw intensity, local contrast and two
             # scales of speckle strength. The 3x3 conv gives the evidence a spatial
@@ -145,6 +182,21 @@ class TargetPriorModulation(nn.Module):
             # See tests/test_arch.py::test_no_module_is_frozen_at_init.
             nn.init.normal_(self.evidence[-1].weight, std=1e-2)
             nn.init.zeros_(self.evidence[-1].bias)
+            if mode in ("spectral", "spectral_feat"):
+                # Maps a 3-vector describing the conditioning signal to a per-channel log-gain
+                # for each radial band. The *same* network and the same input width are used by
+                # both arms, so `spectral` vs `spectral_feat` isolates which signal drives the
+                # spectral selection -- the target prior, or the raw feature -- at matched
+                # capacity. Without that control, "prior-conditioned frequency selection" could
+                # not be distinguished from "input-adaptive frequency selection".
+                band_hidden = max(self.c1 // max(reduction, 1), 8)
+                self.band_head = nn.Sequential(
+                    nn.Linear(3, band_hidden),
+                    nn.SiLU(inplace=True),
+                    nn.Linear(band_hidden, self.c1 * self.bands),
+                )
+                nn.init.normal_(self.band_head[-1].weight, std=1e-2)
+                nn.init.zeros_(self.band_head[-1].bias)
         elif mode == "static":
             # Spatially uniform, per-channel learnable prior. Deliberately tiny: this arm
             # is the "can a *constant* emphasis match a spatial prior?" control.
@@ -153,7 +205,12 @@ class TargetPriorModulation(nn.Module):
             # freeze the gate rather than merely quieten it.
             self.static_logits = nn.Parameter(torch.randn(1, self.c1, 1, 1) * 1e-2)
 
-        self.alpha = ZeroGate(alpha_init)
+        # The disabled arm gets no gate, for the same reason the spectral slot's disabled arm
+        # does not: a parameter that is created but never reached still appears in
+        # `parameters()`, so a "removed" arm would differ from the full model by a stray
+        # scalar and "slot disabled" would not be literally true.
+        if mode != "none":
+            self.alpha = ZeroGate(alpha_init)
 
     # ------------------------------------------------------------------ evidence
     def _evidence(self, x: torch.Tensor) -> torch.Tensor:
@@ -178,13 +235,50 @@ class TargetPriorModulation(nn.Module):
             e = e.mean(dim=(2, 3), keepdim=True)
         return e
 
+    # ------------------------------------------------- prior-conditioned spectrum
+    @staticmethod
+    def _descriptor(src: torch.Tensor) -> torch.Tensor:
+        """Three pooled statistics of ``src`` as ``(B, 3)``: level, spread, peak.
+
+        Pooled over space *and* channels so that the prior-evidence arm and the raw-feature
+        arm hand their head an identically shaped input. That is what keeps their comparison
+        a comparison of conditioning signals rather than of head sizes.
+        """
+        flat = src.flatten(1)
+        return torch.stack(
+            (flat.mean(dim=1), flat.std(dim=1, unbiased=False), flat.amax(dim=1)), dim=1
+        )
+
+    def _band_log_gain(self, x: torch.Tensor, e: torch.Tensor) -> torch.Tensor:
+        """Per-channel, per-band log-gain ``(B, C, bands)`` conditioned on the prior or feature."""
+        source = e if self.mode == "spectral" else x
+        return self.band_head(self._descriptor(source)).view(-1, self.c1, self.bands)
+
+    def _spectral_filter(self, x: torch.Tensor, log_gain: torch.Tensor) -> torch.Tensor:
+        """Radial band-gain filtering, sharing the interpolation used by Component 9.
+
+        The transform runs in at least single precision because ``torch.fft`` has no
+        half-precision CPU kernel: under AMP this is required, not merely tidy.
+        """
+        h, w = x.shape[-2:]
+        lo, hi, weight = radial_band_index(h, w, self.bands, x.device, torch.float32)
+        g = log_gain.index_select(-1, lo) * (1.0 - weight) + log_gain.index_select(-1, hi) * weight
+        g = g.view(*log_gain.shape[:-1], h, w // 2 + 1)
+        compute = x if x.dtype in (torch.float32, torch.float64) else torch.float32
+        xf = x.to(compute)
+        spectrum = torch.fft.rfft2(xf, norm="ortho")
+        filtered = torch.fft.irfft2(
+            spectrum * torch.exp(g.clamp(-6.0, 6.0)), s=(h, w), norm="ortho"
+        )
+        return filtered.to(x.dtype)
+
     def _prior(self, x: torch.Tensor) -> torch.Tensor:
         """Signed prior ``M`` in ``(-1, 1)``, broadcastable against ``x``."""
         if self.mode == "none":
             return torch.zeros_like(x)
 
         e = self._evidence(x)
-        if self.mode in ("cfar", "learned", "channel"):
+        if self.mode in ("cfar", "learned", "channel", "spectral", "spectral_feat"):
             # 2*sigmoid(z) - 1 == tanh(z/2): bounded in (-1, 1) and signed, so the prior
             # can both amplify (M > 0) and suppress (M < 0) rather than only gating on.
             return 2.0 * torch.sigmoid(e) - 1.0
@@ -204,6 +298,21 @@ class TargetPriorModulation(nn.Module):
         return m.expand(x.shape[0], 1, *x.shape[-2:])
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.mode == "none":
+            return x
+        if self.mode in ("spectral", "spectral_feat"):
+            # The prior does two jobs here: it selects *which frequencies* are emphasised
+            # (through the band gains) and then modulates the spatially filtered result.
+            # That is the brief's Module G -- "target-conditioned frequency selection" --
+            # placed in the prior slot, because the prior is what conditions it. The prior
+            # slot sits in the head where the prior exists; the backbone spectral slot could
+            # not be conditioned this way even in principle, since it runs before the prior
+            # is computed and a custom module cannot take two inputs (verified against
+            # ultralytics' parse_model: only hardcoded names receive a channel *list*).
+            e = self._evidence(x)
+            m = 2.0 * torch.sigmoid(e) - 1.0
+            filtered = self._spectral_filter(x, self._band_log_gain(x, e))
+            return x + self.alpha() * (filtered * (1.0 + m) - x)
         m = self._prior(x)
         return x + self.alpha() * (x * (1.0 + m) - x)
 
