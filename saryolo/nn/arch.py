@@ -456,6 +456,13 @@ VARIANTS.update({
                "where 'target-conditioned frequency selection' can actually be expressed, "
                "because the prior exists here; the backbone spectral slot runs before it."),
     ),
+    # Removal arm for Module G: the reference model for it is v2_prior_spectral (EXP-018),
+    # not v2_full, so "removal" here means dropping the spectral selection *and* reverting
+    # the prior to the spatial-only mechanism -- one edit, the same slot.
+    "v2_nopspectral": _v2(
+        "v2_nopspectral",
+        notes="Removal ablation: v2_prior_spectral without prior-conditioned spectral selection (Module G removed).",
+    ),
 
     # --- removal ablation (SEC. 23 of the brief): drop one component from the full model.
     # These differ from the slot studies below in that the *module is absent*, so they

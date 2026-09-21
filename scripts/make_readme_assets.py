@@ -347,6 +347,13 @@ SLOT_SETS_V2: dict[str, tuple[str, list[tuple[str, str, bool]]]] = {
             ("in_hybrid", "ours, both streams", True),
         ],
     ),
+    "prior spectral": (
+        "Module G - target-prior spectral arms   (held fixed: full v2 setting)",
+        [
+            ("tp_spectral_feat", "feat-conditioned (control)", False),
+            ("v2_prior_spectral", "ours, prior-conditioned", True),
+        ],
+    ),
     "removal": (
         "Removal ablation   (v2 full minus one component)",
         [
@@ -355,6 +362,7 @@ SLOT_SETS_V2: dict[str, tuple[str, list[tuple[str, str, bool]]]] = {
             ("v2_nofreq", "- spatial-frequency", False),
             ("v2_noctx", "- context", False),
             ("v2_norefine", "- refinement", False),
+            ("v2_nopspectral", "- prior spectral (G)", False),
             ("v2_full", "full v2", True),
         ],
     ),
@@ -574,10 +582,25 @@ def _render_slot_panels(facts: dict, slot_sets: dict, filename: str, suptitle: s
     collision the first version of this chart actually had.
     """
     names = list(slot_sets)
+    # The canvas is capped because the layout checker rejects any text beyond a 26in
+    # envelope -- and, more to the point, a README image that tall cannot be read at all.
+    # Rather than letting height grow with the slot count, the per-panel height shrinks
+    # (down to a floor that stays legible) and extra columns are used before the cap is
+    # hit. At 6 slots this is unchanged from the fixed-height version; the cap only
+    # starts to matter when a new component joins the study.
+    MAX_CANVAS_IN = 25.0
+    PANEL_MIN_IN = 4.6
+    HEADER_IN = 2.7
     ncols = min(len(names), 2)
+    while (
+        HEADER_IN + PANEL_MIN_IN * ((len(names) + ncols - 1) // ncols) > MAX_CANVAS_IN
+        and ncols < len(names)
+    ):
+        ncols += 1
     nrows = (len(names) + ncols - 1) // ncols
-    height = 6.75 * nrows
-    header_in = 2.7  # inches reserved above the panels for the title, caption and blurb
+    panel_in = max(PANEL_MIN_IN, (MAX_CANVAS_IN - HEADER_IN) / nrows)
+    height = HEADER_IN + panel_in * nrows
+    header_in = HEADER_IN
 
     fig, axes = plt.subplots(nrows, ncols, figsize=(17.5, height), squeeze=False)
     fig.subplots_adjust(left=0.13, right=0.97, top=1 - (header_in / height), bottom=0.055,

@@ -8,6 +8,9 @@ attributable to the modules and these tests fail first.
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import pytest
 import torch
 
@@ -527,12 +530,47 @@ def test_new_slots_appear_in_the_built_graph():
         assert cls in types, f"{cls.__name__} is missing from the built v2_full model"
 
 
+#: The generator owns the removal table, so the test reads it rather than restating it.
+#: A hand-copied arm list is how `v2_nopspectral` ended up outside this check: the list named
+#: five arms, the removal slot had six, and the sixth was silently unverified.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+from make_exp_configs import ABLATION_SLOTS, REMOVAL_REFERENCES, check_removal_references  # noqa: E402
+
+
+def test_removal_slot_arms_all_declare_a_reference():
+    """Adding an arm to the removal slot without saying what it removes from must fail."""
+    check_removal_references()
+
+
 def test_v2_removal_ablation_actually_removes_something():
-    """Every removal row must cost fewer parameters than the full model."""
-    full = _num_params(_build(VARIANTS["v2_full"], nc=2))
-    for name in ("v2_noprior", "v2_nofreq", "v2_noctx", "v2_noclutter", "v2_norefine"):
-        n = _num_params(_build(VARIANTS[name], nc=2))
-        assert n < full, f"{name} ({n}) removes nothing relative to v2_full ({full})"
+    """Every removal row must cost fewer parameters than the model it is removed *from*.
+
+    The reference is per-arm, not fixed at ``v2_full``. ``v2_nopspectral`` removes Module G,
+    which is the EXP-018 ladder step rather than part of ``v2_full``; measured against
+    ``v2_full`` it differs by zero parameters, so a slot-wide "less than full" rule would
+    either miss it or force it to be a no-op that still reports as a clean removal.
+    """
+    counts = {name: _num_params(_build(VARIANTS[name], nc=2)) for name in REMOVAL_REFERENCES}
+    references = set(REMOVAL_REFERENCES.values()) | set(counts)
+    counts.update({name: _num_params(_build(VARIANTS[name], nc=2)) for name in references})
+
+    for arm, ref in REMOVAL_REFERENCES.items():
+        assert counts[arm] < counts[ref], (
+            f"{arm} ({counts[arm]}) removes nothing relative to {ref} ({counts[ref]})"
+        )
+
+
+def test_v2_removal_ablation_covers_every_arm_in_the_slot():
+    """The checked set must be exactly the slot's arms -- no more, no fewer."""
+    slot_arms = next(v for s, _p, v in ABLATION_SLOTS if s == "removal")
+    assert set(slot_arms) == set(REMOVAL_REFERENCES), (
+        "the removal slot and the declared references must name the same arms: "
+        f"{sorted(set(slot_arms) ^ set(REMOVAL_REFERENCES))} differ"
+    )
+    for arm in slot_arms:
+        assert arm in VARIANTS, f"removal arm {arm!r} has no model variant defined"
+    for ref in set(REMOVAL_REFERENCES.values()):
+        assert ref in VARIANTS, f"removal reference {ref!r} has no model variant defined"
 
 
 def test_target_prior_arms_are_capacity_matched_where_claimed():

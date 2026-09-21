@@ -104,7 +104,10 @@ ABLATION_SLOTS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     # the alternative-frequency study explicitly, so the transform arms join this slot.
     ("frequency", "26", ("fr_none", "fr_highpass", "fr_static", "fr_dct", "fr_wavelet", "v2_full")),
     ("context", "27", ("cx_none", "cx_local", "cx_regional", "v2_full")),
-    ("removal", "28", ("v2_noclutter", "v2_noprior", "v2_nofreq", "v2_noctx", "v2_norefine")),
+    # `v2_nopspectral` appended so the ids above keep their meaning: its reference model is
+    # v2_prior_spectral (EXP-018), not v2_full, so "removal" here means dropping Module G's
+    # spectral selection and reverting the prior to spatial-only -- one edit, the same slot.
+    ("removal", "28", ("v2_noclutter", "v2_noprior", "v2_nofreq", "v2_noctx", "v2_norefine", "v2_nopspectral")),
     # Appended rather than inserted, so the ids of the slots above keep their meaning
     # (an id is referenced by the ledger and by the paper tables).
     ("refinement", "29", ("rf_none", "rf_local", "rf_static", "rf_off25", "rf_off100", "v2_full")),
@@ -112,6 +115,59 @@ ABLATION_SLOTS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     # deliberately *not* part of the v2 default: it has to earn that place here.
     ("input adapter", "31", ("in_identity", "in_local", "in_learned", "in_hybrid")),
 )
+
+
+#: For each removal arm, the model graph it is removed *from*.
+#:
+#: This is declared rather than assumed, because "removal" is only meaningful relative to a
+#: reference, and one arm's reference is not ``v2_full``:
+#:
+#: * ``v2_nopspectral`` removes Module G (prior-conditioned spectral selection), which is not
+#:   part of ``v2_full`` -- it is the EXP-018 ladder step. Comparing it against ``v2_full``
+#:   would report a no-op as a clean removal, and the arm would then "prove" that Module G is
+#:   free while measuring nothing at all. Against ``v2_prior_spectral`` it is a strict removal.
+#:
+#: Kept next to the slot that uses it, and cross-checked below, so an arm cannot be added to
+#: the removal slot without someone stating what it is a removal *from*.
+REMOVAL_REFERENCES: dict[str, str] = {
+    "v2_noclutter": "v2_full",
+    "v2_noprior": "v2_full",
+    "v2_nofreq": "v2_full",
+    "v2_noctx": "v2_full",
+    "v2_norefine": "v2_full",
+    "v2_nopspectral": "v2_prior_spectral",
+}
+
+
+def _removal_arms() -> tuple[str, ...]:
+    """The variants in the removal slot, read from the slot table itself."""
+    for slot, _prefix, variants in ABLATION_SLOTS:
+        if slot == "removal":
+            return variants
+    raise SystemExit("no 'removal' slot is declared in ABLATION_SLOTS; the removal table is empty")
+
+
+def check_removal_references() -> None:
+    """Every removal arm must have a declared reference, and both must agree with the slot.
+
+    Without this the failure mode is silent: an arm with no reference is simply never
+    compared, so it appears in the table and in every config while being unchecked.
+    """
+    arms = set(_removal_arms())
+    declared = set(REMOVAL_REFERENCES)
+    if arms - declared:
+        raise SystemExit(
+            f"removal arms without a declared reference in REMOVAL_REFERENCES: "
+            f"{sorted(arms - declared)}. State what each one is a removal from."
+        )
+    if declared - arms:
+        raise SystemExit(
+            f"REMOVAL_REFERENCES names {sorted(declared - arms)}, which is not in the "
+            f"removal slot {sorted(arms)}; a stale reference would never be exercised."
+        )
+    for arm, ref in REMOVAL_REFERENCES.items():
+        if arm == ref:
+            raise SystemExit(f"removal arm {arm!r} is its own reference; that is not a removal")
 
 
 def _write(path: Path, payload: dict, note: str) -> None:
@@ -151,6 +207,8 @@ def main() -> int:
     parser.add_argument("--out", default="configs/exp")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
+
+    check_removal_references()
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
