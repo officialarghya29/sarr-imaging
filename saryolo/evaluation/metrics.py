@@ -99,23 +99,88 @@ def _resolve_split_dirs(data_yaml: str | Path) -> tuple[Path, Path, list[str]]:
     return images_dir, labels_dir, list(names)
 
 
+#: Image extensions the split index recognises.
+IMAGE_SUFFIXES: tuple[str, ...] = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff")
+
+
+def _label_path_for(image_path: Path) -> Path:
+    """The YOLO label file for an image, preferring one that actually exists.
+
+    Two conventions appear in this repository: ``images/`` -> ``labels/`` by replacing the
+    first occurrence, and by replacing the *component* named ``images``. They differ only when
+    a parent directory happens to contain the string, and the wrong choice fails silently --
+    a label path that does not exist reads as "this image has no objects". Both are tried, and
+    an existing file wins, so the guess cannot quietly erase ground truth.
+    """
+    candidates: list[Path] = []
+    text = str(image_path)
+    if "images" in text:
+        candidates.append(Path(text.replace("images", "labels", 1)).with_suffix(".txt"))
+        parts = list(image_path.parts)
+        for i in range(len(parts) - 1, -1, -1):
+            if parts[i] == "images":
+                parts[i] = "labels"
+                candidates.append(Path(*parts).with_suffix(".txt"))
+                break
+    candidates.append(image_path.with_suffix(".txt"))
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+def _split_index(data_yaml: str | Path) -> tuple[dict[str, Path], dict[str, Path], list[str]]:
+    """Resolve the validation split to ``(images by stem, labels by stem, class names)``.
+
+    Handles both forms a split can take, because a split is allowed to be either a directory
+    of images or a ``.txt`` file listing them -- ultralytics accepts both, and this project now
+    emits the list form for leave-one-source-out folds. Deriving the labels by string-replacing
+    ``images`` -> ``labels`` on a *list* entry produced a label "directory" that was really a
+    file, so no ground truth was ever read and every metric came back ``None`` while the run
+    still reported success.
+    """
+    from saryolo.data.yolo import load_data_config
+
+    root, cfg = load_data_config(data_yaml)
+    split = cfg.get("val") or cfg.get("val_images") or "images/val"
+    entry = Path(split) if Path(split).is_absolute() else root / split
+    names = cfg.get("names") or [f"class_{i}" for i in range(int(cfg.get("nc", 1)))]
+    if isinstance(names, dict):
+        names = [names[k] for k in sorted(names)]
+
+    if entry.is_file() and entry.suffix.lower() == ".txt":
+        images = []
+        for line in entry.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            p = Path(line)
+            images.append(p if p.is_absolute() else root / p)
+    else:
+        images = sorted(
+            p for p in entry.rglob("*") if p.is_file() and p.suffix.lower() in IMAGE_SUFFIXES
+        )
+
+    image_index = {p.stem: p for p in images}
+    label_index = {p.stem: _label_path_for(p) for p in images}
+    return image_index, label_index, list(names)
+
+
 def load_yolo_ground_truth(data_yaml: str | Path) -> list[Detection]:
     """Read all validation-split boxes from YOLO label files in absolute pixels."""
-    images_dir, labels_dir, _ = _resolve_split_dirs(data_yaml)
+    image_index, label_index, _ = _split_index(data_yaml)
     gts: list[Detection] = []
-    for label in sorted(labels_dir.glob("*.txt")):
+    for stem, label in sorted(label_index.items()):
+        if not label.exists():
+            # An image with no label file is legitimately object-free in YOLO format.
+            continue
         rows = [line.split() for line in label.read_text().splitlines() if line.strip()]
         if not rows:
             continue
-        size = None
-        for ext in (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"):
-            candidate = images_dir / f"{label.stem}{ext}"
-            if candidate.exists():
-                size = _image_size(candidate)
-                break
-        if size is None:
+        image = image_index.get(stem)
+        if image is None:
             continue
-        w, h = size
+        w, h = _image_size(image)
         for row in rows:
             if len(row) < 5:
                 continue
@@ -123,7 +188,7 @@ def load_yolo_ground_truth(data_yaml: str | Path) -> list[Detection]:
             cx, cy, bw, bh = (float(v) for v in row[1:5])
             x1, y1 = (cx - bw / 2) * w, (cy - bh / 2) * h
             x2, y2 = (cx + bw / 2) * w, (cy + bh / 2) * h
-            gts.append(Detection(label.stem, cid, (x1, y1, x2, y2), score=1.0))
+            gts.append(Detection(stem, cid, (x1, y1, x2, y2), score=1.0))
     return gts
 
 
@@ -183,8 +248,21 @@ def predict_to_labels(
     return labels
 
 
-def load_yolo_predictions(labels_dir: str | Path, images_dir: str | Path) -> list[Detection]:
-    """Read ultralytics' ``save_txt`` output (``cls cx cy w h conf``, normalised)."""
+def load_yolo_predictions(
+    labels_dir: str | Path,
+    images_dir: str | Path,
+    image_index: dict[str, Path] | None = None,
+) -> list[Detection]:
+    """Read ultralytics' ``save_txt`` output (``cls cx cy w h conf``, normalised).
+
+    Args:
+        labels_dir: Directory of prediction label files.
+        images_dir: Directory the images live in. Used only to look up sizes by stem, so a
+            list-file split must pass ``image_index`` instead: there is no directory to probe.
+        image_index: Optional ``stem -> image path`` map, taking precedence over
+            ``images_dir``. Required for splits given as a ``.txt`` list, where probing
+            ``images_dir / f"{stem}.png"`` finds nothing and every prediction is dropped.
+    """
     labels_dir, images_dir = Path(labels_dir), Path(images_dir)
     dets: list[Detection] = []
     size_cache: dict[str, tuple[int, int]] = {}
@@ -195,11 +273,16 @@ def load_yolo_predictions(labels_dir: str | Path, images_dir: str | Path) -> lis
         stem = label.stem
         if stem not in size_cache:
             found = None
-            for ext in (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"):
-                candidate = images_dir / f"{stem}{ext}"
-                if candidate.exists():
-                    found = _image_size(candidate)
-                    break
+            if image_index is not None:
+                path = image_index.get(stem)
+                if path is not None and path.exists():
+                    found = _image_size(path)
+            else:
+                for ext in IMAGE_SUFFIXES:
+                    candidate = images_dir / f"{stem}{ext}"
+                    if candidate.exists():
+                        found = _image_size(candidate)
+                        break
             if found is None:
                 continue
             size_cache[stem] = found
@@ -386,9 +469,28 @@ def evaluate_detections(
         measurement is never presented as a real one).
     """
     images_dir, _, class_names = _resolve_split_dirs(data_yaml)
-    labels_dir = predict_to_labels(weights, images_dir, imgsz=imgsz, conf=conf, out_dir=out_dir, device=device)
-    dets = load_yolo_predictions(labels_dir, images_dir)
+    image_index, _, _ = _split_index(data_yaml)
+
+    # Ground truth is read *before* inference so an unresolvable split fails immediately
+    # rather than after a full prediction pass. Zero ground truth means nothing was measured,
+    # and returning a metrics dict with every value set to None is indistinguishable from a
+    # finished run -- which is exactly what happened whenever the split could not be resolved:
+    # a split given as a `.txt` list had its labels derived from a path that was really a file,
+    # so no boxes were ever read and the caller saw a successful evaluation of an empty
+    # dataset. Data that legitimately has no boxes is not something to report AP for, so this
+    # refuses instead of reporting.
     gts = load_yolo_ground_truth(data_yaml)
+    if not gts:
+        raise ValueError(
+            f"no ground-truth boxes were found for the validation split of {data_yaml}. "
+            f"Resolved {len(image_index)} image(s) and matched none of them to a non-empty "
+            f"label file, so every metric would be None while the run still reported success. "
+            f"Check the 'val' entry: it may point at a .txt list whose images have no sibling "
+            f"labels directory, or at the wrong split."
+        )
+
+    labels_dir = predict_to_labels(weights, images_dir, imgsz=imgsz, conf=conf, out_dir=out_dir, device=device)
+    dets = load_yolo_predictions(labels_dir, images_dir, image_index=image_index)
     nc = len(class_names)
 
     overall = compute_ap(dets, gts, nc, AREA_RANGES["all"])

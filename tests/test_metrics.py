@@ -146,6 +146,99 @@ def test_predict_to_labels_resolves_a_relative_out_dir(tmp_path, monkeypatch):
     assert not (tmp_path / "runs").exists(), "output must not be re-rooted under runs/detect"
 
 
+def _tiny_dataset(root, counts=("a", "b")):
+    """A minimal images/ + labels/ tree with non-empty labels, sized 100x50."""
+    import cv2
+    import numpy as np
+
+    (root / "images").mkdir(parents=True, exist_ok=True)
+    (root / "labels").mkdir(parents=True, exist_ok=True)
+    for stem in counts:
+        cv2.imwrite(str(root / "images" / f"{stem}.png"), np.zeros((50, 100, 3), dtype=np.uint8))
+        (root / "labels" / f"{stem}.txt").write_text("0 0.5 0.5 0.2 0.2\n0 0.2 0.2 0.1 0.1\n")
+    return root
+
+
+def test_ground_truth_is_read_from_a_txt_list_split(tmp_path):
+    """A split given as an image *list* must still resolve to its ground truth.
+
+    Regression, and a silent one: the labels were derived by string-replacing ``images`` ->
+    ``labels`` on the split entry. For a list entry that produced the list file itself as the
+    "labels directory", so ``glob("*.txt")`` found the list, looked for an image named after
+    it, found none, and returned zero boxes -- while the evaluation still reported success with
+    ``mAP50 = None``. The list form is what the leave-one-source-out folds emit, so without
+    this the whole cross-source protocol would have measured nothing.
+    """
+    from saryolo.evaluation.metrics import load_yolo_ground_truth
+
+    data_root = _tiny_dataset(tmp_path)
+    listing = tmp_path / "val_list.txt"
+    listing.write_text("".join(f"{data_root / 'images' / f'{s}.png'}\n" for s in ("a", "b")))
+    cfg = tmp_path / "data.yaml"
+    cfg.write_text(f"path: {data_root}\nnc: 1\nnames:\n- target\nval: {listing}\n")
+
+    gts = load_yolo_ground_truth(cfg)
+    assert len(gts) == 4, f"expected 2 images x 2 boxes, got {len(gts)}"
+    assert {g.image for g in gts} == {"a", "b"}
+    # 100x50 image, box 0.2x0.2 -> 20x10 px, centred.
+    first = next(g for g in gts if g.image == "a" and g.xyxy[0] == pytest.approx(40.0))
+    assert first.xyxy == pytest.approx((40.0, 20.0, 60.0, 30.0))
+
+
+def test_ground_truth_from_a_directory_split_is_unchanged(tmp_path):
+    """The list handling must not disturb the ordinary directory split."""
+    from saryolo.evaluation.metrics import load_yolo_ground_truth
+
+    data_root = _tiny_dataset(tmp_path / "ds")
+    cfg = tmp_path / "data.yaml"
+    cfg.write_text(f"path: {data_root}\nnc: 1\nnames:\n- target\nval: images\n")
+    assert len(load_yolo_ground_truth(cfg)) == 4
+
+
+def test_evaluation_refuses_a_split_with_no_ground_truth(tmp_path):
+    """An unmeasurable split must raise, not return a dict of Nones as if it finished.
+
+    The failure this prevents is not a crash but a *quiet* one: an empty metrics dict looks
+    like a completed evaluation, so a broken split reference would be written into a results
+    table as a number nobody could tell was missing.
+    """
+    from saryolo.evaluation.metrics import evaluate_detections
+
+    data_root = tmp_path / "ds"
+    (data_root / "images").mkdir(parents=True)
+    (data_root / "labels").mkdir(parents=True)
+    import cv2
+    import numpy as np
+
+    cv2.imwrite(str(data_root / "images" / "a.png"), np.zeros((32, 32, 3), dtype=np.uint8))
+    (data_root / "labels" / "a.txt").write_text("")  # image present, no boxes anywhere
+    cfg = tmp_path / "data.yaml"
+    cfg.write_text(f"path: {data_root}\nnc: 1\nnames:\n- target\nval: images\n")
+
+    # No weights are needed: ground truth is read before inference precisely so this is
+    # caught without paying for a prediction pass.
+    with pytest.raises(ValueError, match="no ground-truth boxes"):
+        evaluate_detections("does-not-matter.pt", cfg)
+
+
+def test_label_lookup_prefers_an_existing_file(tmp_path):
+    """A wrong guess between the two images->labels conventions must not erase ground truth."""
+    from saryolo.evaluation.metrics import _label_path_for
+
+    data_root = _tiny_dataset(tmp_path)
+    image = data_root / "images" / "a.png"
+    assert _label_path_for(image) == data_root / "labels" / "a.txt"
+
+    # A parent directory that also contains "images" is where the first-replacement rule
+    # produces a path that does not exist; the component rule is the one that is right.
+    odd = tmp_path / "images_export" / "images" / "a.png"
+    odd.parent.mkdir(parents=True)
+    odd.write_bytes(b"x")
+    (tmp_path / "images_export" / "labels").mkdir()
+    (tmp_path / "images_export" / "labels" / "a.txt").write_text("0 0.5 0.5 0.1 0.1\n")
+    assert _label_path_for(odd) == tmp_path / "images_export" / "labels" / "a.txt"
+
+
 def test_predict_to_labels_returns_the_directory_it_wrote(tmp_path, monkeypatch):
     """The returned path must contain the labels, so callers never guess where they landed."""
     from pathlib import Path
