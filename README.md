@@ -8,9 +8,9 @@
 | --- | --- |
 | **Licence** | MIT for the code — datasets are never redistributed |
 | **Stack** | Python 3.10+ · Ultralytics 8.4.155 · PyTorch 2.x |
-| **Architectures** | 74 variants wired; every one builds and runs a forward pass |
-| **Experiments** | 72 configured; each reproducible from a committed YAML |
-| **Tests** | 169 passing — no dataset download and no GPU needed |
+| **Architectures** | 75 variants wired; every one builds and runs a forward pass |
+| **Experiments** | 73 configured; each reproducible from a committed YAML |
+| **Tests** | 171 passing — no dataset download and no GPU needed |
 | **Accuracy results** | none yet — not one number in this repository is fabricated |
 
 ---
@@ -275,11 +275,13 @@ The prior is the paper's central hypothesis, so it gets the most careful ablatio
 | | ours, input-adaptive offsets | 16.230 | +0.017M (17,288 params at scale `s`): the offset head is `C → 2` channels per level |
 | **Target prior, spectral** (8+9) | feat-conditioned spectral | 16.586 | **the Module G control**: byte-for-byte the same size as the row below — only the *conditioning signal* differs (raw feature, not prior) |
 | | ours, prior-conditioned spectral | 16.586 | the prior chooses the radial band gains: `EXP-018`, the ladder row for Module G |
-| **Removal** | − clutter / − prior / − freq / − context / − refinement | 16.061 / 16.048 / 16.127 / 15.066 / 15.854 | against full v2 at 16.230 |
+| **Removal** | − clutter / − prior / − freq / − context / − refinement / − prior spectral | 16.061 / 16.048 / 16.127 / 15.066 / 15.854 / 16.230 | each against its own reference: full v2 at 16.230, except − prior spectral which removes Module G against `v2_prior_spectral` at 16.586 — a strict removal of 356,320 params, bit-identical to full v2 |
 
 The **capacity-matched** row is the methodological point. Comparing "learned spatial prior" against "uniform learned prior" would confound *spatial selectivity* with *parameter count* — the larger arm could win for reasons that have nothing to do with the hypothesis. `tp_channel` therefore uses the proposed arm's exact evidence network and averages its output over space, so the two arms are byte-for-byte the same size (asserted in `test_target_prior_arms_are_capacity_matched_where_claimed`) and differ in one respect only: whether the prior is allowed to vary across the image. If `tp_channel` matches `v2_full`, the spatial-prior claim is dead — and the paper must say so.
 
 The same discipline applies to Component 9. A zero-initialised spectral gain would mean `gain = 1`, so the filtered branch would equal its input and the gate gradient would vanish identically — the frozen-module failure again. The bands therefore start small-but-non-zero, and identity comes from the gate. The `sff` arm also starts numerically equal to `static`, so the difference between those two rows measures *input adaptivity* alone.
+
+**The removal table names a reference for each arm rather than assuming one for the slot.** A removal is only meaningful relative to a model, and one arm's reference is not `v2_full`: `v2_nopspectral` removes Module G, which is the `EXP-018` ladder step rather than part of `v2_full`. Measured against `v2_full` it differs by **zero** parameters — so a slot-wide "smaller than full" rule would either miss it or push it into being a no-op that still reports as a clean removal. The references are therefore declared next to the slot, the generator refuses to emit a removal arm without one, and the test reads the table instead of restating it (a hand-copied five-arm list is exactly how `v2_nopspectral` stayed outside the check while the slot had six arms).
 
 **Module G lives in the prior slot, not the spectral slot — and that is forced, not stylistic.** The brief asks for the target prior to drive frequency-band selection, but the backbone spectral slot runs at P5/32 *before* any prior exists, and an Ultralytics graph cannot feed a custom module two inputs (`parse_model` resolves `c2 = ch[f]`; only hardcoded names receive a channel list — verified against the installed source). Faking the wiring with a backward connection would break the stock summary, FLOPs counter and validator. So the conditioning is implemented where the prior actually is: the prior module itself produces the band gains. `tp_spectral_feat` is the control that keeps the claim honest — same head, same bands, same descriptor, fed raw-feature statistics instead of prior evidence — so `spectral − spectral_feat` isolates *prior* conditioning from mere input adaptivity.
 
@@ -298,7 +300,7 @@ Component 11 needs a control that is uncommon in detection papers, because "defo
 | Check | Result | Evidence |
 | --- | --- | --- |
 | Baseline reproduces stock YOLO11 exactly | `2,624,080` (n), `9,458,752` (s) | `test_baseline_matches_stock_yolo11_parameter_count` |
-| **All 74 architectures construct and forward** | pass, at even and odd input sizes | `test_every_variant_builds_and_forwards` |
+| **All 75 architectures construct and forward** | pass, at even and odd input sizes | `test_every_variant_builds_and_forwards` |
 | Declared scales build at the right stride count | pass | `test_declared_scale_variants_build` |
 | Every SAR module is an **exact** identity at init | `max\|f(x)−x\| = 0.0e+00` ×9 | measured live + `test_each_module_is_exactly_identity_at_init` |
 | **No module is silently frozen at init** | every learnable mode has a non-zero gate gradient | `test_no_module_is_frozen_at_init` |
@@ -307,7 +309,7 @@ Component 11 needs a control that is uncommon in detection papers, because "defo
 | Deformable refinement's grid identity is pinned | zero offset → `7e-7` dev; 0.04-cell shift → `0.4` | `test_refinement_resampling_is_an_identity_at_zero_offset` |
 | Offsets move the grid, and only in the adaptive arm | pass | `test_refinement_offsets_actually_move_the_sampling_grid`, `..._are_feature_adaptive_only_in_deform_mode` |
 | SAR-YOLO predicts identically to baseline at init | max abs diff `0.0` (v1 **and** v2) | `test_models_output_identically_to_baseline_at_init` |
-| Filenames cannot silently downgrade the scale | pass (74 variants) | `test_variant_filenames_encode_scale` |
+| Filenames cannot silently downgrade the scale | pass (75 variants) | `test_variant_filenames_encode_scale` |
 | Mode names cannot break the parser | pass (no keyword or `parse_model`-local collision) | `test_module_mode_names_are_safe_for_parse_model` |
 | Spectral branch is resolution- and AMP-safe | odd, non-square and fp16 inputs pass | `test_frequency_module_is_resolution_independent` |
 | Every ablation arm has a runnable config | pass | `test_every_ablation_arm_has_a_runnable_experiment_config` |
@@ -398,8 +400,8 @@ uv pip install --python .venv/bin/python torch torchvision --index-url https://d
 uv pip install --python .venv/bin/python ultralytics pytest
 source .venv/bin/activate
 
-pytest tests/ -q                                          # 169 tests
-python -m saryolo arch --variant all --nc 1               # emit 74 model YAMLs
+pytest tests/ -q                                          # 171 tests
+python -m saryolo arch --variant all --nc 1               # emit 75 model YAMLs
 python -m saryolo synth-data --out datasets/processed/synthetic_smoke
 python -m saryolo train --exp configs/exp/_smoke_baseline.yaml
 python -m saryolo train --exp configs/exp/_smoke_full.yaml
@@ -472,7 +474,7 @@ Every arm below sits in the *same slot* with every other component held fixed, a
 | `EXP-251…258` | target prior (8) | none · CFAR · uniform · capacity-matched-spatial · ours-spatial · **feat-conditioned spectral** · **ours prior-conditioned spectral (Module G)** · ladder reference |
 | `EXP-261…266` | frequency (9) | none · fixed high-pass · learned bands · **DCT** · **wavelet** · ours-adaptive |
 | `EXP-271…274` | context (10) | none · local · regional · ours-both |
-| `EXP-281…285` | removal | −clutter · −prior · −freq · −context · −refinement (against full v2) |
+| `EXP-281…286` | removal | −clutter · −prior · −freq · −context · −refinement · −prior-spectral (Module G) |
 | `EXP-291…296` | refinement (11) | none · **local (capacity control)** · fixed offsets · offset sweep (25% · 100%) · ours-adaptive |
 | `EXP-311…314` | input adapter (12) | raw (`identity`) · local-statistics · learned · ours-hybrid |
 
@@ -521,7 +523,7 @@ Two details carry the weight of the claim:
 ```
 saryolo/
 ├── nn/
-│   ├── arch.py            symbolic builder: 74 variants, all indices computed
+│   ├── arch.py            symbolic builder: 75 variants, all indices computed
 │   ├── modules/
 │   │   ├── input_adapter.py SIA (Comp 12) + raw / local / learned arms
 │   │   ├── enhancement.py SFE (Comp 1) + log / standardize / CLAHE baselines
@@ -580,7 +582,7 @@ The ledger is **append-only**. A rerun never overwrites an earlier result, and f
 
 - **No real-dataset accuracy exists yet.** Everything in Part IV is infrastructure validation.
 - **The adaptive-vs-static rows are load-bearing.** If `att_saa_static` matches `att_saa`, the adaptivity claim is unsupported and the paper must say so. The same applies to `tp_channel` vs `v2_full` for the target prior, `fr_static` vs `v2_full` for the spectral branch, and `rf_local` vs `v2_full` for the deformable refinement.
-- **Components 8-11 are unvalidated and may not survive.** They exist because v1 leaves four failures unaddressed, not because they are expected to help. v2 is ~72% larger and ~2.57× the compute of the baseline, so the removal ablation (`EXP-281…285`) can and should delete any component that does not pay for itself. A shorter, cheaper model is a *better* result, not a failure.
+- **Components 8-11 are unvalidated and may not survive.** They exist because v1 leaves four failures unaddressed, not because they are expected to help. v2 is ~72% larger and ~2.57× the compute of the baseline, so the removal ablation (`EXP-281…286`) can and should delete any component that does not pay for itself. A shorter, cheaper model is a *better* result, not a failure.
 - **The deformable offset bound is being saturated and needs a sweep.** In the 2-epoch smoke run the learned offsets already reached `|d| ≈ 0.47` against the `max_offset = 0.5` bound, which means the tanh is operating where its gradient is smallest (`1 − tanh² ≈ 0.11`). That is either the model asking for a larger search radius or a bound set too tight, and the two have opposite fixes — so `max_offset` is a hyperparameter to sweep (a committed variant per value), not a constant to leave untuned.
 - **The v2 clutter mode is a mode change, not a new slot**, so EXP-013 adds no module: it changes Component 2's speckle estimator into a three-branch target/speckle/clutter form. Its ablation is the `- clutter` row, not a slot study.
 - **HRSID and SAR-Ship-Dataset leak under random chip splits** — chips are cut from a few large scenes. `saryolo.data.splits.leakage_report` exists to catch this; a scene-grouped split is required before trusting mAP on those datasets.

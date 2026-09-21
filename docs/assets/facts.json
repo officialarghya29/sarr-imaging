@@ -1,5 +1,5 @@
 {
-  "variants": 74,
+  "variants": 75,
   "zoo": {
     "baseline_n": {
       "variant": "baseline",
@@ -428,6 +428,20 @@
         "params_M": 16.229747
       }
     ],
+    "prior spectral": [
+      {
+        "variant": "tp_spectral_feat",
+        "label": "feat-conditioned (control)",
+        "ours": false,
+        "params_M": 16.585903
+      },
+      {
+        "variant": "v2_prior_spectral",
+        "label": "ours, prior-conditioned",
+        "ours": true,
+        "params_M": 16.585903
+      }
+    ],
     "removal": [
       {
         "variant": "v2_noclutter",
@@ -458,6 +472,12 @@
         "label": "- refinement",
         "ours": false,
         "params_M": 15.853571
+      },
+      {
+        "variant": "v2_nopspectral",
+        "label": "- prior spectral (G)",
+        "ours": false,
+        "params_M": 16.229583
       },
       {
         "variant": "v2_full",
@@ -567,8 +587,8 @@
   },
   "dataset_count": 5,
   "experiments": {
-    "total": 70,
-    "config_files": 72,
+    "total": 71,
+    "config_files": 73,
     "with_results": [],
     "ledger_runs": 14,
     "non_experiment_runs": [
@@ -579,9 +599,9 @@
     ]
   },
   "tests": {
-    "total": 169,
+    "total": 171,
     "by_file": {
-      "tests/test_arch.py": 50,
+      "tests/test_arch.py": 52,
       "tests/test_augmentation.py": 15,
       "tests/test_cli.py": 8,
       "tests/test_data.py": 19,
