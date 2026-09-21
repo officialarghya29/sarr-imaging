@@ -599,15 +599,16 @@
     ]
   },
   "tests": {
-    "total": 176,
+    "total": 200,
     "by_file": {
       "tests/test_arch.py": 54,
       "tests/test_augmentation.py": 15,
-      "tests/test_cli.py": 10,
+      "tests/test_cli.py": 13,
       "tests/test_data.py": 19,
+      "tests/test_groups.py": 17,
       "tests/test_hard_examples.py": 20,
       "tests/test_losses.py": 24,
-      "tests/test_metrics.py": 11,
+      "tests/test_metrics.py": 15,
       "tests/test_repo.py": 23
     }
   }

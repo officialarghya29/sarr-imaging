@@ -135,6 +135,56 @@ def test_failure_reason_survives_a_note_without_an_error_marker():
     assert _failure_reason("two | ERROR: first | ERROR: second") == "first | ERROR: second"
 
 
+# ---------------------------------------------------------------------- loso
+def _sensor_images(root, sensors: dict[str, int]):
+    root.mkdir(parents=True, exist_ok=True)
+    for sensor, count in sensors.items():
+        d = root / sensor / "images"
+        d.mkdir(parents=True, exist_ok=True)
+        for i in range(count):
+            (d / f"{sensor}_{i:03d}.png").write_bytes(b"x")
+    return root
+
+
+def test_loso_writes_one_runnable_fold_per_source(tmp_path, capsys):
+    root = _sensor_images(tmp_path / "raw", {"s1": 20, "g3": 20})
+    data_cfg = tmp_path / "data.yaml"
+    data_cfg.write_text(f"path: {root}\nnc: 1\nnames:\n- ship\nval: s1/images\n")
+    out = tmp_path / "loso"
+
+    code = main(["loso", "--images", str(root), "--data", str(data_cfg),
+                 "--min-test-images", "5", "--out", str(out)])
+    assert code == 0, capsys.readouterr().out
+    printed = capsys.readouterr().out
+    assert "2 source(s)" in printed
+    assert sorted(p.name for p in out.iterdir() if p.is_dir()) == ["g3", "s1"]
+    for fold in ("s1", "g3"):
+        assert (out / fold / "data.yaml").exists()
+        assert (out / fold / "eval_holdout.yaml").exists()
+
+
+def test_loso_refuses_a_rule_that_keys_on_the_split_layout(tmp_path, capsys):
+    """Pointing the rule one level too high is the mistake that silently fakes the claim."""
+    root = tmp_path / "processed" / "images"
+    for split, count in (("train", 6), ("val", 3), ("test", 3)):
+        d = root / split
+        d.mkdir(parents=True)
+        for i in range(count):
+            (d / f"{split}_{i}.png").write_bytes(b"x")
+
+    with pytest.raises(SystemExit) as exc:
+        main(["loso", "--images", str(root), "--out", str(tmp_path / "loso")])
+    assert "split names, not sources" in str(exc.value.code)
+
+
+def test_loso_needs_a_rule_it_can_actually_apply(tmp_path):
+    root = _sensor_images(tmp_path / "raw", {"s1": 20, "g3": 20})
+    with pytest.raises(SystemExit, match="requires --pattern"):
+        main(["loso", "--images", str(root), "--rule", "regex", "--out", str(tmp_path / "o")])
+    with pytest.raises(SystemExit, match="requires --sidecar"):
+        main(["loso", "--images", str(root), "--rule", "sidecar", "--out", str(tmp_path / "o")])
+
+
 # ------------------------------------------------------------------- arch/registry
 def test_arch_rejects_an_unknown_variant(tmp_path):
     with pytest.raises(SystemExit):

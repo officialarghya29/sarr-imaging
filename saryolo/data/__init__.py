@@ -8,6 +8,7 @@ Nothing in this package mutates a raw dataset. Conversion output goes to
 from __future__ import annotations
 
 from .convert import coco_to_yolo, dota_to_yolo_obb, prepare_dataset, voc_to_yolo
+from .groups import Fold, SourceGroups, SourceRule, discover_sources, leave_one_out_folds, write_loso_splits
 from .registry import DATASETS, RECOMMENDED_ORDER, DatasetSpec, get_dataset, list_datasets
 from .splits import leakage_report, read_official_split, split_files, write_splits
 from .statistics import COCO_SIZE_BINS, DatasetStatistics, plot_statistics, profile_dataset, save_statistics
@@ -43,6 +44,13 @@ __all__ = [
     "leakage_report",
     "read_official_split",
     "write_splits",
+    # cross-source grouping (leave-one-source-out)
+    "SourceRule",
+    "SourceGroups",
+    "Fold",
+    "discover_sources",
+    "leave_one_out_folds",
+    "write_loso_splits",
     # statistics
     "profile_dataset",
     "plot_statistics",

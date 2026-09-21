@@ -10,7 +10,7 @@
 | **Stack** | Python 3.10+ · Ultralytics 8.4.155 · PyTorch 2.x |
 | **Architectures** | 80 variants wired; every one builds and runs a forward pass |
 | **Experiments** | 80 configured; each reproducible from a committed YAML |
-| **Tests** | 176 passing — no dataset download and no GPU needed |
+| **Tests** | 200 passing — no dataset download and no GPU needed |
 | **Accuracy results** | none yet — not one number in this repository is fabricated |
 
 ---
@@ -383,6 +383,42 @@ The oriented-label trap is caught automatically rather than discovered after a w
 
 Details, licences, citations and download routes: [`docs/DATASETS.md`](docs/DATASETS.md). **No dataset is redistributed here** — MIT covers the code only.
 
+### Cross-source splits: leave-one-source-out
+
+The headline claim is that the detector generalises to a **source it was never trained on** — a different satellite, or a different sensor on the same platform. That is a stronger claim than in-domain accuracy and a different one from cross-*dataset* accuracy, because two datasets can share a sensor and one dataset can mix several: SAR-Ship-Dataset is Sentinel-1 **and** Gaofen-3, SARDet-100K is unified from **ten** sources. So the evaluation unit has to be the source, not the dataset name.
+
+```bash
+python -m saryolo.cli loso --images <dir-of-images> --rule parent --data configs/datasets/ssdd.yaml \
+    --min-test-images 30 --out datasets/splits/loso
+```
+
+That writes one directory per held-out source containing `train.txt` / `val.txt` / `test.txt`, a manifest recording the rule and every source size, and — given `--data` — two runnable data configs per fold:
+
+| Config | `val` points at | Used for |
+| --- | --- | --- |
+| `data.yaml` | `val.txt` | training (validation drives early stopping) |
+| `eval_holdout.yaml` | `test.txt` | **the reported number** |
+
+The two exist because `evaluate_detections` reads the config's `val` entry. A single config with `val: val.txt` would report a score measured on sources the model trained on — an in-domain number wearing a cross-source label — and nothing about the output would look wrong.
+
+The rule is **stated, never inferred**, because no universal one is safe: some archives ship a directory per sensor, some encode it in the filename, some only in a metadata table. `--rule parent|regex|sidecar` covers those three, and the fallback is an explicit mapping rather than a heuristic.
+
+Every guard below exists because its failure mode is *silent* — the run completes and reports a number:
+
+| Guard | What it prevents |
+| --- | --- |
+| A rule matching nothing is an error | One group happens to be a *valid-looking* answer: the folds build, files are written, and the “held-out source” is a random chip split |
+| Fewer than two sources is an error | There is nothing to hold out, so the number measures nothing of the kind claimed |
+| Groups whose last component is `train`/`val`/`test` are refused | Keying one level too high holds out a split the pipeline created itself — three plausible groups, plausible sizes, in-domain result |
+| Images the rule cannot key are refused by default | An unkeyed image is absent from every fold, shrinking the test set to a subset nobody chose |
+| A source below `--min-test-images` is refused | mAP over a handful of chips is noise presented as evidence |
+| Splits are asserted disjoint before writing | A leaking fold still trains and still reports a number |
+| **An evaluation split with zero ground truth raises** | A metrics dict of `None`s is indistinguishable from a finished run |
+
+That last one was live: a split given as a `.txt` image list had its labels derived by string-replacing `images` → `labels` on the *list path*, so no ground truth was ever read and `mAP50` came back `None` while the command reported success. The list form is exactly what a fold emits, so without the fix the whole protocol would have measured nothing. Ground truth is now read **before** inference, so an unresolvable split fails immediately instead of after a full prediction pass.
+
+**What this does not yet do.** The protocol is step one. The model-side half — a small adapter conditioned on acquisition metadata (sensor, resolution, polarisation) at the stem and neck — is **not implemented**, and no cross-source number exists yet; every cell stays `TBD` until a fold has actually been trained. The protocol is what makes that number trustworthy when it lands.
+
 ---
 
 ## Part VI · Design rules
@@ -408,7 +444,7 @@ uv pip install --python .venv/bin/python torch torchvision --index-url https://d
 uv pip install --python .venv/bin/python ultralytics pytest
 source .venv/bin/activate
 
-pytest tests/ -q                                          # 176 tests
+pytest tests/ -q                                          # 200 tests
 python -m saryolo arch --variant all --nc 1               # emit 75 model YAMLs
 python -m saryolo synth-data --out datasets/processed/synthetic_smoke
 python -m saryolo train --exp configs/exp/_smoke_baseline.yaml
@@ -533,7 +569,7 @@ Two details carry the weight of the claim:
 ```
 saryolo/
 ├── nn/
-│   ├── arch.py            symbolic builder: 75 variants, all indices computed
+│   ├── arch.py            symbolic builder: 80 variants, all indices computed
 │   ├── modules/
 │   │   ├── input_adapter.py SIA (Comp 12) + raw / local / learned arms
 │   │   ├── enhancement.py SFE (Comp 1) + log / standardize / CLAHE baselines
@@ -550,6 +586,7 @@ saryolo/
 │   └── register.py        publishes custom layers to ultralytics
 ├── augmentation/          SAR-specific augmentation (SEC. 5), reusing the corruption model
 ├── data/                  registry · converters · validator · statistics · leakage
+│                          groups.py: source grouping + leave-one-source-out folds
 ├── training/              trainer · runner · config loader · hard_examples (SEC. 6)
 ├── evaluation/            COCO AP + scale-wise AP · robustness · efficiency · domain shift
 ├── visualization/         detections · Grad-CAM (all 8 modules) · feature maps · failure taxonomy
@@ -557,11 +594,12 @@ saryolo/
 ├── paper/                 LaTeX + table/figure generators (cannot fabricate)
 └── cli.py                 python -m saryolo <command>
 
-configs/    datasets/ · models/ (63 generated) · exp/ (EXP-001…017 + EXP-2xx ablations)
+configs/    datasets/ · models/ (80 generated) · exp/ (EXP-001…019 + EXP-2xx ablations)
 scripts/    prepare_dataset · make_exp_configs · train_all_experiments
             make_readme_assets (builds this page's charts) · check_chart_layout
 notebooks/  Colab: dataset prep · train + ablate · benchmark + paper
-tests/      169 tests across arch parity, identity, gradient flow, metrics, losses, data, repo
+tests/      tests across arch parity, identity, gradient flow, metrics, losses, data, repo
+            cross-source grouping and folds
 docs/       DATASETS.md · METHOD.md · assets/ (generated charts)
 ```
 

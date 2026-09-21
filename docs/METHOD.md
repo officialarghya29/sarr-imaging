@@ -718,5 +718,65 @@ Two rules keep it honest:
   forward+backward step.
 * **Cross-dataset** evaluation that *refuses to run* on incompatible label
   spaces instead of reporting a meaningless low mAP.
+* **Cross-source** evaluation as leave-one-source-out folds
+  (`saryolo.data.groups`), which is the headline protocol: see below.
 * **Multi-seed** runs (EXP-012) reported as mean ± std, because a single-seed
   difference of a few tenths of a point is not evidence.
+
+### Leave-one-source-out: why the unit is the source
+
+The strongest claim this project makes is generalisation to a source it has never
+trained on. "Source" is not the dataset, because the two do not coincide: one
+dataset can mix several sensors (SAR-Ship-Dataset is Sentinel-1 **and** Gaofen-3)
+and several datasets can share one. Splitting by dataset name therefore leaves the
+question open, while splitting by source answers it directly.
+
+The mechanism already existed for scenes: `split_files(..., scene_key=...)` never
+places two chips of one acquisition on both sides of a split, and a source key is
+the same mechanism at a coarser unit. What did not exist was a way to *derive* the
+key — and that is where the protocol quietly fails, because a key function matching
+nothing does not error out; it yields **one group**. The folds then build, the files
+are written, and the held-out "source" is a random chip split reported as
+cross-source generalisation.
+
+So the derivation is explicit:
+
+| `--rule` | Key taken from |
+| --- | --- |
+| `parent` | the first `--depth` path components below `--root` (one directory per source) |
+| `regex` | a single capture group in the filename |
+| `sidecar` | an explicit image → source mapping |
+
+Three strategies rather than one because no universal rule is safe — but the
+fallback is a stated mapping, never a heuristic silently guessing a sensor.
+
+**Every guard exists because its failure is silent.** A rule that matches nothing,
+fewer than two sources, unkeyed images, groups whose last component is
+`train`/`val`/`test`, a source below `--min-test-images`, and overlapping splits are
+all refusals rather than warnings: each produces a run that *completes* and reports
+a number that means something other than what it says. The split-name check earned
+its place immediately — pointing `parent` at a processed `images/` directory, or
+raising `--depth` above it, both key on the train/val/test layout, and the second
+passes every other check while looking entirely healthy.
+
+Two configs are written per fold, and the difference is the protocol:
+
+```
+data.yaml          train: train.txt   val: val.txt    -> training (early stopping)
+eval_holdout.yaml                     val: test.txt   -> the reported number
+```
+
+`evaluate_detections` reads a config's `val` entry, so a single config validating on
+`val.txt` would report a score from sources the model trained on. Validation is
+never source-held-out here, and each fold records that fact rather than leaving it to
+be inferred.
+
+The list form also exposed a real evaluation bug, which the zero-ground-truth guard
+now catches: labels for a `.txt` split were derived by string-replacing
+`images` → `labels` on the list path, so no ground truth was read, every metric came
+back `None`, and the command still exited successfully. Ground truth is read before
+inference, so this fails immediately rather than after a prediction pass.
+
+**Not yet built.** The protocol is one half of the claim. The model-side half — an
+adapter conditioned on acquisition metadata — is not implemented, and no cross-source
+number exists yet; unmeasured cells stay `TBD`.

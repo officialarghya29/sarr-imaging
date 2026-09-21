@@ -397,6 +397,97 @@ def _parse_severities(specs: list[str] | None) -> dict[str, tuple[float, ...]]:
     return out
 
 
+def _cmd_loso(args) -> int:
+    """Build leave-one-source-out folds for the cross-source generalisation claim."""
+    from saryolo.data.groups import (
+        IMAGE_SUFFIXES,
+        SourceRule,
+        discover_sources,
+        leave_one_out_folds,
+        write_loso_splits,
+    )
+
+    images_root = Path(args.images).resolve()
+    if not images_root.exists():
+        raise SystemExit(f"--images {images_root} does not exist")
+
+    paths = sorted(
+        p for p in images_root.rglob("*")
+        if p.is_file() and p.suffix.lower() in IMAGE_SUFFIXES
+    )
+    if not paths:
+        raise SystemExit(
+            f"no images with {IMAGE_SUFFIXES} found under {images_root}; point --images at "
+            f"the directory holding the images, not the dataset root"
+        )
+
+    if args.rule == "parent":
+        root = Path(args.root).resolve() if args.root else images_root
+        rule = SourceRule.parent(root, depth=args.depth)
+    elif args.rule == "regex":
+        if not args.pattern:
+            raise SystemExit("--rule regex requires --pattern (with one capture group)")
+        rule = SourceRule.regex(args.pattern)
+    else:
+        if not args.sidecar:
+            raise SystemExit("--rule sidecar requires --sidecar (a JSON image -> source mapping)")
+        side = Path(args.sidecar).resolve()
+        if not side.exists():
+            raise SystemExit(f"--sidecar {side} does not exist")
+        rule = SourceRule.sidecar(json.loads(side.read_text()))
+
+    # A bad rule is a user error, not a crash: report what was found and how to fix it
+    # without a traceback, so the message is the whole diagnosis.
+    try:
+        groups = discover_sources(paths, rule, allow_unmatched=args.allow_unmatched)
+        print(groups.summary())
+        folds = leave_one_out_folds(
+            groups, val_ratio=args.val_ratio, seed=args.seed,
+            min_test_images=args.min_test_images,
+        )
+    except ValueError as exc:
+        raise SystemExit(f"cannot build leave-one-source-out folds: {exc}") from None
+    # Class names come from the dataset's own data config, so a fold config is directly
+    # trainable and cannot disagree with the dataset about the label space.
+    names: list[str] | None = None
+    if args.data:
+        from saryolo.data.yolo import load_data_config
+
+        data_cfg_path = Path(args.data).resolve()
+        if not data_cfg_path.exists():
+            raise SystemExit(f"--data {data_cfg_path} does not exist")
+        _, data_cfg = load_data_config(data_cfg_path)
+        resolved = data_cfg.get("names") or [f"class_{i}" for i in range(int(data_cfg.get("nc", 1)))]
+        names = [resolved[k] for k in sorted(resolved)] if isinstance(resolved, dict) else list(resolved)
+
+    out_dir = write_loso_splits(folds, args.out, groups=groups, seed=args.seed, names=names)
+
+    print(f"\nleave-one-source-out folds -> {out_dir}")
+    print(f"  {'held-out source':<28}{'train':>8}{'val':>8}{'test':>8}")
+    for fold in folds:
+        sizes = fold.sizes
+        print(f"  {fold.name:<28}{sizes['train']:>8}{sizes['val']:>8}{sizes['test']:>8}")
+
+    if args.leakage:
+        # Source-grouped folds remove *source* leakage by construction. Duplicate chips
+        # shared across sources are a separate risk and are not addressed by grouping, so
+        # this is opt-in: it hashes every chip in the fold and is quadratic in the pair
+        # comparison, which is far too slow to run by default on a benchmark-tier dataset.
+        from saryolo.data.splits import leakage_report
+
+        for fold in folds:
+            splits = {"train": list(fold.train), "val": list(fold.val), "test": list(fold.test)}
+            report = leakage_report(splits, images_root)
+            print(report.summary())
+
+    print(
+        f"\nnote: validation shares sources with training in every fold, so it drives early "
+        f"stopping only. Report numbers from test.txt ({out_dir}/manifest.json records the "
+        f"rule and the per-fold sizes)."
+    )
+    return 0
+
+
 def _cmd_bench(args) -> int:
     """Architecture-level params/FLOPs benchmark; needs no training and no GPU."""
     from saryolo.evaluation.efficiency import profile_yaml
@@ -603,6 +694,25 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--out", default="datasets/augmented/train")
     p.set_defaults(func=_cmd_augment)
+
+    p = sub.add_parser("loso", help="leave-one-source-out folds for cross-source generalisation")
+    p.add_argument("--images", required=True, help="directory holding the images to group by source")
+    p.add_argument("--data", default=None,
+                   help="dataset data.yaml; supplies class names so each fold gets a runnable config")
+    p.add_argument("--rule", default="parent", choices=["parent", "regex", "sidecar"],
+                   help="how the source key is derived; stated, never guessed (default: parent)")
+    p.add_argument("--root", default=None, help="for --rule parent: root the key is relative to")
+    p.add_argument("--depth", type=int, default=1, help="for --rule parent: path components kept")
+    p.add_argument("--pattern", default=None, help="for --rule regex: pattern with one capture group")
+    p.add_argument("--sidecar", default=None, help="for --rule sidecar: JSON image -> source mapping")
+    p.add_argument("--allow-unmatched", action="store_true",
+                   help="permit unkeyed images (default: refuse, they would silently shrink the test set)")
+    p.add_argument("--val-ratio", type=float, default=0.2, dest="val_ratio")
+    p.add_argument("--min-test-images", type=int, default=30, dest="min_test_images")
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--leakage", action="store_true", help="also run the duplicate check per fold (slow)")
+    p.add_argument("--out", default="datasets/splits/loso")
+    p.set_defaults(func=_cmd_loso)
 
     p = sub.add_parser("bench", help="architecture-level params/FLOPs table (no training)")
     p.add_argument("--variants", nargs="+", required=True)
