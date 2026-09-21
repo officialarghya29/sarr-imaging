@@ -20,7 +20,7 @@ The emitted YAML is what actually gets trained and committed under
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 __all__ = ["ModelSpec", "build_yaml_dict", "build_yaml_text", "variant_filename", "SCALES", "VARIANTS"]
@@ -435,6 +435,20 @@ def _v2(name: str, scale: str = "s", notes: str = "", **overrides: Any) -> Model
     return ModelSpec(name=name, scale=scale, sar_loss=dict(SAR_LOSS_FULL), notes=notes, **cfg)
 
 
+def _with_sar_loss(spec: ModelSpec, **overrides: float | str) -> ModelSpec:
+    """Copy a spec with extra SAR-loss keys merged into its ``sar_loss`` block.
+
+    Loss-only variants go through here rather than through ``_v2(**overrides)``, because
+    ``_v2`` passes ``sar_loss`` positionally into ``ModelSpec`` -- a ``sar_loss`` key in
+    ``overrides`` would therefore be a duplicate keyword argument rather than an override.
+
+    The copy matters: ``VARIANTS`` is shared module state, and every measurement, YAML
+    emitter and test reads from it.
+    """
+    merged = {**(spec.sar_loss or {}), **overrides}
+    return replace(spec, sar_loss=merged)
+
+
 #: EXP-013..016 -- the v2 cumulative ladder. Each row adds exactly one new component.
 #: The v1 ladder (EXP-001..008) is left untouched: those configs are already committed
 #: and referenced by the paper tables, and rewriting their meaning would break the
@@ -462,6 +476,41 @@ VARIANTS.update({
     "v2_nopspectral": _v2(
         "v2_nopspectral",
         notes="Removal ablation: v2_prior_spectral without prior-conditioned spectral selection (Module G removed).",
+    ),
+
+    # --- SEC. 4 of the brief: the representation-consistency term, as a *loss* slot.
+    #
+    # A loss slot is not an architectural one, and that changes what a control has to be. The
+    # term never adds a parameter, so every arm below is byte-for-byte the same size as
+    # `v2_full`: `w_consistency: 0.0` is the control, and the arm differs only in the
+    # objective. That is also why these arms are *not* rows in the removal slot -- a removal
+    # there is verified by a strict parameter drop, and a loss removal can never satisfy it,
+    # so it would either fail its own guard or have to be excluded from it.
+    #
+    # The perturbation is swept rather than fixed. The claim is that the model should be
+    # invariant to *the physics it will meet*, and a term that only helps when the benchmark
+    # corruption happens to match its training corruption is a tuned constant, not a
+    # principle. `v2_cons` (speckle, 4.0) is the ladder arm; the rest test whether the choice
+    # of corruption is load-bearing.
+    "v2_cons": _with_sar_loss(
+        _v2("v2_cons", notes="SEC. 4: full v2 trained with the representation-consistency term."),
+        w_consistency=0.5, consistency_kind="speckle", consistency_severity=4.0,
+    ),
+    "cons_sev1": _with_sar_loss(
+        _v2("cons_sev1", notes="Consistency slot: mild speckle (1 look). Is the term just denoising?"),
+        w_consistency=0.5, consistency_kind="speckle", consistency_severity=1.0,
+    ),
+    "cons_sev16": _with_sar_loss(
+        _v2("cons_sev16", notes="Consistency slot: extreme speckle (16 looks). Does the term survive heavy noise?"),
+        w_consistency=0.5, consistency_kind="speckle", consistency_severity=16.0,
+    ),
+    "cons_lowcontrast": _with_sar_loss(
+        _v2("cons_lowcontrast", notes="Consistency slot: invariance to contrast compression rather than speckle."),
+        w_consistency=0.5, consistency_kind="low_contrast", consistency_severity=2.2,
+    ),
+    "cons_lowsnr": _with_sar_loss(
+        _v2("cons_lowsnr", notes="Consistency slot: invariance to additive noise at 20% of the dynamic range."),
+        w_consistency=0.5, consistency_kind="low_snr", consistency_severity=0.20,
     ),
 
     # --- removal ablation (SEC. 23 of the brief): drop one component from the full model.

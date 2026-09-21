@@ -8,9 +8,9 @@
 | --- | --- |
 | **Licence** | MIT for the code — datasets are never redistributed |
 | **Stack** | Python 3.10+ · Ultralytics 8.4.155 · PyTorch 2.x |
-| **Architectures** | 75 variants wired; every one builds and runs a forward pass |
-| **Experiments** | 73 configured; each reproducible from a committed YAML |
-| **Tests** | 171 passing — no dataset download and no GPU needed |
+| **Architectures** | 80 variants wired; every one builds and runs a forward pass |
+| **Experiments** | 80 configured; each reproducible from a committed YAML |
+| **Tests** | 176 passing — no dataset download and no GPU needed |
 | **Accuracy results** | none yet — not one number in this repository is fabricated |
 
 ---
@@ -275,6 +275,12 @@ The prior is the paper's central hypothesis, so it gets the most careful ablatio
 | | ours, input-adaptive offsets | 16.230 | +0.017M (17,288 params at scale `s`): the offset head is `C → 2` channels per level |
 | **Target prior, spectral** (8+9) | feat-conditioned spectral | 16.586 | **the Module G control**: byte-for-byte the same size as the row below — only the *conditioning signal* differs (raw feature, not prior) |
 | | ours, prior-conditioned spectral | 16.586 | the prior chooses the radial band gains: `EXP-018`, the ladder row for Module G |
+| **Consistency** (SEC. 4) | term off — the control | 16.230 | `v2_full` itself: same graph, `w_consistency: 0` |
+| | speckle, 1 look | 16.230 | is the term doing anything beyond mild denoising? |
+| | speckle, 16 looks | 16.230 | does it survive heavy speckle? |
+| | low contrast | 16.230 | a *different* degradation family: does the principle generalise past speckle? |
+| | low SNR | 16.230 | additive noise rather than multiplicative |
+| | ours, speckle 4 looks | 16.230 | **`EXP-019`**: every row is size-identical to the control, so the variable is the objective |
 | **Removal** | − clutter / − prior / − freq / − context / − refinement / − prior spectral | 16.061 / 16.048 / 16.127 / 15.066 / 15.854 / 16.230 | each against its own reference: full v2 at 16.230, except − prior spectral which removes Module G against `v2_prior_spectral` at 16.586 — a strict removal of 356,320 params, bit-identical to full v2 |
 
 The **capacity-matched** row is the methodological point. Comparing "learned spatial prior" against "uniform learned prior" would confound *spatial selectivity* with *parameter count* — the larger arm could win for reasons that have nothing to do with the hypothesis. `tp_channel` therefore uses the proposed arm's exact evidence network and averages its output over space, so the two arms are byte-for-byte the same size (asserted in `test_target_prior_arms_are_capacity_matched_where_claimed`) and differ in one respect only: whether the prior is allowed to vary across the image. If `tp_channel` matches `v2_full`, the spatial-prior claim is dead — and the paper must say so.
@@ -286,6 +292,8 @@ The same discipline applies to Component 9. A zero-initialised spectral gain wou
 **Module G lives in the prior slot, not the spectral slot — and that is forced, not stylistic.** The brief asks for the target prior to drive frequency-band selection, but the backbone spectral slot runs at P5/32 *before* any prior exists, and an Ultralytics graph cannot feed a custom module two inputs (`parse_model` resolves `c2 = ch[f]`; only hardcoded names receive a channel list — verified against the installed source). Faking the wiring with a backward connection would break the stock summary, FLOPs counter and validator. So the conditioning is implemented where the prior actually is: the prior module itself produces the band gains. `tp_spectral_feat` is the control that keeps the claim honest — same head, same bands, same descriptor, fed raw-feature statistics instead of prior evidence — so `spectral − spectral_feat` isolates *prior* conditioning from mere input adaptivity.
 
 **SEC. 4 of the brief — representation consistency — is implemented as an opt-in loss term.** The model runs a second forward on a degraded copy of the same batch (the *same* corruption physics the robustness benchmark uses, so training and evaluation cannot drift apart) and the drift between the two views' feature maps is penalised. Three properties are pinned by test rather than asserted: the term is exactly zero when the views agree; positions where either view is silent are *excluded* rather than penalised (`cosine_similarity` returns 0 for a zero vector, so a dead position would otherwise contribute the maximum penalty and the term would spend its gradient reviving dead channels); and the perturbed pass runs BatchNorm in eval mode so the buffers see each batch exactly once — without which enabling the term would silently change the normalisation of the whole network and every ablation would measure that instead. The weight defaults to 0, so stock behaviour is bit-identical; enabling it costs one extra forward pass per step, which is stated rather than hidden.
+
+**It is a loss slot, not an architectural one, and the difference decides where its arms live.** The term was implemented and unit-tested before any variant used it, which left it unreachable from the experiment matrix — nothing in `configs/` switched it on. It now has a runnable ladder row (`EXP-019`) and its own slot study (`EXP-321…326`), and every enabled arm states its degradation and severity **explicitly** rather than inheriting them, so the perturbation a run trains under can be read off its own config. The arms deliberately do *not* join the removal slot: a removal there is verified by a strict parameter drop, and a loss term can never produce one — all six consistency arms are byte-for-byte the same size as the control, and that equality is the point. It is also what makes the comparison clean: with the graph fixed, an accuracy difference is the objective and nothing else. The sweep over speckle ×1 / ×16 / low-contrast / low-SNR exists because a term that only helps when the benchmark corruption happens to match its training corruption is a tuned constant rather than a principle, and the paper has to be able to tell those apart.
 
 Component 11 needs a control that is uncommon in detection papers, because "deformable convolution" comparisons usually give the proposed arm *both* a new network and a new operation. `rf_local` therefore keeps the identical mixing network and removes only the offsets, so `ours − local` is attributable to **deformation** rather than to the extra convolution. Two further tests make the mechanism falsifiable at the unit level: a zero offset field must reproduce `local` exactly up to float32 round-off (measured: `7e-7`), while a **0.04-cell** displacement moves the output by `0.4` — six orders of magnitude larger, so the tolerance is demonstrably not hiding a real shift. And the base grid's corners are asserted at exactly `(-1, -1)` and `(1, 1)`, which is what pins `align_corners` to the sampling convention rather than leaving it to chance.
 
@@ -400,7 +408,7 @@ uv pip install --python .venv/bin/python torch torchvision --index-url https://d
 uv pip install --python .venv/bin/python ultralytics pytest
 source .venv/bin/activate
 
-pytest tests/ -q                                          # 171 tests
+pytest tests/ -q                                          # 176 tests
 python -m saryolo arch --variant all --nc 1               # emit 75 model YAMLs
 python -m saryolo synth-data --out datasets/processed/synthetic_smoke
 python -m saryolo train --exp configs/exp/_smoke_baseline.yaml
@@ -460,6 +468,7 @@ python scripts/train_all_experiments.py --keep-going
 | EXP-016 | + context | **Component 10** |
 | EXP-017 | **FULL SAR-YOLO v2** | **Component 11** — the v2 reference model |
 | EXP-018 | + prior spectral | **Module G** — the target prior selects the radial frequency bands |
+| EXP-019 | + representation consistency | **SEC. 4** — identical graph to EXP-017, different objective |
 
 ### Module-level ablations (`EXP-2xx`)
 
@@ -477,6 +486,7 @@ Every arm below sits in the *same slot* with every other component held fixed, a
 | `EXP-281…286` | removal | −clutter · −prior · −freq · −context · −refinement · −prior-spectral (Module G) |
 | `EXP-291…296` | refinement (11) | none · **local (capacity control)** · fixed offsets · offset sweep (25% · 100%) · ours-adaptive |
 | `EXP-311…314` | input adapter (12) | raw (`identity`) · local-statistics · learned · ours-hybrid |
+| `EXP-321…326` | consistency (SEC. 4) | off (control) · speckle ×1 · speckle ×16 · low-contrast · low-SNR · **ours, speckle ×4** |
 
 The `EXP-26x` range answers SEC. 14 of the brief directly: the transform is the *variable*, so FFT, block-DCT and Haar wavelet are compared in one slot with everything else held fixed, rather than assuming the FFT is right. `EXP-294/295` sweep the refinement's `max_offset` bound; it is logged as an **open sweep, not a tuned constant**, because the learned offsets sit at ~94% of the bound where `tanh`'s gradient is smallest — so the bound may well be too tight.
 

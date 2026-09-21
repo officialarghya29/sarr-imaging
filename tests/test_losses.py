@@ -220,6 +220,30 @@ def test_consistency_is_off_by_default():
     assert SAR_LOSS_DEFAULTS["w_consistency"] == 0.0
 
 
+def test_published_consistency_arms_switch_the_term_on_through_their_own_yaml():
+    """A published arm must be able to enable the term from its committed YAML alone.
+
+    The SEC. 4 machinery was implemented and unit-tested before any variant used it, which
+    means the term was unreachable from the experiment matrix: nothing in ``configs/`` turned
+    it on. This reads the weight back out of the criterion the model builds from the YAML, so
+    it fails if an arm's declared weight stops reaching the loss, or if the graph loses it on
+    the way (for example if the ``sar_loss`` block stops being emitted or stops being read).
+    """
+    for name in ("v2_cons", "cons_sev1", "cons_sev16", "cons_lowcontrast", "cons_lowsnr"):
+        spec = VARIANTS[name]
+        model = SARYOLODetectionModel(build_yaml_dict(spec), ch=3, nc=1, verbose=False)
+        declared = float((spec.sar_loss or {})["w_consistency"])
+        assert declared > 0, f"{name} is listed as an enabled arm but declares no weight"
+        assert model.init_criterion().w_consistency == declared, (
+            f"{name}: the criterion's weight does not match the declared weight"
+        )
+
+    # The control, through the same path: full v2 must stay off, or every other row's
+    # baseline is itself already trained with the term.
+    control = SARYOLODetectionModel(build_yaml_dict(VARIANTS["v2_full"]), ch=3, nc=1, verbose=False)
+    assert control.init_criterion().w_consistency == 0.0
+
+
 # ------------------------------------------------------------- perturbation helper
 def test_perturb_batch_is_deterministic_and_seed_sensitive():
     img = torch.rand(2, 3, 32, 32)

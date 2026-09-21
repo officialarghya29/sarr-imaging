@@ -307,6 +307,44 @@ weight defaults to 0, so stock behaviour is bit-identical when off. The severity
 is rejected unless it comes from the published grid, for the same reason as the
 augmentation: training and evaluation must refer to the same degradation.
 
+#### Where the arms live, and why not in the removal table
+
+A loss term is not a module, and that decides which control is valid for it.
+
+The removal slot verifies an arm by a **strict parameter drop** against a named
+reference: `v2_nofreq` is a removal because it is smaller than `v2_full`. No
+loss arm can ever satisfy that — switching `w_consistency` off does not delete a
+single weight — so a loss arm placed there would either fail its own guard or
+have to be excluded from it, and the second is how a no-op gets reported as a
+clean removal. The consistency arms therefore live in their own slot
+(`EXP-321…326`), where the control is `v2_full` itself at `w_consistency: 0`:
+same graph, same size to the byte, different objective.
+
+That equality is not an accident of implementation, it is the experiment. With
+the graph fixed, any accuracy difference is attributable to the objective alone,
+which is exactly what a loss ablation is supposed to isolate. The arms are:
+
+```
+v2_full          w = 0.0                          control
+cons_sev1        speckle,       1 look             mild speckle
+cons_sev16       speckle,      16 looks            heavy speckle
+cons_lowcontrast low_contrast,  gamma 2.2          a different family
+cons_lowsnr      low_snr,       0.20               additive, not multiplicative
+v2_cons          speckle,       4 looks            the ladder arm (EXP-019)
+```
+
+The sweep exists because the claim is a *principle* — the representation should
+not depend on the noise realisation — and a principle must not be conflated with
+a constant tuned to the test corruption. If only the arm matching the robustness
+benchmark's own setting improves, then the honest reading is that the term is a
+tuned denoiser, and the paper must say so.
+
+Every enabled arm states `consistency_kind` and `consistency_severity`
+**explicitly** in its YAML rather than inheriting the defaults, so the
+decomposition a run trained against can be read off its own config. A test walks
+the whole zoo and fails if any variant enables the term while naming a
+decomposition that is not on the published grid.
+
 ---
 
 ## Component 8 — Target Prior Modulation (TPM)

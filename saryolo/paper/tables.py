@@ -217,6 +217,11 @@ MODULE_ABLATION_GROUPS: dict[str, tuple[str, ...]] = {
     # Module A. Unlike every other slot, the proposed arm is *not* `v2_full`: the adapter is
     # not in the v2 default, so `in_hybrid` is the arm that would have to earn it a place.
     "Input adapter": ("in_identity", "in_local", "in_learned", "in_hybrid"),
+    # SEC. 4. The only group whose arms are the *same size* as `v2_full` by construction: the
+    # variable is the objective, not the graph, so `v2_full` (weight 0) is the control and the
+    # rows below it differ only in which degradation the representation is asked to ignore.
+    "Representation consistency": ("v2_full", "cons_sev1", "cons_sev16", "cons_lowcontrast",
+                                  "cons_lowsnr", "v2_cons"),
 }
 
 #: Removal ablation rows: ``(label, variant)``. Exposed for the same reason as above.
@@ -227,6 +232,10 @@ REMOVAL_ABLATION_ROWS: tuple[tuple[str, str], ...] = (
     ("- spatial-frequency", "v2_nofreq"),
     ("- context", "v2_noctx"),
     ("- refinement", "v2_norefine"),
+    # Its reference is EXP-018 (`v2_prior_spectral`), not full v2: Module G is not part of
+    # `v2_full`. Measured against `v2_full` this row is a zero-parameter difference, i.e. a
+    # no-op that would read as a clean removal.
+    ("- prior spectral (Module G; ref. v2_prior_spectral)", "v2_nopspectral"),
 )
 
 

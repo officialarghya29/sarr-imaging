@@ -67,6 +67,9 @@ MATRIX: tuple[tuple[str, str, str, str], ...] = (
     ("EXP-018", "v2_prior_spectral", "+ prior-conditioned spectral selection",
      "Module G: the target prior chooses the radial frequency bands. Added rather than folded "
      "into EXP-017 so the ladder row and the slot study measure the same graph."),
+    ("EXP-019", "v2_cons", "FULL v2 + representation consistency (SEC. 4)",
+     "The SEC. 4 term switched on: identical graph to EXP-017, different objective. Its own "
+     "experiment because a loss cannot be ablated by removing parameters."),
 )
 
 #: Experiment ids that are evaluated rather than trained.
@@ -108,6 +111,13 @@ ABLATION_SLOTS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     # v2_prior_spectral (EXP-018), not v2_full, so "removal" here means dropping Module G's
     # spectral selection and reverting the prior to spatial-only -- one edit, the same slot.
     ("removal", "28", ("v2_noclutter", "v2_noprior", "v2_nofreq", "v2_noctx", "v2_norefine", "v2_nopspectral")),
+    # SEC. 4 is a *loss* slot, so it is kept out of the removal slot above: those arms are
+    # verified by a strict parameter drop, which a loss term can never produce -- every arm
+    # here is the same size as `v2_full` by construction. The control is `v2_full` itself
+    # (`w_consistency: 0`), and the sweep asks whether the *choice of corruption* is what
+    # carries the gain, which is the difference between a principle and a tuned constant.
+    ("consistency", "32", ("v2_full", "cons_sev1", "cons_sev16", "cons_lowcontrast",
+                            "cons_lowsnr", "v2_cons")),
     # Appended rather than inserted, so the ids of the slots above keep their meaning
     # (an id is referenced by the ledger and by the paper tables).
     ("refinement", "29", ("rf_none", "rf_local", "rf_static", "rf_off25", "rf_off100", "v2_full")),

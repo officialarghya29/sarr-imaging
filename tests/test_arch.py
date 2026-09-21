@@ -573,6 +573,58 @@ def test_v2_removal_ablation_covers_every_arm_in_the_slot():
         assert ref in VARIANTS, f"removal reference {ref!r} has no model variant defined"
 
 
+#: Variants that train with the SEC. 4 representation-consistency term switched on. Listed
+#: explicitly so a loss arm added without a test here is caught by the sweep below, which
+#: walks the whole zoo rather than this list.
+CONSISTENCY_ARMS: tuple[str, ...] = ("v2_cons", "cons_sev1", "cons_sev16",
+                                    "cons_lowcontrast", "cons_lowsnr")
+
+
+def test_consistency_arms_are_the_same_size_as_their_control():
+    """A loss arm must not change the graph -- which is why it is not a removal row.
+
+    The removal slot verifies an arm by a strict *parameter* drop. A loss term can never
+    produce one, so a loss arm there would either fail that guard or have to be left out of
+    it. Sizes being equal here is the property that makes the loss a clean single variable:
+    any accuracy difference is the objective, not extra capacity.
+    """
+    control = _num_params(_build(VARIANTS["v2_full"], nc=2))
+    for name in CONSISTENCY_ARMS:
+        assert _num_params(_build(VARIANTS[name], nc=2)) == control, (
+            f"{name} changes the graph; a loss slot arm must be size-identical to v2_full"
+        )
+
+
+def test_every_enabled_consistency_arm_names_a_published_degradation():
+    """The perturbation a run trains under must be declared and on the published grid.
+
+    Swept over the whole zoo rather than over 'the arms I remembered to list', because the
+    failure this prevents is silent in both directions: a term trained under a degradation
+    that is not the one the robustness benchmark measures is not comparable to it, and a
+    term whose kind and severity are left to the defaults cannot be read off its own config.
+    """
+    from saryolo.evaluation.robustness import CORRUPTIONS
+
+    enabled = [
+        name for name, spec in VARIANTS.items()
+        if spec.sar_loss and float(spec.sar_loss.get("w_consistency", 0.0)) > 0
+    ]
+    assert set(enabled) == set(CONSISTENCY_ARMS), (
+        "the set of consistency-enabled variants changed: "
+        f"{sorted(set(enabled) ^ set(CONSISTENCY_ARMS))} differ"
+    )
+
+    for name in enabled:
+        cfg = VARIANTS[name].sar_loss or {}
+        kind = cfg.get("consistency_kind")
+        severity = cfg.get("consistency_severity")
+        assert kind in CORRUPTIONS, f"{name} names unknown degradation {kind!r}"
+        assert severity in CORRUPTIONS[kind].severities, (
+            f"{name}: severity {severity} for {kind!r} is not on the published grid "
+            f"{CORRUPTIONS[kind].severities}; training and evaluation must agree"
+        )
+
+
 def test_target_prior_arms_are_capacity_matched_where_claimed():
     """``tp_channel`` must be the same size as the proposed arm, or the comparison is void.
 

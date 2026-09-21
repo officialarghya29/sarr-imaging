@@ -1,5 +1,5 @@
 {
-  "variants": 75,
+  "variants": 80,
   "zoo": {
     "baseline_n": {
       "variant": "baseline",
@@ -587,8 +587,8 @@
   },
   "dataset_count": 5,
   "experiments": {
-    "total": 71,
-    "config_files": 73,
+    "total": 78,
+    "config_files": 80,
     "with_results": [],
     "ledger_runs": 14,
     "non_experiment_runs": [
@@ -599,14 +599,14 @@
     ]
   },
   "tests": {
-    "total": 171,
+    "total": 176,
     "by_file": {
-      "tests/test_arch.py": 52,
+      "tests/test_arch.py": 54,
       "tests/test_augmentation.py": 15,
-      "tests/test_cli.py": 8,
+      "tests/test_cli.py": 10,
       "tests/test_data.py": 19,
       "tests/test_hard_examples.py": 20,
-      "tests/test_losses.py": 23,
+      "tests/test_losses.py": 24,
       "tests/test_metrics.py": 11,
       "tests/test_repo.py": 23
     }
