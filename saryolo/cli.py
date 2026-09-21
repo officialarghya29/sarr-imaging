@@ -160,6 +160,21 @@ def _cmd_arch(args) -> int:
     return 0
 
 
+def _failure_reason(notes: str) -> str:
+    """The cause of a failed run, as the runner recorded it.
+
+    The runner catches the training exception and appends it to ``notes`` as
+    ``... | ERROR: <cause>``. That is the only place the cause survives, so a caller that
+    prints just the status turns a diagnosable failure into "failed: EXP-019 -> None" --
+    no exception, no message, and the run directory is ``None`` because the failure happened
+    before one was created. This extracts the cause, falling back to the whole note.
+    """
+    marker = "| ERROR:"
+    if marker in notes:
+        return notes.split(marker, 1)[1].strip()
+    return notes.strip()
+
+
 def _cmd_train(args) -> int:
     from saryolo.training.runner import run_experiment
 
@@ -175,6 +190,8 @@ def _cmd_train(args) -> int:
     print(f"{record.status}: {record.experiment_id} -> {record.save_dir}")
     for key, value in record.metrics.items():
         print(f"  {key}: {value}")
+    if record.status != "completed":
+        print(f"  reason: {_failure_reason(record.notes)}")
     return 0 if record.status == "completed" else 1
 
 

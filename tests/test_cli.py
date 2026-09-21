@@ -99,6 +99,42 @@ def test_bench_succeeds_for_a_resolvable_variant(capsys):
     assert code == 0, capsys.readouterr().out
 
 
+# ----------------------------------------------------------------------- train
+def test_failed_train_reports_the_cause_not_just_the_status(capsys, monkeypatch):
+    """A failed run must say why. The status alone is undiagnosable.
+
+    The runner catches the training exception and stores it in ``notes``; a CLI that prints
+    only ``failed: EXP-019 -> None`` hands the user no exception, no message, and a run
+    directory of ``None``, because the failure happened before one existed. This was the
+    behaviour observed when an override was passed twice.
+    """
+    from saryolo.cli import main as cli_main
+    from saryolo.tracking.ledger import ExperimentRecord
+
+    def fake_run(*_args, **_kwargs):
+        record = ExperimentRecord(experiment_id="EXP-019", model="m.yaml", dataset="d.yaml",
+                                  train_seed=0, epochs=1, batch=2, imgsz=640, optimizer="auto",
+                                  lr0=None, notes="purpose text | ERROR: boom: the real cause")
+        record.status = "failed"
+        return record
+
+    monkeypatch.setattr("saryolo.training.runner.run_experiment", fake_run)
+    code = cli_main(["train", "--exp", "configs/exp/EXP-019_v2_cons.yaml", "--no-ledger"])
+    out = capsys.readouterr().out
+    assert code == 1, out
+    assert "the real cause" in out, out
+    assert "ERROR" not in out.split("reason:")[-1], "the marker itself should not leak"
+
+
+def test_failure_reason_survives_a_note_without_an_error_marker():
+    """An older or truncated record must still print something usable, not an empty line."""
+    from saryolo.cli import _failure_reason
+
+    assert _failure_reason("note | ERROR: cause") == "cause"
+    assert _failure_reason("  only a note  ") == "only a note"
+    assert _failure_reason("two | ERROR: first | ERROR: second") == "first | ERROR: second"
+
+
 # ------------------------------------------------------------------- arch/registry
 def test_arch_rejects_an_unknown_variant(tmp_path):
     with pytest.raises(SystemExit):

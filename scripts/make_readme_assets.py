@@ -27,6 +27,7 @@ Outputs land in ``docs/assets/`` as SVG (crisp on GitHub at any width) plus a
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import subprocess
 import sys
@@ -167,8 +168,13 @@ def measure(variant: str, scale: str = "s", with_flops: bool = False, imgsz: int
     from ultralytics.nn.tasks import DetectionModel
     from ultralytics.utils.torch_utils import get_flops
 
-    spec = VARIANTS[variant]
-    spec.scale = scale
+    # A *copy* at the requested scale, never the shared spec. ``VARIANTS`` holds the declared
+    # zoo, and mutating one entry rewrites it for every later reader in the process: after a
+    # measurement at scale ``l``, ``variant_filename(VARIANTS["full"])`` returned
+    # ``yolo11l_full.yaml`` and the emitted YAML claimed ``scale: l``, even though that variant
+    # is declared at ``s``. Any script that measured and then emitted would therefore point its
+    # configs at the wrong model file, and nothing downstream would notice.
+    spec = dataclasses.replace(VARIANTS[variant], scale=scale)
     model = DetectionModel(build_yaml_dict(spec), ch=3, nc=spec.nc, verbose=False)
     model.eval()
     out = {"variant": variant, "scale": scale, "params_M": sum(p.numel() for p in model.parameters()) / 1e6}
