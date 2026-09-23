@@ -337,6 +337,94 @@ def test_loso_resolution_rule_refuses_bins_that_measure_nothing(tmp_path):
               "--metadata", str(table), "--edges", "10", "--out", str(tmp_path / "o")])
 
 
+# ------------------------------------------------------------------- probe
+def _probe_fixture(tmp_path: Path) -> Path:
+    """A real two-group image set with a stem-encoded acquisition field."""
+    images = tmp_path / "images" / "val"
+    images.mkdir(parents=True)
+    rng = np.random.default_rng(1)
+    for i in range(16):
+        stem = ("s1_" if i % 2 == 0 else "g3_") + f"{i:03d}"
+        cv2.imwrite(str(images / f"{stem}.png"), rng.integers(0, 255, (64, 64), dtype=np.uint8))
+    (tmp_path / "data.yaml").write_text(f"path: {tmp_path}\nnc: 1\nnames:\n- ship\nval: images/val\n")
+    return tmp_path
+
+
+def pyyaml_safe(d):
+    import yaml
+
+    return yaml.safe_dump(d, sort_keys=False)
+
+
+def test_probe_command_runs_and_reports_against_chance(tmp_path, capsys):
+    """The §14 diagnosis through its CLI surface: a report JSON with per-level probe
+    accuracies comparable to the stated chance rate, and the honest-noise caveat."""
+    import json
+
+    from saryolo.nn.arch import VARIANTS, build_yaml_dict, variant_filename
+
+    root = _probe_fixture(tmp_path)
+    spec = VARIANTS["baseline"]
+    spec.nc = 1
+    weights = tmp_path / variant_filename(spec)
+    weights.write_text(pyyaml_safe(build_yaml_dict(spec)))
+    out = tmp_path / "report"
+
+    code = main([
+        "probe", "--weights", str(weights), "--data", str(root / "data.yaml"),
+        "--field", "sensor", "--stem-pattern", "^([a-z0-9]+)_\\d+", "--split", "val",
+        "--imgsz", "64", "--batch", "8", "--out", str(out),
+    ])
+    assert code == 0, capsys.readouterr().out
+    report = json.loads((out / "representation_report.json").read_text())
+    assert report["n_images"] == 16
+    assert report["chance_rate"] == 0.5
+    assert report["field_vocab"] == {"0": "g3", "1": "s1"}
+    levels = report["levels"]
+    assert levels, "no per-level probe results"
+    for lr in levels.values():
+        acc = lr["probe_sensor"]["accuracy"]
+        assert acc is not None and 0.0 <= acc <= 1.0
+    assert "diagnosis, not evidence" in report["note"]
+    printed = capsys.readouterr().out
+    assert "chance 0.500" in printed
+
+
+def test_probe_refuses_a_field_with_one_distinct_value(tmp_path):
+    """A one-class probe would report 1.0 while measuring nothing."""
+    from saryolo.nn.arch import VARIANTS, build_yaml_dict, variant_filename
+
+    root = _probe_fixture(tmp_path)
+    spec = VARIANTS["baseline"]
+    spec.nc = 1
+    weights = tmp_path / variant_filename(spec)
+    weights.write_text(pyyaml_safe(build_yaml_dict(spec)))
+
+    with pytest.raises(SystemExit, match="probe needs >= 2"):
+        main([
+            "probe", "--weights", str(weights), "--data", str(root / "data.yaml"),
+            "--field", "sensor", "--stem-pattern", "^[a-z0-9]+(_)\\d+", "--split", "val",
+            "--imgsz", "64", "--limit", "8", "--out", str(tmp_path / "o"),
+        ])
+
+
+def test_probe_requires_a_label_source(tmp_path):
+    """No metadata and no stem pattern: refuse rather than probe against nothing."""
+    from saryolo.nn.arch import VARIANTS, build_yaml_dict, variant_filename
+
+    root = _probe_fixture(tmp_path)
+    spec = VARIANTS["baseline"]
+    spec.nc = 1
+    weights = tmp_path / variant_filename(spec)
+    weights.write_text(pyyaml_safe(build_yaml_dict(spec)))
+
+    with pytest.raises(SystemExit, match="nothing to predict"):
+        main([
+            "probe", "--weights", str(weights), "--data", str(root / "data.yaml"),
+            "--split", "val", "--out", str(tmp_path / "o"),
+        ])
+
+
 # ------------------------------------------------------------------- arch/registry
 def test_arch_rejects_an_unknown_variant(tmp_path):
     with pytest.raises(SystemExit):

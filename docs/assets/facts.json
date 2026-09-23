@@ -593,8 +593,8 @@
   },
   "dataset_count": 5,
   "experiments": {
-    "total": 86,
-    "config_files": 88,
+    "total": 89,
+    "config_files": 91,
     "with_results": [],
     "ledger_runs": 14,
     "non_experiment_runs": [
@@ -605,17 +605,19 @@
     ]
   },
   "tests": {
-    "total": 242,
+    "total": 278,
     "by_file": {
       "tests/test_arch.py": 61,
       "tests/test_augmentation.py": 15,
-      "tests/test_cli.py": 19,
+      "tests/test_cli.py": 22,
       "tests/test_conditioning.py": 9,
-      "tests/test_data.py": 19,
+      "tests/test_data.py": 23,
       "tests/test_groups.py": 35,
       "tests/test_hard_examples.py": 20,
+      "tests/test_init.py": 9,
       "tests/test_losses.py": 24,
       "tests/test_metrics.py": 15,
+      "tests/test_probes.py": 20,
       "tests/test_repo.py": 25
     }
   }

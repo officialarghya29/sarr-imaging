@@ -1,8 +1,22 @@
-# SAR-YOLO
+# <div align="center">◆ SAR-YOLO</div>
 
-### Speckle-aware object detection for synthetic aperture radar
+<div align="center">
+
+**Speckle-aware object detection for synthetic aperture radar**
 
 *Four modules, each derived from a failure mode of SAR imagery — and each one ablatable.*
+
+![status](https://img.shields.io/badge/tests-278_passing-22c55e) ![honesty](https://img.shields.io/badge/fabricated_results-0-black) ![arch](https://img.shields.io/badge/architectures-87_wired-3b82f6) ![exps](https://img.shields.io/badge/experiments-91_configured-8b5cf6) ![license](https://img.shields.io/badge/license-MIT-94a3b8)
+
+</div>
+
+---
+
+> **The instrument comes before the measurement.** A detector paper is only as strong as its
+> ablations — and ablations produced by unverified machinery are unverifiable numbers. This
+> repository is the instrument: audit → baseline → eleven documented components → slot-matched
+> ablations → removal tests → robustness → LOSO generalisation → paper, with honesty enforced
+> in code rather than promised in prose.
 
 | Status | |
 | --- | --- |
@@ -10,8 +24,34 @@
 | **Stack** | Python 3.10+ · Ultralytics 8.4.155 · PyTorch 2.x |
 | **Architectures** | 87 variants wired; every one builds and runs a forward pass |
 | **Experiments** | 91 configured; each reproducible from a committed YAML |
-| **Tests** | 275 passing — no dataset download and no GPU needed |
+| **Tests** | 278 passing — no dataset download and no GPU needed |
 | **Accuracy results** | none yet — not one number in this repository is fabricated |
+
+---
+
+## ◆ Mission
+
+```text
+╔══════════════════════════════════════════════════════════════════════╗
+║  THE QUESTION: can one SAR detector generalise to a sensor it has     ║
+║  never seen — by being told *how* the image was acquired, not which?  ║
+╚══════════════════════════════════════════════════════════════════════╝
+```
+
+| | |
+| --- | --- |
+| **The failure** | SAR detectors learn `object + acquisition appearance`. Change the satellite, the resolution, the polarization — and the representation changes out from under the head. |
+| **The protocol** | [Leave-one-source-out](docs/METHOD.md): train on every source, test on one held out. The fold machinery *refuses* to report a number it cannot back. |
+| **The mechanism** | Component 33 — a metadata-conditioned adapter, <0.5% parameter overhead, gated so a fresh model is bit-identical to the baseline. The arm that reads only physical descriptors (resolution, band, incidence) can reach a sensor with no embedding row. |
+| **The evidence** | [`probe`](#part-vii--quickstart): linear probes, within-class drift and CKA on frozen features, before any new training. If the hypothesis is wrong, the invariant branch does not get built. |
+| **The rule** | No fabricated numbers — ever. Unmeasured cells render `TBD`, and the generators refuse to do otherwise. |
+
+```text
+SAR image ──► SIA ──► backbone ──► components 1/2/9 ──► PAN-FPN + AMF
+              │
+              └─ metadata (sensor · resolution · polarization · band · incidence)
+                        └─► Component 33 ──► per-level conditioning ──► TPM/SAA/CAG/TADR ──► Detect
+```
 
 ---
 
@@ -20,7 +60,7 @@
 | | |
 | --- | --- |
 | **What this is** | A complete, reproducible research pipeline for SAR object detection: dataset audit → baseline → ten documented components → ablations → removal tests → robustness → efficiency → cross-dataset → paper. |
-| **What is proven** | The infrastructure. 275 tests pass; the baseline reproduces stock YOLO11 exactly; all eleven modules are measurably identity functions at initialisation *and* demonstrably not frozen; every model trains end to end. |
+| **What is proven** | The infrastructure. 278 tests pass; the baseline reproduces stock YOLO11 exactly; all eleven modules are measurably identity functions at initialisation *and* demonstrably not frozen; every model trains end to end. |
 | **What is *not* proven** | Accuracy. **No model has been trained on a real SAR dataset in this repository.** There is no result table here with numbers in it, and the table generators refuse to print one. |
 | **Why that's the point** | A detector paper is only as strong as its ablations. If the machinery that produces those ablations cannot be trusted, every number downstream is unverifiable. Build the instrument first. |
 
@@ -471,7 +511,7 @@ uv pip install --python .venv/bin/python torch torchvision --index-url https://d
 uv pip install --python .venv/bin/python ultralytics pytest
 source .venv/bin/activate
 
-pytest tests/ -q                                          # 275 tests
+pytest tests/ -q                                          # 278 tests
 python -m saryolo arch --variant all --nc 1               # emit 87 model YAMLs
 python -m saryolo synth-data --out datasets/processed/synthetic_smoke
 python -m saryolo train --exp configs/exp/_smoke_baseline.yaml
@@ -484,6 +524,18 @@ python scripts/check_chart_layout.py                      # lint those charts fo
 > The `_smoke_*.yaml` configs use **synthetic Gamma-speckle** data. They exist to catch wiring bugs in seconds instead of after an hour of GPU time. Any number they produce is meaningless as a research result.
 
 ### Running the real thing
+
+The complete first-GPU recipe — prepare → audit → LOSO folds → metadata → baseline →
+conditioning arms → representation probe, with a go/no-go gate at each branch — is
+[`docs/RUNBOOK_SSDD.md`](docs/RUNBOOK_SSDD.md), verified stage-by-stage against a fixture.
+
+When a trained checkpoint exists, the §14 diagnosis is one command:
+
+```bash
+python -m saryolo probe --weights runs/EXP-001/weights/best.pt \
+    --data configs/datasets/ssdd.yaml --field sensor --class-field \
+    --out results/probes/ssdd      # probes next to the chance rate, not next to 1.0
+```
 
 ```bash
 # 1. Get a dataset onto the machine (licensed routes in docs/DATASETS.md)
@@ -635,7 +687,8 @@ scripts/    prepare_dataset · make_exp_configs · train_all_experiments
 notebooks/  Colab: dataset prep · train + ablate · benchmark + paper
 tests/      tests across arch parity, identity, gradient flow, metrics, losses, data, repo
             cross-source grouping and folds
-docs/       DATASETS.md · METHOD.md · assets/ (generated charts)
+docs/       DATASETS.md · METHOD.md · research_gap.md · PROGRESS.md · RUNBOOK_SSDD.md
+            assets/ (generated charts)
 ```
 
 Model YAMLs and experiment configs are **generated**, never hand-edited:

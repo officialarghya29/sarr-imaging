@@ -180,6 +180,203 @@ def _cmd_metadata(args) -> int:
     return 0
 
 
+def _cmd_probe(args) -> int:
+    """Representation diagnosis on a frozen checkpoint (§14 of the master plan).
+
+    The evidence step the conditioning claim rests on: hook the head's per-level
+    maps, pool each image, and measure what a *linear* probe can recover from the
+    frozen features alone. A ``--field sensor`` probe far above chance — with a
+    ``--class-field class`` probe that is not — says the representation is
+    dominated by acquisition appearance, which is the failure the adapter exists
+    to address. On an untrained checkpoint the numbers are placeholders; this is
+    diagnosis, not evidence, until a trained checkpoint exists.
+    """
+    import numpy as np
+    import torch
+    import yaml as pyyaml
+    from PIL import Image
+
+    from saryolo.evaluation.probes import (
+        FeatureExtraction,
+        collect_head_features,
+        representation_report,
+    )
+    from saryolo.training.trainer import load_model
+
+    weights = Path(args.weights)
+    if not weights.exists():
+        raise SystemExit(f"--weights {weights} does not exist")
+    data_path = Path(args.data)
+    if not data_path.exists():
+        raise SystemExit(f"--data {data_path} does not exist")
+    cfg = pyyaml.safe_load(data_path.read_text())
+    root = Path(cfg.get("path", data_path.parent))
+    if not root.is_absolute():
+        root = (data_path.parent / root).resolve()
+    split_dir = root / cfg.get(args.split, "images/" + args.split)
+    if not split_dir.is_dir():
+        raise SystemExit(
+            f"split '{args.split}' resolves to {split_dir}, which does not exist; "
+            "the data config's paths and 'path' key must describe this layout"
+        )
+
+    names = cfg.get("names") or [f"class_{i}" for i in range(int(cfg.get("nc", 1)))]
+    names = [names[k] for k in sorted(names)] if isinstance(names, dict) else list(names)
+
+    table = None
+    if args.metadata:
+        from saryolo.data.metadata import MetadataTable
+
+        table_path = Path(args.metadata)
+        if not table_path.exists():
+            raise SystemExit(f"--metadata {table_path} does not exist")
+        table = MetadataTable.load(table_path)
+
+    extension_set = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
+    images = sorted(
+        p for p in split_dir.rglob("*") if p.is_file() and p.suffix.lower() in extension_set
+    )
+    if not images:
+        raise SystemExit(f"no dataset images found under {split_dir}")
+    if args.limit and len(images) > args.limit:
+        # First N rather than a random subset: deterministic, and the manifest records
+        # exactly which images were probed instead of a seed pretending it was a draw.
+        images = images[: args.limit]
+
+    # ---- acquisition field labels (the probe target) ----
+    if table is not None:
+        values: list[str | None] = [getattr(table.get(p.stem), args.field) for p in images]
+    elif args.stem_pattern:
+        import re
+
+        pattern = re.compile(args.stem_pattern)
+        values = []
+        for p in images:
+            m = pattern.search(p.stem)
+            values.append(m.group(1) if m and m.re.groups >= 1 else None)
+    else:
+        raise SystemExit(
+            "give --metadata (a table built by `saryolo metadata`/write_acquisition_metadata) "
+            "or --stem-pattern '(...)'; without one the probe has nothing to predict"
+        )
+    known = [v for v in values if v is not None]
+    if len(set(known)) < 2:
+        raise SystemExit(
+            f"field '{args.field}' has {len(set(known))} distinct known value(s) across "
+            f"{len(images)} images; a probe needs >= 2 (a one-class probe would report "
+            "perfect accuracy while measuring nothing)"
+        )
+    vocab = {v: i for i, v in enumerate(sorted(set(known)))}
+    field_labels = torch.tensor(
+        [vocab.get(v, -1) for v in values], dtype=torch.long
+    )
+
+    # ---- class labels (the contrast probe) ----
+    class_labels: torch.Tensor | None = None
+    class_names_present: dict[int, str] = {}
+    if args.class_field:
+        from saryolo.data.yolo import load_data_config, split_dirs
+
+        try:
+            _, data_cfg = load_data_config(data_path)
+        except Exception as exc:  # noqa: BLE001 - reported, not swallowed
+            raise SystemExit(f"cannot read the data config for class labels: {exc}") from None
+        try:
+            _images_dir, labels_dir = split_dirs(root, args.split)
+        except Exception as exc:  # noqa: BLE001
+            raise SystemExit(f"cannot resolve the label split for class labels: {exc}") from None
+        class_ids: list[int] = []
+        for p in images:
+            label_path = labels_dir / (p.stem + ".txt")
+            first = None
+            if label_path.exists():
+                for line in label_path.read_text().splitlines():
+                    if line.strip():
+                        first = int(line.split()[0])
+                        break
+            class_ids.append(first if first is not None else -1)
+        class_labels = torch.tensor(class_ids, dtype=torch.long)
+        class_names_present = {int(c): names[c] for c in sorted(set(class_ids)) if c >= 0 and c < len(names)}
+
+    # ---- feature extraction on the frozen checkpoint ----
+    model = load_model(str(weights))
+    inner = model.model if hasattr(model, "model") else model
+    device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
+    inner = inner.to(device).eval()
+
+    per_level_features: dict[int, list] = {}
+    per_level_labels: dict[str, list] = {}
+    batch_size = args.batch
+    level_shapes: dict[int, tuple[int, int]] = {}
+    for start in range(0, len(images), batch_size):
+        chunk = images[start : start + batch_size]
+        arr = np.stack([np.asarray(Image.open(p).convert("RGB"), dtype=np.float32) / 255.0 for p in chunk])
+        x = torch.from_numpy(arr).permute(0, 3, 1, 2).to(device)
+        # Letterbox to a common size so a batch can mix image dimensions; the probe
+        # pools over space anyway, but the model graph needs a rectangular input.
+        x = _letterbox_batch(x, args.imgsz)
+        chunk_field = field_labels[start : start + batch_size]
+        chunk_labels = {args.field: chunk_field}
+        if args.class_field:
+            chunk_labels["class"] = class_labels[start : start + batch_size]
+        extraction = collect_head_features(inner, x, labels=chunk_labels)
+        level_shapes = extraction.level_shapes
+        for level in extraction.levels():
+            per_level_features.setdefault(level, []).append(extraction.features[level])
+        for name in chunk_labels:
+            per_level_labels.setdefault(name, []).append(chunk_labels[name])
+
+    full = FeatureExtraction(
+        features={lvl: torch.cat(parts) for lvl, parts in sorted(per_level_features.items())},
+        labels={name: torch.cat(parts) for name, parts in sorted(per_level_labels.items())},
+        level_shapes=level_shapes,
+    )
+    if not full.features:
+        raise SystemExit("no per-level features were collected; the forward pass produced nothing readable")
+
+    report = representation_report(full, class_field="class" if args.class_field else None, seed=args.seed)
+    report["checkpoint"] = str(weights)
+    report["data"] = str(data_path)
+    report["split"] = args.split
+    report["n_images_used"] = len(images)
+    report["field"] = args.field
+    report["field_vocab"] = {v: k for k, v in vocab.items()}
+    if class_names_present:
+        report["class_vocab"] = {str(k): v for k, v in class_names_present.items()}
+    report["chance_rate"] = 1.0 / len(vocab)
+    report["note"] = (
+        "diagnosis, not evidence: on an untrained checkpoint these numbers are placeholders; "
+        "compare probe accuracy against the stated chance rate, not against 1.0"
+    )
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "representation_report.json").write_text(json.dumps(report, indent=2, default=str) + "\n")
+    print(f"probe -> {out / 'representation_report.json'}")
+    for level in sorted(report["levels"]):
+        for key, val in report["levels"][level].items():
+            if isinstance(val, dict) and val.get("accuracy") is not None:
+                print(f"  level {level}  {key}: acc={val['accuracy']:.3f}  (chance {report['chance_rate']:.3f})")
+    if "within_class_group_distance" in report:
+        dist = report["within_class_group_distance"]
+        if "reason" not in dist:
+            pairs = ", ".join(f"{k}={v:.3f}" for k, v in sorted(dist.items()))
+            print(f"  within-class cross-group drift: {pairs}")
+    if "linear_cka_top_level" in report:
+        cka = report["linear_cka_top_level"]
+        if cka and "reason" not in cka:
+            pairs = ", ".join(f"{k}={v:.3f}" for k, v in sorted(cka.items()) if v is not None)
+            print(f"  linear CKA (top level): {pairs}")
+    return 0
+
+
+def _letterbox_batch(x, size: int):
+    """Resize a ``(n, C, H, W)`` batch to ``(n, C, size, size)`` (probe-only pooling makes this safe)."""
+    import torch
+
+    return torch.nn.functional.interpolate(x, size=(size, size), mode="bilinear", align_corners=False)
+
+
 def _cmd_arch(args) -> int:
     from saryolo.nn import arch
 
@@ -709,6 +906,25 @@ def build_parser() -> argparse.ArgumentParser:
                    help="CSV with a stem column plus acquisition fields (sensor, resolution_m, ...)")
     p.add_argument("--out", default="datasets/metadata.json")
     p.set_defaults(func=_cmd_metadata)
+
+    p = sub.add_parser("probe", help="representation diagnosis: linear probes on frozen features (master-plan §14)")
+    p.add_argument("--weights", required=True)
+    p.add_argument("--data", required=True, help="data.yaml of the dataset to probe on")
+    p.add_argument("--field", default="sensor", help="metadata field the probe predicts (default: sensor)")
+    p.add_argument("--class-field", action="store_true", dest="class_field",
+                   help="also probe the object class (from the label files) as the contrast task")
+    p.add_argument("--metadata", default=None,
+                   help="metadata table JSON keyed by image stem (saryolo.data.metadata)")
+    p.add_argument("--stem-pattern", default=None, dest="stem_pattern",
+                   help="alternative to --metadata: regex with one capture group applied to each stem")
+    p.add_argument("--split", default="val", choices=["train", "val", "test"])
+    p.add_argument("--imgsz", type=int, default=640)
+    p.add_argument("--batch", type=int, default=8)
+    p.add_argument("--limit", type=int, default=None, help="probe only the first N images (deterministic)")
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--device", default=None)
+    p.add_argument("--out", default="results/probes")
+    p.set_defaults(func=_cmd_probe)
 
     p = sub.add_parser("arch", help="emit SAR-YOLO model YAMLs")
     p.add_argument("--variant", default="all")

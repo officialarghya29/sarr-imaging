@@ -19,7 +19,8 @@ not — every accuracy cell in every table is `TBD` until a real training run ha
 | 5. Prove the failure (cross-sensor) | Protocol built, **not measured** | LOSO folds + refusals (`saryolo.data.groups`); degradation itself still unmeasured — the gating fact for the whole paper |
 | 5b. Cross-resolution | Protocol built, **not measured** | `loso --rule resolution` + `metadata` command (Experiment D), documented in README and METHOD |
 | 5c. Failure analysis | Partially built | Failure taxonomy + hard-example mining exist; domain-gap table generator is untested against real folds |
-| 6. Representation diagnosis | **Missing** | No sensor-probe / CKA / embedding tooling. This is the evidence that the *central hypothesis* (sensor entanglement) is true — needed before the invariant branch is justified |
+| 5d. First-GPU runbook | **Built** | `docs/RUNBOOK_SSDD.md` — prepare → audit → LOSO folds → metadata → baseline → conditioning → probe, with the go/no-go decision gate; Stages 1–2 verified live against a synthetic VOC fixture |
+| 6. Representation diagnosis | **Built, not measured** | `saryolo.evaluation.probes` (probe accuracy, within-class drift, linear CKA) + the `probe` CLI command; side-effect-free extraction pinned by test. Awaiting a trained checkpoint |
 | 7. Acquisition encoder | Built | Component 33 (CND) + `saryolo.data.metadata`; <0.5% overhead, measured; per-sample property pinned |
 | 8. Invariant branch + decoupling loss (ACID-SAR §15–19) | **Missing** | Deliberately: the spec says build it only after the failure and the representation diagnosis exist |
 | 9–12. Multi-seed, RT-DETR transfer, ablations | Not started | Correctly ordered after the above |
@@ -50,8 +51,11 @@ ablations / RT-DETR transfer / multi-seed
 ```
 
 The two **missing** items on the critical path that do not need a GPU:
-1. RGB-pretraining baseline arm (Phase 3) — a config + runner concern.
-2. Representation-diagnosis tooling (probe classifier on frozen features, CKA) — CPU-verifiable.
+1. ~~RGB-pretraining baseline arm~~ — **built**: `init:` config key + EXP-401…403 arms (verified transfer counts).
+2. ~~Representation-diagnosis tooling~~ — **built**: `saryolo.evaluation.probes` + the `probe` CLI.
+
+What remains on the critical path needs a GPU: run `docs/RUNBOOK_SSDD.md` end to end. Every
+CPU-side prerequisite is now in place.
 
 ## Non-negotiables carried from the master spec
 
