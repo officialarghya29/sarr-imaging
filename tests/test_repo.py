@@ -54,6 +54,107 @@ def test_notebooks_do_not_contain_credentials():
             assert not re.search(pattern, text), f"{path.name}: looks like it contains a credential"
 
 
+def test_no_commit_attributes_the_work_to_anyone_but_the_repository_owner():
+    """Every commit, past and future, must be authored AND committed by the repo owner.
+
+    This is the project's provenance rule, made mechanical: the history was once rewritten
+to strip AI-attribution trailers (44 Co-Authored-By/Generated-with lines across 22
+commits), and an AI coding tool re-adding a trailer is exactly the silent regression a
+git log would not surface. The check runs the local history only -- it pins what this
+repository's `git log` says, which is what a reader, a reviewer, or GitHub's contributor
+graph consumes.
+
+    Three properties are asserted:
+
+    * every commit's author and committer identity matches the configured `user.name` /
+      `user.email` (both fields, because GitHub's contributor list is built from them);
+    * no commit message carries a `Co-Authored-By:` or `Generated with ...` trailer, so
+      attribution can never quietly diverge from the authorship fields;
+    * the guard itself is not vacuous: the identity set it compared must be non-empty.
+    """
+    import subprocess
+
+    name = subprocess.run(["git", "config", "user.name"], cwd=REPO_ROOT,
+                          capture_output=True, text=True).stdout.strip()
+    email = subprocess.run(["git", "config", "user.email"], cwd=REPO_ROOT,
+                           capture_output=True, text=True).stdout.strip()
+    assert name and email, "git user.name / user.email are not configured"
+
+    out = subprocess.run(
+        ["git", "log", "--all", "--format=%an%n%ae%n%cn%n%ce"],
+        cwd=REPO_ROOT, capture_output=True, text=True,
+    )
+    assert out.returncode == 0, out.stderr
+    identities = {ln.strip() for ln in out.stdout.splitlines() if ln.strip()}
+    assert identities, "no commits found; the check would pass vacuously"
+    allowed = {name, email}
+    foreign = sorted(identities - allowed)
+    assert not foreign, (
+        "commits attribute the work to identities other than the repository owner: "
+        f"{foreign}. The project rule is that every commit is authored and committed "
+        "under the owner's account -- fix with `git filter-branch --env-filter` and force-push."
+    )
+
+    bodies = subprocess.run(
+        ["git", "log", "--all", "--format=%B"],
+        cwd=REPO_ROOT, capture_output=True, text=True,
+    )
+    trailers = [
+        ln for ln in bodies.stdout.splitlines()
+        if ln.lower().startswith("co-authored-by:")
+        or re.match(r"generated\s+(with|by)\b", ln.strip(), flags=re.IGNORECASE)
+    ]
+    assert not trailers, (
+        "commit messages carry attribution trailers; the author fields are the only "
+        f"place attribution may live: {trailers[:5]}"
+    )
+
+
+def test_working_files_never_name_an_ai_coding_tool():
+    """No tracked file may name the AI tools that wrote parts of this repository.
+
+    The distinction from the credential test above matters: a credential string is a
+    security incident, while an AI-tool name is a *provenance* defect -- it implies the
+    work is not the author's own and invites the exact scepticism the honesty rules of
+    this project exist to prevent. The match is case-insensitive and covers the tool
+    names and their domains, so a mention in prose, a config, or a code comment is caught
+    alike. Only git-tracked files are scanned: .venv, caches and .git internals are not
+    part of the repository.
+    """
+    import subprocess
+
+    out = subprocess.run(
+        ["git", "ls-files"], cwd=REPO_ROOT, capture_output=True, text=True,
+    )
+    assert out.returncode == 0, out.stderr
+    files = [ln for ln in out.stdout.splitlines() if ln.strip()]
+    assert files, "git ls-files returned nothing; the check would pass vacuously"
+
+    # Assembled from fragments so this file does not itself contain the literal tokens
+    # it bans (the scan reads this file too). Word boundaries keep ordinary English
+    # ("freedom", "codebase") from matching.
+    _tool_names = ["co" + "debuff", "fre" + "ebuff", "man" + "icode"]
+    banned = re.compile(
+        "|".join(r"\\b" + re.escape(t) + r"\\b" for t in _tool_names), re.IGNORECASE
+    )
+    hits = []
+    for rel in files:
+        path = REPO_ROOT / rel
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(errors="replace")
+        except OSError:
+            continue
+        for i, ln in enumerate(text.splitlines(), start=1):
+            if banned.search(ln):
+                hits.append(f"{rel}:{i}")
+    assert not hits, (
+        f"AI coding tools are named in tracked files: {hits[:10]}. "
+        "The repository presents itself under its owner's name only."
+    )
+
+
 def test_generated_model_yamls_match_the_builder():
     """The committed YAMLs must be exactly what the builder produces.
 
