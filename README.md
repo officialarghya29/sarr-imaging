@@ -10,7 +10,7 @@
 | **Stack** | Python 3.10+ · Ultralytics 8.4.155 · PyTorch 2.x |
 | **Architectures** | 87 variants wired; every one builds and runs a forward pass |
 | **Experiments** | 88 configured; each reproducible from a committed YAML |
-| **Tests** | 242 passing — no dataset download and no GPU needed |
+| **Tests** | 271 passing — no dataset download and no GPU needed |
 | **Accuracy results** | none yet — not one number in this repository is fabricated |
 
 ---
@@ -20,7 +20,7 @@
 | | |
 | --- | --- |
 | **What this is** | A complete, reproducible research pipeline for SAR object detection: dataset audit → baseline → ten documented components → ablations → removal tests → robustness → efficiency → cross-dataset → paper. |
-| **What is proven** | The infrastructure. 242 tests pass; the baseline reproduces stock YOLO11 exactly; all eleven modules are measurably identity functions at initialisation *and* demonstrably not frozen; every model trains end to end. |
+| **What is proven** | The infrastructure. 271 tests pass; the baseline reproduces stock YOLO11 exactly; all eleven modules are measurably identity functions at initialisation *and* demonstrably not frozen; every model trains end to end. |
 | **What is *not* proven** | Accuracy. **No model has been trained on a real SAR dataset in this repository.** There is no result table here with numbers in it, and the table generators refuse to print one. |
 | **Why that's the point** | A detector paper is only as strong as its ablations. If the machinery that produces those ablations cannot be trusted, every number downstream is unverifiable. Build the instrument first. |
 
@@ -471,7 +471,7 @@ uv pip install --python .venv/bin/python torch torchvision --index-url https://d
 uv pip install --python .venv/bin/python ultralytics pytest
 source .venv/bin/activate
 
-pytest tests/ -q                                          # 242 tests
+pytest tests/ -q                                          # 271 tests
 python -m saryolo arch --variant all --nc 1               # emit 87 model YAMLs
 python -m saryolo synth-data --out datasets/processed/synthetic_smoke
 python -m saryolo train --exp configs/exp/_smoke_baseline.yaml
@@ -551,8 +551,15 @@ Every arm below sits in the *same slot* with every other component held fixed, a
 | `EXP-311…314` | input adapter (12) | raw (`identity`) · local-statistics · learned · ours-hybrid |
 | `EXP-321…326` | consistency (SEC. 4) | off (control) · speckle ×1 · speckle ×16 · low-contrast · low-SNR · **ours, speckle ×4** |
 | `EXP-331…338` | conditioning (33) | none (control) · gain · shift · film-sensor · film-resolution · film-physical-only · **ours film sensor+resolution** · spatial |
+| `EXP-401…403` | init stage (Phase 3) | random init (control) · COCO `yolo11s.pt` fine-tuned · SAR-pretrained checkpoint fine-tuned |
 
 The `EXP-26x` range answers SEC. 14 of the brief directly: the transform is the *variable*, so FFT, block-DCT and Haar wavelet are compared in one slot with everything else held fixed, rather than assuming the FFT is right. `EXP-294/295` sweep the refinement's `max_offset` bound; it is logged as an **open sweep, not a tuned constant**, because the learned offsets sit at ~94% of the bound where `tanh`'s gradient is smallest — so the bound may well be too tight.
+
+**The init slot (Phase 3) is a config-level comparison, not an architecture one.** The three arms share one model YAML, one seed, and every train argument; the only stated difference is `init:` — `none` (a fresh build), `coco11` (COCO-pretrained `yolo11s.pt`), or a checkpoint path (MSFA-style SAR weights, when available). How much of the RGB-to-SAR performance problem is just input-initialisation is then readable off the ledger, because the runner writes the init stage, the source checkpoint, and the exact number of tensors whose values actually changed into every run record — an honest count, excluding the zero-initialised buffers that the raw intersection over-counts ~5×. A transfer that would change nothing raises instead of running as a random-init wearing a pretrained label.
+
+### Representation diagnosis (master-plan §14)
+
+Before any accuracy number, the central hypothesis — *sensor appearance is entangled with object semantics* — is directly testable on a frozen detector: hook the detection head's per-level maps, mean-pool each image, and ask what a **linear probe** can recover (`saryolo.evaluation.probes`). If a `sensor` probe far exceeds the chance rate implied by the source count while a `class` probe does not, the representation is appearance-dominated — the failure the conditioning adapter addresses, and the evidence that justifies the invariant branch (or, if the probe disagrees, the reason not to build it). Three complementary readings are implemented, each with its meaning stated up front: probe accuracy per level; within-class centroid distance across acquisition groups ("same object, different sensor" drift); and linear CKA between the pooled feature matrices of two acquisition groups over the same images. The extraction is side-effect-free by test — BN buffers are untouched and batch rows are independent — because a diagnosis pass must not alter the thing diagnosed. **Not yet run on a trained checkpoint**: on an untrained model the numbers are placeholders, and none of this constitutes evidence until a real checkpoint exists.
 
 Configs are generated, not written by hand:
 

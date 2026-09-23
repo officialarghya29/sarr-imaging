@@ -22,6 +22,14 @@ from .metrics import (
     predict_to_labels,
     write_metrics,
 )
+from .probes import (
+    FeatureExtraction,
+    class_centroid_distances,
+    collect_head_features,
+    linear_cka,
+    linear_probe_accuracy,
+    representation_report,
+)
 from .robustness import CORRUPTIONS, Corruption, apply_corruption, build_corrupted_split, robustness_sweep
 
 __all__ = [
@@ -52,4 +60,11 @@ __all__ = [
     "cross_dataset_eval",
     "class_compatibility",
     "domain_gap_table",
+    # representation diagnosis (master-plan §14)
+    "FeatureExtraction",
+    "collect_head_features",
+    "linear_probe_accuracy",
+    "class_centroid_distances",
+    "linear_cka",
+    "representation_report",
 ]

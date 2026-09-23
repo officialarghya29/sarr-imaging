@@ -14,7 +14,7 @@ from pathlib import Path
 from saryolo.tracking.ledger import ExperimentLedger, ExperimentRecord
 
 from .config import ExperimentConfig, load_experiment
-from .trainer import load_model
+from .trainer import apply_init, load_model
 
 __all__ = ["run_experiment", "read_results_csv", "extract_val_metrics", "find_best_weights"]
 
@@ -157,6 +157,20 @@ def run_experiment(
 
         data_yaml = resolve_data_yaml(cfg.dataset_path)
         model = load_model(str(cfg.model_path))
+        # Phase 3: the init stage is stated in the config (default `none`, i.e. a fresh
+        # build from the model YAML) and recorded, so a fine-tuned number can never be
+        # quoted as if it were trained from scratch -- or the reverse. Both config
+        # spellings are accepted: `init: coco11` or `init: {weights: coco11}`.
+        init_cfg = cfg.extra.get("init", "none")
+        init_weights = init_cfg if isinstance(init_cfg, str) else str(init_cfg.get("weights", "none"))
+        init_summary = apply_init(model, init_weights)
+        record.extra.update(init_summary)
+        if init_summary.get("init_checkpoint"):
+            # The facade must be reloaded from the init checkpoint: Ultralytics' train()
+            # calls get_model(weights=self.model if self.ckpt else None), so a YAML-built
+            # facade's inner model would be silently rebuilt and any transfer lost. A
+            # checkpoint-built facade takes the standard .pt fine-tuning path instead.
+            model = load_model(init_summary["init_checkpoint"])
         model.train(
             data=str(data_yaml),
             project=str(project),

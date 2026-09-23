@@ -761,6 +761,28 @@ severity grid is literally the same tuple.
 It is **offline**, with the trade-off stated: the augmented split is a committed, inspectable
 artifact, at the cost of being fixed rather than resampled per epoch, and of `views`× the disk.
 
+### The init stage (Phase 3: RGB-pretraining vs random-init vs SAR-pretrained)
+
+The RGB-pretraining → SAR-fine-tuning gap that SARDet-100K diagnosed is one of the
+motivating observations for the whole project, so it gets a named experiment rather
+than a checkbox: EXP-401/402/403 share one model YAML, one seed and every training
+argument, and differ *only* in the stated `init:` stage — `none` (fresh build, the
+control), `coco11` (COCO-pretrained `yolo11s.pt`), or an explicit checkpoint path
+(MSFA-style SAR weights when available).
+
+The mechanism matters because of how Ultralytics builds models: `train()` calls
+`get_model(weights=self.model if self.ckpt else None, ...)`, so a YAML-built facade's
+inner model is silently rebuilt — any transfer done by mutating the facade would
+vanish while the ledger still claimed a pretrained start. `apply_init` therefore uses
+the trainer's own route: a fresh build of the same graph, the shape-compatible
+intersection of the source weights loaded in, serialised to a checkpoint, and the
+facade reloaded from it. The run record carries the init stage, the source, and the
+count of tensors whose **values actually changed** — the raw intersection over-counts
+~5× because zero-initialised BN buffers are shape-compatible and equal by
+construction. Two refusals keep the comparison honest: a checkpoint sharing no
+shape-compatible tensor raises (that run would be random-init wearing a pretrained
+label), and so does a transfer that would change nothing.
+
 ### Hard-example mining (SEC. 6)
 
 An offline sampling change: score every image by how badly the model failed on it, then emit a
@@ -821,6 +843,38 @@ Two rules keep it honest:
   (`saryolo.data.groups`), which is the headline protocol: see below.
 * **Multi-seed** runs (EXP-012) reported as mean ± std, because a single-seed
   difference of a few tenths of a point is not evidence.
+
+### Representation diagnosis (master-plan §14), before any accuracy number
+
+The central hypothesis — that a SAR detector learns *object + acquisition
+appearance* rather than object semantics alone — is a claim about representations,
+and it can be tested on a frozen detector before any new training
+(`saryolo.evaluation.probes`):
+
+1. **Linear probe accuracy.** A logistic probe over mean-pooled per-level head
+   features, five-fold. `sensor` accuracy far above the chance rate implied by the
+   source count says sensor identity is linearly present; `sensor` high while
+   `class` is low is the appearance-dominated failure the conditioning adapter
+   addresses.
+2. **Within-class centroid drift.** For each pair of acquisition groups and each
+   class present in both, the cosine distance between group centroids of pooled
+   features — "same object, different sensor" drift, the quantity the adapter is
+   hypothesised to reduce.
+3. **Linear CKA** (Kornblith et al., 2019) between the pooled feature matrices of
+   two acquisition groups over the same images; low CKA under a fixed class
+   distribution is drift the head has to pay for.
+
+The probe is deliberately linear on a frozen model: a probe that could train
+features would measure the probe. Extraction is side-effect-free by test — BN
+buffers untouched, batch rows independent, the hook removed in a `finally` block —
+and every reported number is either measured or absent with a stated reason (a
+class probe over one class is `None` plus a reason, never `1.0`).
+
+The planned reading: if the baseline's sensor probe is high and the conditioned
+model's drops while class information is retained, the mechanism does what the
+paper claims at the representation level, which is the §14 evidence the failure
+analysis alone cannot provide. Until a trained checkpoint exists, these are
+placeholders and no claim is made.
 
 ### Leave-one-source-out: why the unit is the source
 

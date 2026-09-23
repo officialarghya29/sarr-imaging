@@ -269,6 +269,29 @@ def main() -> int:
         _write(out / f"EXP-012_seed{seed}_full_{args.scale}.yaml", payload, f"multi-seed seed {seed}")
         written.append(f"EXP-012_seed{seed}_full_{args.scale}.yaml")
 
+    # Phase 3 -- the RGB-pretraining baseline, as three arms whose *only* stated
+    # difference is the initialisation. The model YAML and every train arg are shared, so
+    # a later accuracy difference is attributable to the init stage and nothing else.
+    # EXP-401 is the control that also documents EXP-404's default: without an `init`
+    # key, the runner starts from a fresh build of the model YAML.
+    for exp_id, init_val, note in (
+        ("EXP-401", "none", "random init (fresh build from the model YAML; the Phase-3 control)"),
+        ("EXP-402", "coco11", "COCO-pretrained yolo11s.pt fine-tuned on SAR (the standard route)"),
+        ("EXP-403", {"weights": "PATH/TO/msfa_or_sar_checkpoint.pt"},
+         "SAR-pretrained checkpoint fine-tuned on SAR (e.g. MSFA-style weights); state the path before running"),
+    ):
+        payload = {
+            "experiment": {"id": exp_id, "name": f"RGB/SAR pretraining baseline ({note.split(' (')[0]})",
+                           "description": f"Phase 3: {note}"},
+            "model": model_rel("baseline"),
+            "dataset": rel_dataset,
+            "init": init_val,
+            "train": _train_block(args),
+            "notes": f"Phase 3 init comparison; shared config with EXP-401..403 except the init stage. {note}",
+        }
+        _write(out / f"{exp_id}_init_baseline.yaml", payload, f"Phase 3 init: {note}")
+        written.append(f"{exp_id}_init_baseline.yaml")
+
     # Module-level ablation arms: EXP-<prefix><arm>.
     seen_ids: dict[str, str] = {}
     for slot, prefix, variants in ABLATION_SLOTS:

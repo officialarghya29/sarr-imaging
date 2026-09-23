@@ -123,7 +123,21 @@ def load_experiment(path: str | Path) -> ExperimentConfig:
     # Reproducibility guard: the seed must be explicit, not inherited by accident.
     if "seed" not in (raw.get("train") or {}):
         raise ValueError(f"{path}: 'train.seed' must be set explicitly for a reproducible run")
+    # Phase 3: the init stage must be one of the documented spellings, or a typo
+    # (`init: coco110`) would silently fall through to a random-init run.
+    if "init" in raw:
+        init_val = raw["init"]
+        ok = init_val in ("none", "coco11", "coco") or (
+            isinstance(init_val, dict) and isinstance(init_val.get("weights"), str)
+        )
+        if not ok:
+            raise ValueError(
+                f"{path}: 'init' must be 'none', 'coco11', or a mapping with a 'weights' "
+                f"checkpoint path, got {init_val!r}"
+            )
 
+    # NOTE: `init` is deliberately NOT in `known` -- it must survive into `extra`, which
+    # is where the runner reads it. `known` keys are dropped from the parsed config.
     known = {"experiment", "model", "dataset", "train", "notes", "description"}
     return ExperimentConfig(
         experiment_id=exp_id,
