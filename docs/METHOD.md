@@ -871,11 +871,13 @@ and every reported number is either measured or absent with a stated reason (a
 class probe over one class is `None` plus a reason, never `1.0`).
 
 The command-line route is `python -m saryolo.cli probe --weights <ckpt> --data
-<data.yaml> --field sensor`, with the acquisition labels coming either from a
-metadata table (`--metadata`) or, for archives that encode the source in the
-filename, `--stem-pattern '^(sentinel1|gaofen3)_'` — stated, never inferred. The
-report JSON records the field vocabulary, the chance rate, and a caveat that on
-an untrained checkpoint these numbers are placeholders; the printed summary puts
+<data.yaml> --field sensor`, with the acquisition labels coming from any of
+three stated sources: a metadata table (`--metadata`), the registry's verified
+profile for the primary datasets (`--dataset sardet100k|hrsid`, which builds the
+table in memory), or, for archives that encode the source in the filename,
+`--stem-pattern '^(sentinel1|gaofen3)_'` — stated, never inferred. The report
+JSON records the field vocabulary, the chance rate, and a caveat that on an
+untrained checkpoint these numbers are placeholders; the printed summary puts
 every accuracy next to that chance rate rather than next to 1.0.
 
 The planned reading: if the baseline's sensor probe is high and the conditioned

@@ -146,37 +146,68 @@ def _cmd_stats(args) -> int:
 
 
 def _cmd_metadata(args) -> int:
-    """Build an acquisition-metadata table from a per-image CSV sidecar.
+    """Build an acquisition-metadata table for a prepared dataset.
 
     The missing third input of the conditioning experiments. The ``--rule resolution``
-    branch of ``loso`` needs a saved :class:`MetadataTable` JSON, and ``build_metadata_table``
-    provides no CLI route to one for archives that state acquisition only in a table (SAR-Ship-Dataset,
-    chip releases of SARDet-100K). This command is that route, and is deliberately small:
-    the CSV is stated, never scraped from filenames, because a scraped value would look like
-    metadata while being a guess.
+    branch of ``loso`` and the ``probe`` command need a saved :class:`MetadataTable`
+    JSON, and this command is the route to one. Two sources of truth, chosen per call:
+
+    * ``--dataset <key>`` applies the registry's *verified* acquisition profile (sourced
+      from the dataset's official documentation -- per-source sensor/resolution/band for
+      SARDet-100K, HRSID's stated three resolutions). This is the default route for the
+      primary datasets and involves no hand-typed values.
+    * ``--sidecar <csv>`` reads a per-image CSV, for archives that state acquisition only
+      in a table. The CSV is stated, never scraped from filenames, because a scraped value
+      would look like metadata while being a guess.
+
+    Giving neither, or both, is refused: the source of every acquisition value must be
+    unambiguous, because the whole cross-sensor claim rests on where these numbers came
+    from.
     """
-    from saryolo.data.metadata import build_metadata_table, load_metadata_sidecar
+    from saryolo.data.metadata import MetadataTable
 
     images_dir = Path(args.images_dir)
     if not images_dir.is_dir():
         raise SystemExit(f"--images {images_dir} is not a directory")
-    sidecar_path = Path(args.sidecar)
-    if not sidecar_path.is_file():
-        raise SystemExit(f"--sidecar {sidecar_path} does not exist")
-    sidecar = load_metadata_sidecar(sidecar_path)
-    images = sorted(p for p in images_dir.iterdir() if p.suffix.lower() in IMAGE_SUFFIXES)
-    if not images:
-        raise SystemExit(f"no dataset images found under {images_dir} (tried {', '.join(IMAGE_SUFFIXES)})")
-    try:
-        table = build_metadata_table(images, sidecar=sidecar)
-    except ValueError as exc:
-        # An all-unknown table (sidecar matching no stems) raises ValueError; a traceback
-        # would still point at the cause, but SystemExit keeps every CLI refusal in the
-        # same shape the loso command uses.
-        raise SystemExit(f"cannot build the metadata table: {exc}") from None
-    out = table.save(args.out)
-    print(f"wrote {out}: {len(table)} images, coverage "
-          + ", ".join(f"{field}={cov:.0%}" for field, cov in table.coverage().items()))
+    if bool(args.dataset) == bool(args.sidecar):
+        raise SystemExit(
+            "give exactly one of --dataset <key> (verified profile) or --sidecar <csv> "
+            "(per-image table); with both the source of truth is ambiguous, with neither "
+            "there is none"
+        )
+
+    if args.dataset:
+        from saryolo.data.convert import write_acquisition_metadata
+
+        try:
+            out_path = write_acquisition_metadata(images_dir, args.out, args.dataset)
+        except ValueError as exc:
+            # Same convention as the fold-building path: a refusal with the diagnosis,
+            # not a traceback burying it.
+            raise SystemExit(f"cannot build the metadata table: {exc}") from None
+        table = MetadataTable.load(out_path)
+    else:
+        from saryolo.data.metadata import build_metadata_table, load_metadata_sidecar
+
+        sidecar_path = Path(args.sidecar)
+        if not sidecar_path.is_file():
+            raise SystemExit(f"--sidecar {sidecar_path} does not exist")
+        sidecar = load_metadata_sidecar(sidecar_path)
+        images = sorted(p for p in images_dir.iterdir() if p.suffix.lower() in IMAGE_SUFFIXES)
+        if not images:
+            raise SystemExit(f"no dataset images found under {images_dir} (tried {', '.join(IMAGE_SUFFIXES)})")
+        try:
+            table = build_metadata_table(images, sidecar=sidecar)
+        except ValueError as exc:
+            # An all-unknown table (sidecar matching no stems) raises ValueError; a traceback
+            # would still point at the cause, but SystemExit keeps every CLI refusal in the
+            # same shape the loso command uses.
+            raise SystemExit(f"cannot build the metadata table: {exc}") from None
+        out_path = table.save(args.out)
+
+    coverage = table.coverage()
+    print(f"wrote {out_path}: {len(table)} images, coverage "
+          + ", ".join(f"{field}={cov:.0%}" for field, cov in coverage.items()))
     return 0
 
 
@@ -231,6 +262,18 @@ def _cmd_probe(args) -> int:
         if not table_path.exists():
             raise SystemExit(f"--metadata {table_path} does not exist")
         table = MetadataTable.load(table_path)
+    elif args.dataset:
+        # Same verified-profile route as `saryolo metadata --dataset`: build the table
+        # in memory from the registry profile instead of demanding a prior file.
+        from saryolo.data.convert import write_acquisition_metadata
+        from saryolo.data.metadata import MetadataTable
+
+        tmp_table = Path(args.out) / ".metadata_from_profile.json"
+        try:
+            out_path = write_acquisition_metadata(split_dir, tmp_table, args.dataset)
+        except ValueError as exc:
+            raise SystemExit(f"cannot build the metadata table: {exc}") from None
+        table = MetadataTable.load(out_path)
 
     extension_set = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
     images = sorted(
@@ -899,10 +942,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--sample", type=int, default=300)
     p.set_defaults(func=_cmd_stats)
 
-    p = sub.add_parser("metadata", help="build an acquisition-metadata table from a per-image CSV sidecar")
+    p = sub.add_parser("metadata", help="build an acquisition-metadata table (verified profile or CSV sidecar)")
     p.add_argument("--images", required=True, dest="images_dir",
-                   help="directory of dataset images the table describes")
-    p.add_argument("--sidecar", required=True,
+                   help="directory of dataset images the table describes (scanned recursively for profiles)")
+    p.add_argument("--dataset", default=None,
+                   help="registry key with a verified acquisition profile (sardet100k, hrsid); "
+                        "the no-hand-typed-values route for the primary datasets")
+    p.add_argument("--sidecar", default=None,
                    help="CSV with a stem column plus acquisition fields (sensor, resolution_m, ...)")
     p.add_argument("--out", default="datasets/metadata.json")
     p.set_defaults(func=_cmd_metadata)
@@ -915,6 +961,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="also probe the object class (from the label files) as the contrast task")
     p.add_argument("--metadata", default=None,
                    help="metadata table JSON keyed by image stem (saryolo.data.metadata)")
+    p.add_argument("--dataset", default=None,
+                   help="build the table from a registry profile (sardet100k, hrsid) -- "
+                        "same route as `saryolo metadata --dataset`, no prior file needed")
     p.add_argument("--stem-pattern", default=None, dest="stem_pattern",
                    help="alternative to --metadata: regex with one capture group applied to each stem")
     p.add_argument("--split", default="val", choices=["train", "val", "test"])

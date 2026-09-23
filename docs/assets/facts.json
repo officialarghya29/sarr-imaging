@@ -605,11 +605,11 @@
     ]
   },
   "tests": {
-    "total": 278,
+    "total": 281,
     "by_file": {
       "tests/test_arch.py": 61,
       "tests/test_augmentation.py": 15,
-      "tests/test_cli.py": 22,
+      "tests/test_cli.py": 25,
       "tests/test_conditioning.py": 9,
       "tests/test_data.py": 23,
       "tests/test_groups.py": 35,

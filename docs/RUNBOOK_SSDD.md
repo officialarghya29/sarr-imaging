@@ -120,6 +120,12 @@ python -m saryolo.cli probe --weights runs/EXP-001/weights/best.pt \
     --data datasets/processed/ssdd/data.yaml --field sensor --split val --out results/probes/ssdd
 ```
 
+The acquisition labels can come from a prior metadata table (`--metadata
+datasets/metadata_ssdd.json`, if Stage 4 built one), the registry's verified
+profile (`--dataset hrsid`), or a stated stem pattern (`--stem-pattern`). Verified
+end to end on a fixture: profile-built tables feed both the resolution folds and
+this probe unchanged.
+
 Reads (§14 of the master plan): a `sensor` probe far above chance with a weak
 `class` probe says the representation is appearance-dominated — the evidence that
 justifies the conditioning adapter, and later the invariant branch.

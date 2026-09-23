@@ -201,6 +201,65 @@ def test_metadata_command_refuses_a_sidecar_matching_nothing(tmp_path):
               "--out", str(tmp_path / "metadata.json")])
 
 
+def test_metadata_dataset_route_builds_a_table_from_the_verified_profile(tmp_path, capsys):
+    """The no-hand-typed-values route: the registry's verified per-source profile becomes
+    a metadata table whose values feed the cross-resolution rule unchanged. Every profile
+    source present in the fixture must match, and the printed coverage must be the truth
+    about which fields the profile actually carries (polarization is null wherever a source
+    ships several)."""
+    import json
+
+    root = tmp_path / "images"
+    root.mkdir()
+    stems = {
+        "AIR_SARShip_1.0_001_0001": ("gaofen3", 2.0, "VV"),
+        "HRSID_JPG_0001_0_800_10190_10990": ("mixed", 1.75, None),
+        "MSAR_000001": ("hisea1", 1.0, None),
+        "SADD_0001": ("terrasarx", 1.75, "HH"),
+        "SIVED_0001": ("airborne", 0.2, None),
+        "SSDD_000001": ("mixed", 8.0, None),
+    }
+    for stem in stems:
+        (root / f"{stem}.jpg").write_bytes(b"x")
+    out = tmp_path / "metadata.json"
+
+    code = main(["metadata", "--images", str(root), "--dataset", "sardet100k", "--out", str(out)])
+    assert code == 0, capsys.readouterr().out
+    table = json.loads(out.read_text())
+    assert table["source"] == "profile:sardet100k"
+    assert set(table["entries"]) == set(stems)
+    for stem, (sensor, resolution, pol) in stems.items():
+        entry = table["entries"][stem]
+        assert entry["sensor"] == sensor, stem
+        assert entry["resolution_m"] == resolution, stem
+        assert entry["polarization"] == pol, stem
+    # The hand-off that has to work: the table feeds the cross-resolution rule directly.
+    data_cfg = tmp_path / "data.yaml"
+    data_cfg.write_text(f"path: {root}\nnc: 1\nnames:\n- ship\nval: images\n")
+    code = main(["loso", "--images", str(root), "--data", str(data_cfg), "--rule", "resolution",
+                 "--metadata", str(out), "--edges", "2 5", "--min-test-images", "1",
+                 "--out", str(tmp_path / "folds")])
+    assert code == 0, capsys.readouterr().out
+
+
+def test_metadata_route_selection_is_refused_when_ambiguous(tmp_path):
+    """Both routes at once, or neither: the source of every acquisition value must be
+    unambiguous, because the cross-sensor claim rests on where these numbers came from."""
+    root = tmp_path / "images"
+    root.mkdir()
+    (root / "x.jpg").write_bytes(b"x")
+
+    with pytest.raises(SystemExit, match="exactly one of --dataset"):
+        main(["metadata", "--images", str(root), "--out", str(tmp_path / "m.json")])
+    with pytest.raises(SystemExit, match="exactly one of --dataset"):
+        main(["metadata", "--images", str(root), "--dataset", "sardet100k",
+              "--sidecar", str(tmp_path / "nope.csv"), "--out", str(tmp_path / "m.json")])
+    # An unknown registry key is refused with the sourcing rule, not a traceback.
+    with pytest.raises(SystemExit, match="no verified acquisition profile"):
+        main(["metadata", "--images", str(root), "--dataset", "ssdd",
+              "--out", str(tmp_path / "m.json")])
+
+
 def test_metadata_command_needs_real_inputs(tmp_path):
     root = tmp_path / "images"
     root.mkdir()
@@ -423,6 +482,42 @@ def test_probe_requires_a_label_source(tmp_path):
             "probe", "--weights", str(weights), "--data", str(root / "data.yaml"),
             "--split", "val", "--out", str(tmp_path / "o"),
         ])
+
+
+def test_probe_dataset_route_builds_labels_from_a_profile(tmp_path, capsys):
+    """--dataset builds the metadata table in memory from the registry's verified
+    profile -- the same route as `saryolo metadata --dataset`, so a probe on the
+    primary datasets needs no prior file and no hand-typed values."""
+    import json
+
+    from saryolo.nn.arch import VARIANTS, build_yaml_dict, variant_filename
+
+    root = tmp_path / "images" / "val"
+    root.mkdir(parents=True)
+    # Real SARDet-100K stem shapes spanning four sources; profile values are stated, not guessed.
+    stems = ("AIR_SARShip_1.0_001_0001", "AIR_SARShip_1.0_001_0002", "SSDD_000001",
+             "SSDD_000002", "SADD_0001", "SADD_0002", "SIVED_0001", "SIVED_0002")
+    rng = np.random.default_rng(5)
+    for s in stems:
+        cv2.imwrite(str(root / f"{s}.jpg"), rng.integers(0, 255, (64, 64), dtype=np.uint8))
+    (tmp_path / "data.yaml").write_text(f"path: {tmp_path}\nnc: 1\nnames:\n- ship\nval: images/val\n")
+    spec = VARIANTS["baseline"]
+    spec.nc = 1
+    weights = tmp_path / variant_filename(spec)
+    weights.write_text(pyyaml_safe(build_yaml_dict(spec)))
+    out = tmp_path / "report"
+
+    code = main([
+        "probe", "--weights", str(weights), "--data", str(tmp_path / "data.yaml"),
+        "--field", "sensor", "--dataset", "sardet100k", "--split", "val",
+        "--imgsz", "64", "--out", str(out),
+    ])
+    assert code == 0, capsys.readouterr().out
+    report = json.loads((out / "representation_report.json").read_text())
+    # Four distinct profile sensors among the eight images -> chance 0.25, stated in the report.
+    assert report["chance_rate"] == 0.25
+    assert report["field_vocab"] == {"0": "airborne", "1": "gaofen3", "2": "mixed", "3": "terrasarx"}
+    assert report["n_images_used"] == 8
 
 
 # ------------------------------------------------------------------- arch/registry

@@ -176,9 +176,11 @@ same official release, so all HRSID handling above applies unchanged; SSDD's
 inshore/offshore test subsets (46/186) are the intended cross-scenery probe and
 map onto our scene-grouped splits.
 
-The end-to-end recipe for the first measured number — SSDD prepare → audit →
+The end-to-end recipes for the first measured numbers — SSDD prepare → audit →
 LOSO folds → acquisition metadata → baseline → conditioning arms → representation
-probe, with a decision gate at each branch — is `docs/RUNBOOK_SSDD.md`.
+probe, with a decision gate at each branch — are `docs/RUNBOOK_SSDD.md`, and the
+cross-resolution pilot on HRSID's three stated resolutions is
+`docs/RUNBOOK_HRSID.md`.
 
 ---
 
