@@ -98,8 +98,20 @@ def resolve_data_yaml(
     raw_path = cfg.get("path")
     if raw_path is None:
         raise ValueError(f"{data_yaml} is missing the required 'path' key")
+    metadata_value = cfg.get("acquisition_metadata")
+    if metadata_value:
+        metadata_path = Path(metadata_value)
+        if not metadata_path.is_absolute():
+            candidates = [(data_yaml.parent / metadata_path).resolve()]
+            candidates.append(((Path(root).resolve() if root else project_root(data_yaml)) / metadata_path).resolve())
+            cfg["acquisition_metadata"] = str(next((p for p in candidates if p.exists()), candidates[0]))
     path = Path(raw_path)
     if path.is_absolute():
+        if cfg.get("acquisition_metadata") != metadata_value:
+            out = Path(out_dir).resolve() / data_yaml.name
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(yaml.safe_dump(cfg, sort_keys=False))
+            return out
         return data_yaml
     resolved = _resolve_relative_root(path, data_yaml, root)
     if resolved is None:
@@ -142,6 +154,19 @@ def load_data_config(data_yaml: str | Path, root: str | Path | None = None) -> t
     base = Path(cfg.get("path", "."))
     if not base.is_absolute():
         base = (Path(resolved).parent / base).resolve()
+    if cfg.get("acquisition_metadata"):
+        metadata_path = Path(cfg["acquisition_metadata"])
+        if not metadata_path.is_absolute():
+            yaml_file = cfg.get("yaml_file")
+            candidates = ([Path(yaml_file).resolve().parent / metadata_path] if yaml_file else [])
+            candidates.extend((Path(resolved).parent / metadata_path, base / metadata_path))
+            if not candidates:
+                candidates.append(metadata_path)
+            cfg["acquisition_metadata"] = str(
+                next((p.resolve() for p in candidates if p.is_file()), candidates[0].resolve())
+            )
+        else:
+            cfg["acquisition_metadata"] = str(metadata_path.resolve())
     return base, cfg
 
 

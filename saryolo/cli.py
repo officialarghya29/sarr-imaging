@@ -148,40 +148,31 @@ def _cmd_stats(args) -> int:
 def _cmd_metadata(args) -> int:
     """Build an acquisition-metadata table for a prepared dataset.
 
-    The missing third input of the conditioning experiments. The ``--rule resolution``
-    branch of ``loso`` and the ``probe`` command need a saved :class:`MetadataTable`
-    JSON, and this command is the route to one. Two sources of truth, chosen per call:
+    The ``loso --rule resolution`` branch and representation probe need a saved
+    :class:`MetadataTable` JSON. Dataset profiles populate only exact documented fields;
+    mixed sensors and stated ranges stay unknown rather than becoming synthetic labels.
+    A per-image sidecar can supplement a profile using values sourced from archive metadata.
+    Sidecars must be keyed by image stem and are never derived from filename guesses.
 
-    * ``--dataset <key>`` applies the registry's *verified* acquisition profile (sourced
-      from the dataset's official documentation -- per-source sensor/resolution/band for
-      SARDet-100K, HRSID's stated three resolutions). This is the default route for the
-      primary datasets and involves no hand-typed values.
-    * ``--sidecar <csv>`` reads a per-image CSV, for archives that state acquisition only
-      in a table. The CSV is stated, never scraped from filenames, because a scraped value
-      would look like metadata while being a guess.
-
-    Giving neither, or both, is refused: the source of every acquisition value must be
-    unambiguous, because the whole cross-sensor claim rests on where these numbers came
-    from.
+    At least one source is required; a profile plus sidecar is allowed so aggregate dataset
+    profiles can be completed with per-image truth.
     """
     from saryolo.data.metadata import MetadataTable
 
     images_dir = Path(args.images_dir)
     if not images_dir.is_dir():
         raise SystemExit(f"--images {images_dir} is not a directory")
-    if bool(args.dataset) == bool(args.sidecar):
-        raise SystemExit(
-            "give exactly one of --dataset <key> (verified profile) or --sidecar <csv> "
-            "(per-image table); with both the source of truth is ambiguous, with neither "
-            "there is none"
-        )
+    if not args.dataset and not args.sidecar:
+        raise SystemExit("give --dataset <key> and/or --sidecar <csv|json>; there is no metadata source")
+    if args.sidecar and not Path(args.sidecar).is_file():
+        raise SystemExit(f"--sidecar {args.sidecar} does not exist")
 
     if args.dataset:
         from saryolo.data.convert import write_acquisition_metadata
 
         try:
-            out_path = write_acquisition_metadata(images_dir, args.out, args.dataset)
-        except ValueError as exc:
+            out_path = write_acquisition_metadata(images_dir, args.out, args.dataset, sidecar=args.sidecar)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
             # Same convention as the fold-building path: a refusal with the diagnosis,
             # not a traceback burying it.
             raise SystemExit(f"cannot build the metadata table: {exc}") from None
@@ -788,7 +779,11 @@ def _cmd_loso(args) -> int:
         resolved = data_cfg.get("names") or [f"class_{i}" for i in range(int(data_cfg.get("nc", 1)))]
         names = [resolved[k] for k in sorted(resolved)] if isinstance(resolved, dict) else list(resolved)
 
-    out_dir = write_loso_splits(folds, args.out, groups=groups, seed=args.seed, names=names)
+    acquisition_metadata = args.acquisition_metadata or (args.metadata if args.rule == "resolution" else None)
+    out_dir = write_loso_splits(
+        folds, args.out, groups=groups, seed=args.seed, names=names,
+        acquisition_metadata=acquisition_metadata,
+    )
 
     print(f"\nleave-one-source-out folds -> {out_dir}")
     print(f"  {'held-out source':<28}{'train':>8}{'val':>8}{'test':>8}")
@@ -946,10 +941,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--images", required=True, dest="images_dir",
                    help="directory of dataset images the table describes (scanned recursively for profiles)")
     p.add_argument("--dataset", default=None,
-                   help="registry key with a verified acquisition profile (sardet100k, hrsid); "
-                        "the no-hand-typed-values route for the primary datasets")
+                   help="registry key with a sourced profile (sardet100k, hrsid); incomplete fields stay unknown")
     p.add_argument("--sidecar", default=None,
-                   help="CSV with a stem column plus acquisition fields (sensor, resolution_m, ...)")
+                   help="per-image CSV/JSON with stem-keyed acquisition fields; can supplement a dataset profile")
     p.add_argument("--out", default="datasets/metadata.json")
     p.set_defaults(func=_cmd_metadata)
 
@@ -1070,6 +1064,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--sidecar", default=None, help="for --rule sidecar: JSON image -> source mapping")
     p.add_argument("--metadata", default=None, dest="metadata",
                    help="for --rule resolution: metadata table JSON (saryolo.data.metadata)")
+    p.add_argument("--acquisition-metadata", default=None,
+                   help="optional per-image acquisition table copied into each fold config for conditioned training")
     p.add_argument("--edges", default=None, dest="edges",
                    help="for --rule resolution: comma-separated ascending bin edges in metres, "
                         "e.g. '5,10,20'; bins are unbounded at both ends")

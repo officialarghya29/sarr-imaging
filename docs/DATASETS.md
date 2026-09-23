@@ -159,13 +159,16 @@ turns it into a `MetadataTable` JSON keyed by image stem, ready for
 `loso --rule resolution --metadata` and for the conditioning trainer.
 
 Two things the profiles deliberately do *not* do: they do not invent values
-(every entry is sourced from the official table; ranges are carried as mid-point
-plus the published range), and they do not guess silently — a stem matching no
+(every entry is sourced from the official table; a published range or a mixed
+set of sensors is left **unknown per image** rather than collapsed into a
+midpoint or a single label), and they do not guess silently — a stem matching no
 source is counted and reported, a dataset without a verified profile is refused,
-and all-zero matching raises. HRSID standalone gets the same treatment with its
-three stated resolutions (0.5 / 1 / 3 m) and its Sentinel-1B / TerraSAR-X /
-TanDEM-X scene list; per-image per-polarization labels are not published, so
-`polarization` stays unknown rather than guessed.
+and an image tree with no documented acquisition values raises. HRSID standalone
+gets the same treatment: its release states three resolutions (0.5 / 1 / 3 m)
+and several satellites but ships **no verified scene-to-chip mapping**, so its
+profile carries no per-image sensor or resolution values; supply the release's
+own scene list through a `--sidecar` CSV/JSON to populate them, and unverified
+fields stay null rather than becoming synthetic labels.
 
 The cs231n mirror (<https://github.com/DonnieRaymond3/cs231n_ship_detection>)
 vendors both HRSID (`HRSID/HRSID_JPG/JPEGImages/` + COCO JSON: 5,604 images,

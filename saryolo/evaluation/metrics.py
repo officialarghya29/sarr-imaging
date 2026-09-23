@@ -201,6 +201,8 @@ def predict_to_labels(
     out_dir: str | Path = "results/predictions",
     device: str | None = None,
     batch: int = 16,
+    metadata_table=None,
+    vocabularies: dict | None = None,
 ) -> Path:
     """Run inference and write per-image YOLO label files with confidences.
 
@@ -233,7 +235,24 @@ def predict_to_labels(
     )
     if device:
         kwargs["device"] = device
-    model.predict(**kwargs)
+    if metadata_table is not None:
+        from saryolo.data.metadata import Vocabulary
+        from saryolo.training.trainer import AcquisitionMetadataPredictor
+
+        if vocabularies is None:
+            native = getattr(model, "model", None)
+            serialized = getattr(native, "metadata_vocabularies", None)
+            if not serialized:
+                raise ValueError("metadata-conditioned prediction requires the checkpoint's frozen vocabularies")
+            vocabularies = {key: Vocabulary.from_dict(value) for key, value in serialized.items()}
+        predictor = AcquisitionMetadataPredictor(overrides=kwargs, _callbacks=model.callbacks)
+        predictor.metadata_table = metadata_table
+        predictor.metadata_vocabularies = vocabularies
+        predictor.setup_model(model=model.model)
+        model.predictor = predictor
+        predictor(source=str(images_dir))
+    else:
+        model.predict(**kwargs)
     labels = out_dir / "labels"
     if not labels.exists():
         # Ultralytics sometimes nests under the run name.
@@ -470,6 +489,18 @@ def evaluate_detections(
     """
     images_dir, _, class_names = _resolve_split_dirs(data_yaml)
     image_index, _, _ = _split_index(data_yaml)
+    from saryolo.data.yolo import load_data_config
+
+    _data_root, data_config = load_data_config(data_yaml)
+    table = None
+    if data_config.get("acquisition_metadata"):
+        from saryolo.data.metadata import MetadataTable
+        from saryolo.training.trainer import _resolve_metadata_path
+
+        table_path = _resolve_metadata_path(data_config)
+        if table_path is None or not table_path.is_file():
+            raise FileNotFoundError(f"evaluation metadata table does not exist: {table_path}")
+        table = MetadataTable.load(table_path)
 
     # Ground truth is read *before* inference so an unresolvable split fails immediately
     # rather than after a full prediction pass. Zero ground truth means nothing was measured,
@@ -489,7 +520,9 @@ def evaluate_detections(
             f"labels directory, or at the wrong split."
         )
 
-    labels_dir = predict_to_labels(weights, images_dir, imgsz=imgsz, conf=conf, out_dir=out_dir, device=device)
+    labels_dir = predict_to_labels(
+        weights, images_dir, imgsz=imgsz, conf=conf, out_dir=out_dir, device=device, metadata_table=table
+    )
     dets = load_yolo_predictions(labels_dir, images_dir, image_index=image_index)
     nc = len(class_names)
 

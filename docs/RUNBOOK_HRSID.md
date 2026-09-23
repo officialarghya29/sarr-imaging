@@ -11,9 +11,10 @@ were built to measure.
 
 - **Three stated resolutions** span a 6× range — the same spread the SARDet-100K
   sources span, in a dataset one-fortieth the size.
-- **Three sensors with per-image provenance**: the release ships a scene list
-  naming the satellite per image, so both the `sensor` and `resolution` fields of
-  the metadata table are *stated values*, not inferred ones.
+- **Three stated resolutions and a scene list**: the release names its sensors
+  and resolution tiers, which is exactly the structure the cross-resolution
+  protocol needs — once a per-image mapping is supplied through a sidecar, the
+  `sensor` and `resolution` fields are *stated values*, not inferred ones.
 - **Two pilot roles at once**: the false-alarm probe (the 400 background-only
   images shipped separately) and the conditioning experiments share one dataset.
 
@@ -45,23 +46,33 @@ python -m saryolo.cli loso --images datasets/processed/hrsid/images \
     --rule <see Stage 3> --leakage ...
 ```
 
-## Stage 3 — Acquisition metadata: the verified-profile route (CPU)
+## Stage 3 — Acquisition metadata: verified values only (CPU)
 
-HRSID has a sourced profile in the registry, so no CSV is needed:
+HRSID's public release states three resolutions (0.5/1/3 m) and several sensors,
+but does **not** ship a verified scene-to-chip mapping, so the registry's HRSID
+profile intentionally carries no per-image sensor or resolution values. The
+command still works — it is the route for any sidecar you can source — but a
+profile-only table is refused:
+
+```bash
+# Refused: no documented acquisition values matched; nothing is invented.
+python -m saryolo.cli metadata --images datasets/processed/hrsid/images \
+    --dataset hrsid --out datasets/metadata_hrsid.json
+```
+
+To build a usable table, source per-image values from the archive itself (its
+scene list or release notes) into a CSV/JSON sidecar keyed by image stem:
 
 ```bash
 python -m saryolo.cli metadata --images datasets/processed/hrsid/images \
-    --dataset hrsid --out datasets/metadata_hrsid.json
-# -> every image: sensor=Sentinel-1B/TerraSAR-X/TanDEM-X per the scene list,
-#    resolution from the stated 0.5/1/3 m tiers, band, and multi-pol left null
+    --dataset hrsid --sidecar hrsid_per_image.csv --out datasets/metadata_hrsid.json
 ```
 
-Note the honest limitation: the *standalone* HRSID profile carries the mixed
-1.5 m nominal value unless the release's own per-image resolution annotation is
-provided. If your copy of the release includes the per-image metadata file, feed
-it through `--sidecar` instead — per-image truth beats a per-dataset summary.
-The conditioning trainer records the table's `source` field either way, so a
-number can always be traced to the provenance of its metadata.
+Every value in the table is traceable: the table's `source` field records the
+profile plus the sidecar used, and fields the archive does not state per image
+stay null. A range or a sensor mix is a per-dataset summary, not a per-image
+label, and it is never converted into one — a fabricated midpoint would create
+false resolution bins and quietly poison the cross-resolution claim.
 
 ## Stage 4 — Cross-resolution folds (Experiment D)
 

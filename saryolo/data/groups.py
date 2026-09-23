@@ -471,6 +471,7 @@ def write_loso_splits(
     seed: int = 0,
     names: list[str] | None = None,
     nc: int | None = None,
+    acquisition_metadata: str | Path | None = None,
 ) -> Path:
     """Persist one directory per fold, plus a manifest recording how it was built.
 
@@ -496,6 +497,8 @@ def write_loso_splits(
         names: Class names, written into the data configs. Omitted configs then carry no
             ``names`` and cannot be trained on, so they are only written when supplied.
         nc: Class count, defaulting to ``len(names)``.
+        acquisition_metadata: Optional metadata table whose image-stem rows are filtered per fold and
+            carried into both training and held-out evaluation YAMLs.
 
     Raises:
         ValueError: If any chip appears in more than one split of a fold, or if a held-out
@@ -511,6 +514,8 @@ def write_loso_splits(
         "grouping": groups.to_dict() if groups is not None else None,
         "folds": [],
     }
+    if acquisition_metadata is not None:
+        manifest["acquisition_metadata"] = str(Path(acquisition_metadata).resolve())
 
     for fold in folds:
         _assert_disjoint(fold)
@@ -526,6 +531,25 @@ def write_loso_splits(
                 f"# Leave-one-source-out fold {fold.name!r}: the held-out source is test.txt.\n"
             )
             base = {"path": str(fold_dir), "nc": int(nc or len(names)), "names": list(names)}
+            fold_metadata = None
+            if acquisition_metadata is not None:
+                from .metadata import MetadataTable
+
+                table = MetadataTable.load(acquisition_metadata)
+                # Fold splits hold full paths; the table is keyed by stem.
+                fold_stems = {Path(item).stem for item in (*fold.train, *fold.val, *fold.test)}
+                missing = sorted(fold_stems - set(table.entries))
+                if missing:
+                    raise ValueError(
+                        f"acquisition metadata has no row for {len(missing)} fold image(s) "
+                        f"(e.g. {missing[:3]})"
+                    )
+                fold_table = MetadataTable(
+                    entries={stem: table.entries[stem] for stem in sorted(fold_stems)},
+                    source=table.source,
+                )
+                fold_metadata = fold_table.save(fold_dir / "acquisition_metadata.json")
+                base["acquisition_metadata"] = str(fold_metadata.resolve())
             (fold_dir / "data.yaml").write_text(
                 header + yaml.safe_dump(
                     {**base, "train": str(fold_dir / "train.txt"),

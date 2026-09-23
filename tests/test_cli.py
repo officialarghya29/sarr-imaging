@@ -201,23 +201,19 @@ def test_metadata_command_refuses_a_sidecar_matching_nothing(tmp_path):
               "--out", str(tmp_path / "metadata.json")])
 
 
-def test_metadata_dataset_route_builds_a_table_from_the_verified_profile(tmp_path, capsys):
-    """The no-hand-typed-values route: the registry's verified per-source profile becomes
-    a metadata table whose values feed the cross-resolution rule unchanged. Every profile
-    source present in the fixture must match, and the printed coverage must be the truth
-    about which fields the profile actually carries (polarization is null wherever a source
-    ships several)."""
+def test_metadata_dataset_route_keeps_only_verified_source_values(tmp_path, capsys):
+    """A source profile is not a per-chip resolution label: ranges and mixtures stay unknown."""
     import json
 
     root = tmp_path / "images"
     root.mkdir()
     stems = {
-        "AIR_SARShip_1.0_001_0001": ("gaofen3", 2.0, "VV"),
-        "HRSID_JPG_0001_0_800_10190_10990": ("mixed", 1.75, None),
-        "MSAR_000001": ("hisea1", 1.0, None),
-        "SADD_0001": ("terrasarx", 1.75, "HH"),
-        "SIVED_0001": ("airborne", 0.2, None),
-        "SSDD_000001": ("mixed", 8.0, None),
+        "AIR_SARShip_1.0_001_0001": ("gaofen3", None, "VV"),
+        "HRSID_JPG_0001_0_800_10190_10990": (None, None, None),
+        "MSAR_000001": ("hisea1", None, None),
+        "SADD_0001": ("terrasarx", None, "HH"),
+        "SIVED_0001": ("airborne", None, None),
+        "SSDD_000001": (None, None, None),
     }
     for stem in stems:
         (root / f"{stem}.jpg").write_bytes(b"x")
@@ -233,13 +229,40 @@ def test_metadata_dataset_route_builds_a_table_from_the_verified_profile(tmp_pat
         assert entry["sensor"] == sensor, stem
         assert entry["resolution_m"] == resolution, stem
         assert entry["polarization"] == pol, stem
-    # The hand-off that has to work: the table feeds the cross-resolution rule directly.
-    data_cfg = tmp_path / "data.yaml"
-    data_cfg.write_text(f"path: {root}\nnc: 1\nnames:\n- ship\nval: images\n")
-    code = main(["loso", "--images", str(root), "--data", str(data_cfg), "--rule", "resolution",
-                 "--metadata", str(out), "--edges", "2 5", "--min-test-images", "1",
-                 "--out", str(tmp_path / "folds")])
-    assert code == 0, capsys.readouterr().out
+    printed = capsys.readouterr().out
+    assert "resolution_m=0%" in printed
+    assert "images without acquisition fields: 2" in printed
+
+
+def test_metadata_cli_reports_missing_sidecar_as_a_clean_refusal(tmp_path):
+    root = tmp_path / "images"
+    root.mkdir()
+    (root / "chip.jpg").write_bytes(b"x")
+    with pytest.raises(SystemExit, match="sidecar .* does not exist"):
+        main(["metadata", "--images", str(root), "--dataset", "sardet100k",
+              "--sidecar", str(tmp_path / "missing.csv"), "--out", str(tmp_path / "m.json")])
+
+
+def test_metadata_cli_requires_per_image_sidecar_for_hrsid_resolution(tmp_path):
+    """A dataset-level range cannot be converted to per-image bins."""
+    root = tmp_path / "images"
+    root.mkdir()
+    (root / "P0001_0_800_10190_10990.jpg").write_bytes(b"x")
+    with pytest.raises(SystemExit, match="no documented acquisition values"):
+        main(["metadata", "--images", str(root), "--dataset", "hrsid",
+              "--out", str(tmp_path / "m.json")])
+    sidecar = tmp_path / "hrsid.json"
+    sidecar.write_text('{"P0001_0_800_10190_10990": {"resolution_m": 0.5, "sensor": "sentinel1"}}')
+    out = tmp_path / "metadata.json"
+    assert main(["metadata", "--images", str(root), "--dataset", "hrsid",
+                 "--sidecar", str(sidecar), "--out", str(out)]) == 0
+    record = json.loads(out.read_text())["entries"]["P0001_0_800_10190_10990"]
+    assert record["resolution_m"] == 0.5
+    assert record["sensor"] == "sentinel1"
+    # One image cannot support a resolution fold; the builder must refuse rather than score it.
+    with pytest.raises(SystemExit, match="at least two populated bins"):
+        main(["loso", "--images", str(root), "--rule", "resolution", "--metadata", str(out),
+              "--edges", "1", "--min-test-images", "1", "--out", str(tmp_path / "folds")])
 
 
 def test_metadata_route_selection_is_refused_when_ambiguous(tmp_path):
@@ -249,9 +272,9 @@ def test_metadata_route_selection_is_refused_when_ambiguous(tmp_path):
     root.mkdir()
     (root / "x.jpg").write_bytes(b"x")
 
-    with pytest.raises(SystemExit, match="exactly one of --dataset"):
+    with pytest.raises(SystemExit, match="give --dataset"):
         main(["metadata", "--images", str(root), "--out", str(tmp_path / "m.json")])
-    with pytest.raises(SystemExit, match="exactly one of --dataset"):
+    with pytest.raises(SystemExit, match="sidecar .* does not exist"):
         main(["metadata", "--images", str(root), "--dataset", "sardet100k",
               "--sidecar", str(tmp_path / "nope.csv"), "--out", str(tmp_path / "m.json")])
     # An unknown registry key is refused with the sourcing rule, not a traceback.
@@ -514,9 +537,9 @@ def test_probe_dataset_route_builds_labels_from_a_profile(tmp_path, capsys):
     ])
     assert code == 0, capsys.readouterr().out
     report = json.loads((out / "representation_report.json").read_text())
-    # Four distinct profile sensors among the eight images -> chance 0.25, stated in the report.
-    assert report["chance_rate"] == 0.25
-    assert report["field_vocab"] == {"0": "airborne", "1": "gaofen3", "2": "mixed", "3": "terrasarx"}
+    # Only three exact profile sensor values are known; mixed-source SSDD rows are excluded.
+    assert report["chance_rate"] == pytest.approx(1 / 3)
+    assert report["field_vocab"] == {"0": "airborne", "1": "gaofen3", "2": "terrasarx"}
     assert report["n_images_used"] == 8
 
 

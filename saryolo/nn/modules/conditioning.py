@@ -267,7 +267,10 @@ class AcquisitionEncoder(nn.Module):
                     f"vocabulary for {field_name!r} has size {size}; it must be at least 2 so the "
                     f"reserved unknown index has somewhere to point"
                 )
-            self.embeddings[field_name] = nn.Embedding(size, embed_dim)
+            # Index zero is the explicit UNKNOWN/missing value. A held-out sensor has no
+            # training embedding row; keep this row exactly neutral instead of injecting
+            # a random, never-trained acquisition vector at evaluation time.
+            self.embeddings[field_name] = nn.Embedding(size, embed_dim, padding_idx=0)
 
         cont_in = len(self.use_continuous) * 2  # value + availability, never value alone
         cat_out = len(self.use_categorical) * embed_dim

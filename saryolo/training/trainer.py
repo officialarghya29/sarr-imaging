@@ -1,15 +1,4 @@
-"""Training integration with Ultralytics.
-
-The SAR-YOLO model and trainer are exposed as a ``task_map`` override so the
-whole Ultralytics training stack (dataloading, augmentation, AMP, EMA, LR
-schedules, checkpointing, DDP) is reused unchanged. Only two things differ:
-
-1. ``SARYOLODetectionModel`` builds the SAR-aware criterion (Component 7).
-2. ``SARYOLOTrainer`` returns that model class instead of the stock one.
-
-Everything else is deliberately stock, so a SAR-YOLO number is directly
-comparable to its YOLO baseline run through the identical pipeline.
-"""
+"""Training integration with Ultralytics, including optional acquisition metadata."""
 
 from __future__ import annotations
 
@@ -17,54 +6,22 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from ultralytics.models.yolo.detect import DetectionTrainer
+import torch
+from ultralytics.data.dataset import YOLODataset
+from ultralytics.models.yolo.detect import DetectionTrainer, DetectionValidator
+from ultralytics.models.yolo.detect.predict import DetectionPredictor
 from ultralytics.models.yolo.model import YOLO
 from ultralytics.utils import RANK
 
-from saryolo.nn.model import SARYOLODetectionModel
+from saryolo.nn.model import SARYOLODetectionModel, set_batch_metadata
 
-__all__ = ["SARYOLOTrainer", "SARYOLO", "load_model", "apply_init"]
+__all__ = ["SARYOLOTrainer", "SARYOLO", "load_model", "resolve_model_class", "apply_init"]
 
 
-# ---------------------------------------------------------------------------- initialisation stage
 def apply_init(model, weights: str) -> dict:
-    """Return the *stated* init stage for a run, and make it real.
-
-    Phase 3 of the master plan asks the RGB-pretraining → SAR-fine-tuning arm to be a
-    named baseline whose init stage travels with the result, not a silent accident of
-    Ultralytics' ``pretrained`` default. Three stages exist:
-
-    * ``none``   — a fresh build from the model YAML (the random-init control). The
-      trainer will do exactly this anyway; saying it is the point.
-    * ``coco11`` — ``yolo11s.pt``, the COCO-pretrained stock baseline.
-    * a checkpoint path — any stated checkpoint (MSFA-style SAR weights, another
-      detector's backbone, …).
-
-    How the weights actually reach the trainer: Ultralytics' ``DetectionTrainer.setup_model``
-    rebuilds the model from a YAML *unless* the facade hands it a ready ``nn.Module``,
-    and it only loads pretrained weights when it built the model itself from a
-    ``.pt`` (or when ``args.pretrained`` is a path). Mutating the facade's inner
-    model is therefore **not** a transfer — the trainer would silently rebuild and
-    discard it. The honest mechanism is the trainer's own: serialise a fresh build of
-    the graph with the intersection of the source weights loaded in, and restart the
-    facade from that checkpoint. ``intersect_dicts`` (the same function Ultralytics'
-    ``BaseModel.load`` uses) keeps only shape-compatible tensors, so a mismatched
-    head degrades to a partially initialised backbone instead of crashing mid-run —
-    and the returned summary states exactly how much transferred.
-
-    Returns:
-        A summary dict, written into the run record, so a result cannot be quoted
-        later without its init stage travelling with it.
-
-    Raises:
-        FileNotFoundError: if a checkpoint path does not exist.
-        ValueError: on an unstated init mode, or if fewer than one parameter tensor
-            transferred from a checkpoint (a typo'd or incompatible checkpoint would
-            otherwise run as an accidental random-init while claiming otherwise).
-    """
+    """Apply a stated initialization stage and return an auditable transfer summary."""
     if weights == "none":
         return {"init": "none", "init_weights": None}
-
     import torch
 
     if weights in ("coco11", "coco"):
@@ -82,161 +39,355 @@ def apply_init(model, weights: str) -> dict:
 
     if not hasattr(model, "model") or not hasattr(model, "yaml"):
         raise TypeError(f"apply_init expects an Ultralytics DetectionModel, got {type(model).__name__}")
-
-    # A fresh build of the same graph, then the intersection of the source weights.
-    # Built from `model.yaml` (not copied) so the initialised model is provably the
-    # same architecture the config asked for, at the config's nc/ch.
-    nc = int(model.yaml.get("nc", 1))
-    ch = int(model.yaml.get("ch", 3))
     from ultralytics.nn.tasks import DetectionModel, intersect_dicts
 
-    fresh = DetectionModel(deepcopy(model.yaml), ch=ch, nc=nc, verbose=False)
+    fresh = DetectionModel(
+        deepcopy(model.yaml), ch=int(model.yaml.get("ch", 3)), nc=int(model.yaml.get("nc", 1)), verbose=False
+    )
     ckpt = torch.load(source, map_location="cpu", weights_only=False)
     src_model = (ckpt.get("ema") or ckpt["model"]) if isinstance(ckpt, dict) and "model" in ckpt else ckpt
     if not hasattr(src_model, "state_dict"):
         raise ValueError(f"{source} does not contain model weights (no state_dict)")
-    csd = src_model.float().state_dict()
-    transferred = intersect_dicts(csd, fresh.state_dict())
+    transferred = intersect_dicts(src_model.float().state_dict(), fresh.state_dict())
     if not transferred:
-        raise ValueError(
-            f"no parameter transferred from {source}: the checkpoint shares no "
-            "shape-compatible tensor with this architecture. A run initialised from it "
-            "would be a random-init run wearing a pretrained label"
-        )
-    # Snapshot the fresh build BEFORE loading, so the summary can report what actually
-    # changed. Zero-initialised BN buffers (running_mean=0, running_var=1) are
-    # shape-compatible with every build and equal by construction, so counting the raw
-    # intersection as "transferred" inflates the number ~5x while saying nothing.
-    before_sd = {k: v.clone() for k, v in fresh.state_dict().items()}
+        raise ValueError(f"no shape-compatible parameter transferred from {source}")
+    before = {key: value.clone() for key, value in fresh.state_dict().items()}
     fresh.load_state_dict(transferred, strict=False)
-    after_sd = fresh.state_dict()
-    transferred_changed = sum(1 for k in transferred if not torch.equal(before_sd[k], after_sd[k]))
-    del before_sd, after_sd
-    if transferred_changed == 0:
-        raise ValueError(
-            f"every shape-compatible tensor from {source} already equals a fresh build's "
-            "initialisation; loading it would change nothing while the record would claim "
-            "a pretrained start"
-        )
+    changed = sum(not torch.equal(before[key], fresh.state_dict()[key]) for key in transferred)
+    if not changed:
+        raise ValueError(f"all compatible tensors from {source} already equal fresh initialization")
 
-    # Hand the initialised model back through the trainer's own path: a checkpoint of
-    # the same graph, which `setup_model` will load instead of rebuilding. The filename
-    # is content-derived (transferred-tensor count + source stem), so repeated runs of
-    # one config reuse the file instead of littering the directory.
-    out = Path("results/init") / f"init_{stage}_{source.stem}_{transferred_changed}.pt"
+    out = Path("results/init") / f"init_{stage}_{source.stem}_{changed}.pt"
     out.parent.mkdir(parents=True, exist_ok=True)
-    torch.save({
-        "model": fresh,
-        "yaml": model.yaml,
-        "names": model.names,
-        "epoch": -1,
-        "train_args": {"init": stage, "source": str(source)},
-    }, out)
+    torch.save(
+        {"model": fresh, "yaml": model.yaml, "names": model.names, "epoch": -1,
+         "train_args": {"init": stage, "source": str(source)}},
+        out,
+    )
     model.ckpt_path = str(out)
     return {
         "init": stage,
         "init_weights": str(source),
-        "init_transferred_tensors": transferred_changed,
+        "init_transferred_tensors": changed,
         "init_checkpoint": str(out),
     }
 
 
-class SARYOLOTrainer(DetectionTrainer):
-    """``DetectionTrainer`` that builds the SAR-YOLO model.
+def _resolve_metadata_path(data: dict[str, Any]) -> Path | None:
+    """Resolve optional metadata path from a raw or Ultralytics-resolved dataset config."""
+    value = data.get("acquisition_metadata")
+    if not value:
+        return None
+    table_path = Path(value).expanduser()
+    if table_path.is_absolute():
+        return table_path.resolve()
+    yaml_file = data.get("yaml_file")
+    candidates = ([Path(yaml_file).resolve().parent / table_path] if yaml_file else [])
+    candidates.append(table_path.resolve())
+    return next((candidate.resolve() for candidate in candidates if candidate.is_file()), candidates[0].resolve())
 
-    Any Ultralytics argument accepted by the stock trainer is valid here. The
-    SAR-loss weights are *not* trainer arguments: they live in the model YAML's
-    ``sar_loss`` block (see :class:`SARYOLODetectionModel`). That keeps a run
-    reproducible from the committed YAML and avoids depending on Ultralytics'
-    argument validation, which rejects unknown keys.
-    """
+
+def _metadata_config(data: dict[str, Any]) -> dict[str, Any]:
+    """Load the acquisition table from Ultralytics' resolved dataset config."""
+    from saryolo.data.metadata import MetadataTable
+
+    table_path = _resolve_metadata_path(data)
+    if table_path is None:
+        return {}
+    if not table_path.is_file():
+        raise FileNotFoundError(f"dataset acquisition_metadata table does not exist: {table_path}")
+    return {"path": table_path, "table": MetadataTable.load(table_path)}
+
+
+def metadata_augmentation_overrides(data_yaml: str | Path | None) -> dict[str, float]:
+    """Disable image mixing when metadata describes one acquisition per input image."""
+    if not data_yaml:
+        return {}
+    import yaml
+
+    path = Path(data_yaml).expanduser()
+    if not path.is_file():
+        return {}
+    config = yaml.safe_load(path.read_text()) or {}
+    if not config.get("acquisition_metadata"):
+        return {}
+    # Mosaic/MixUp/CutMix/CopyPaste combine acquisitions into one image and invalidate a
+    # single per-image descriptor. Spatial/photometric transforms remain enabled.
+    return {"mosaic": 0.0, "mixup": 0.0, "cutmix": 0.0, "copy_paste": 0.0}
+
+
+def _model_has_conditioner(cfg: Any) -> bool:
+    """Whether a model config graph contains the acquisition adapter module."""
+    import yaml
+
+    config = yaml.safe_load(Path(cfg).read_text()) if isinstance(cfg, (str, Path)) else cfg
+    return isinstance(config, dict) and any(
+        len(row) > 2 and row[2] == "AcquisitionConditionedAdapter"
+        for section in ("backbone", "head")
+        for row in config.get(section, [])
+    )
+
+
+def _metadata_descriptor(table, vocabularies, stem: str) -> dict[str, torch.Tensor]:
+    """Convert one sourced record to CPU tensors, ready for DataLoader collation."""
+    from saryolo.data.metadata import encode_metadata
+
+    continuous, categorical, availability = encode_metadata(table.get(stem), vocabularies)
+    return {
+        "continuous": torch.tensor(continuous, dtype=torch.float32),
+        "categorical": torch.tensor(categorical, dtype=torch.long),
+        "availability": torch.tensor(availability, dtype=torch.float32),
+    }
+
+
+def encode_prediction_metadata(paths, table, vocabularies) -> dict[str, torch.Tensor]:
+    """Encode a predictor batch in path order, preserving one acquisition per image."""
+    stems = [Path(path).stem for path in paths]
+    missing = sorted(set(stems) - set(table.entries))
+    if missing:
+        raise ValueError(f"prediction metadata has no row for {len(missing)} image(s), e.g. {missing[:3]}")
+    rows = [_metadata_descriptor(table, vocabularies, stem) for stem in stems]
+    return {field: torch.stack([row[field] for row in rows], dim=0) for field in rows[0]}
+
+
+class AcquisitionMetadataPredictor(DetectionPredictor):
+    """Detection predictor that conditions each image batch from its acquisition table."""
+
+    def setup_model(self, model, verbose: bool = True):
+        """Keep the native SAR model accessible for setting its shared batch context."""
+        super().setup_model(model, verbose=verbose)
+        native = getattr(self.model, "model", None)
+        if native is None or not getattr(native, "n_conditioned_adapters", 0):
+            raise ValueError("metadata-conditioned inference requires a checkpoint with an acquisition adapter")
+
+    def preprocess(self, im):
+        processed = super().preprocess(im)
+        paths = self.batch[0]
+        metadata = encode_prediction_metadata(paths, self.metadata_table, self.metadata_vocabularies)
+        native = getattr(self.model, "model", None)
+        if native is None or not set_batch_metadata(native, metadata):
+            raise RuntimeError("metadata was encoded but no acquisition adapter consumed it")
+        return processed
+
+
+class AcquisitionMetadataDetectionDataset(YOLODataset):
+    """Detection dataset that adds one descriptor after normal per-image transforms."""
+
+    def __getitem__(self, index: int) -> dict[str, Any]:
+        # Ultralytics Format intentionally emits only model fields, so attach metadata after all
+        # transforms. Mixing transforms are disabled for conditioned training.
+        sample = super().__getitem__(index)
+        stem = Path(self.im_files[index]).stem
+        try:
+            sample["metadata"] = self._acquisition_rows[stem]
+        except KeyError as exc:
+            raise KeyError(f"acquisition metadata has no row for image stem {stem!r}") from exc
+        return sample
+
+    @staticmethod
+    def collate_fn(batch: list[dict[str, Any]]) -> dict[str, Any]:
+        """Use stock detection collation, then stack the per-image metadata tensors."""
+        records = [sample.pop("metadata") for sample in batch]
+        result = YOLODataset.collate_fn(batch)
+        result["metadata"] = {
+            field: torch.stack([record[field] for record in records], dim=0)
+            for field in ("continuous", "categorical", "availability")
+        }
+        return result
+
+
+def _attach_metadata(dataset: YOLODataset, table, vocabularies) -> None:
+    """Join a metadata table to a constructed dataset without changing its sample order."""
+    if not isinstance(dataset, YOLODataset):
+        raise TypeError(f"metadata conditioning supports YOLO detection datasets, got {type(dataset).__name__}")
+    stems = [Path(path).stem for path in dataset.im_files]
+    if len(stems) != len(set(stems)):
+        raise ValueError("image stems are not unique in this split; acquisition metadata joins would be ambiguous")
+    missing = sorted(set(stems) - set(table.entries))
+    if missing:
+        raise ValueError(
+            f"acquisition metadata has no row for {len(missing)} dataset image(s) "
+            f"(e.g. {missing[:3]}); rebuild the table for this exact split"
+        )
+    dataset.__class__ = AcquisitionMetadataDetectionDataset
+    dataset._acquisition_rows = {stem: _metadata_descriptor(table, vocabularies, stem) for stem in stems}
+
+
+class AcquisitionDetectionValidator(DetectionValidator):
+    """Use metadata-bearing batches during trainer and standalone validation."""
+
+    def __call__(self, trainer=None, model=None, **kwargs):
+        if trainer is not None:
+            from ultralytics.utils.torch_utils import unwrap_model
+
+            self._metadata_model = unwrap_model(trainer.ema.ema)
+        elif model is not None:
+            self._metadata_model = model
+        return super().__call__(trainer=trainer, model=model, **kwargs)
+
+    def get_dataloader(self, dataset_path, batch_size):
+        from ultralytics.data import build_dataloader
+
+        dataset = self.build_dataset(dataset_path, batch=batch_size, mode="val")
+        table_config = _metadata_config(self.data)
+        model = getattr(self, "_metadata_model", None)
+        if table_config:
+            if model is None:
+                raise RuntimeError("conditioned validation model was not attached before dataloader construction")
+            serialized = getattr(model, "metadata_vocabularies", None)
+            if not serialized:
+                raise ValueError("validation checkpoint has no training-only metadata vocabulary")
+            from saryolo.data.metadata import Vocabulary
+
+            vocabularies = {key: Vocabulary.from_dict(value) for key, value in serialized.items()}
+            _attach_metadata(dataset, table_config["table"], vocabularies)
+        elif getattr(model, "n_conditioned_adapters", 0):
+            raise ValueError("conditioned model validation requires acquisition_metadata in the dataset YAML")
+        return build_dataloader(
+            dataset,
+            batch=batch_size,
+            workers=self.args.workers if self.training else self.args.workers * 2,
+            shuffle=False,
+            rank=-1,
+            drop_last=self.args.compile and self.training,
+            device=self.device,
+        )
+
+    def preprocess(self, batch):
+        batch = super().preprocess(batch)
+        model = getattr(self, "_metadata_model", None)
+        if model is not None:
+            set_batch_metadata(model, batch.get("metadata"))
+        return batch
+
+
+class SARYOLOTrainer(DetectionTrainer):
+    """DetectionTrainer with sourced metadata conditioning when configured."""
+
+    def __init__(self, cfg="default.yaml", overrides: dict[str, Any] | None = None, _callbacks=None):
+        self._metadata_table = None
+        self._metadata_vocabularies = None
+        self._metadata_vocabularies_serialized = None
+        overrides = dict(overrides or {})
+        overrides.update(metadata_augmentation_overrides(overrides.get("data")))
+        super().__init__(cfg, overrides, _callbacks)
 
     def get_model(self, cfg: str | None = None, weights: str | None = None, verbose: bool = True):
-        """Return a :class:`SARYOLODetectionModel` instead of the stock detection model."""
+        model_cfg = cfg
+        table_config = _metadata_config(self.data)
+        if table_config:
+            from saryolo.data.conditioning import prepare_conditioned_config, training_metadata_vocabularies
+
+            prepared = training_metadata_vocabularies(self.data)
+            if prepared is None:
+                raise ValueError("acquisition_metadata is set but training metadata could not be prepared")
+            self._metadata_vocabularies, self._metadata_vocabularies_serialized = prepared
+            self._metadata_table = table_config["table"]
+            if _model_has_conditioner(cfg):
+                model_cfg = prepare_conditioned_config(cfg, self._metadata_vocabularies)
         model = SARYOLODetectionModel(
-            cfg,
-            nc=self.data["nc"],
-            ch=self.data["channels"],
-            verbose=verbose and RANK == -1,
+            model_cfg, nc=self.data["nc"], ch=self.data["channels"], verbose=verbose and RANK == -1
         )
+        if self._metadata_vocabularies_serialized is not None:
+            model.metadata_vocabularies = self._metadata_vocabularies_serialized
+        elif getattr(model, "n_conditioned_adapters", 0):
+            raise ValueError("conditioned model requires acquisition_metadata in the dataset YAML")
         model = self.set_model_names_for_load(model)
         if weights:
             model.load(weights)
         return model
 
+    def build_dataset(self, img_path: str, mode: str = "train", batch: int | None = None):
+        dataset = super().build_dataset(img_path, mode=mode, batch=batch)
+        table_config = _metadata_config(self.data)
+        if not table_config:
+            if getattr(self.model, "n_conditioned_adapters", 0):
+                raise ValueError("conditioned model requires acquisition_metadata in the dataset YAML")
+            return dataset
+
+        from saryolo.data.conditioning import training_metadata_vocabularies
+
+        if mode == "train":
+            if any(float(getattr(self.args, key, 0.0) or 0.0) > 0.0
+                   for key in ("mosaic", "mixup", "cutmix", "copy_paste")):
+                raise ValueError(
+                    "acquisition metadata cannot be paired with image-mixing augmentations; "
+                    "the trainer should have disabled them before saving run arguments"
+                )
+            if self._metadata_vocabularies is None:
+                prepared = training_metadata_vocabularies(self.data)
+                if prepared is None:
+                    raise ValueError("training-only metadata vocabularies must be fit before dataset construction")
+                self._metadata_vocabularies, self._metadata_vocabularies_serialized = prepared
+            self._metadata_table = table_config["table"]
+        elif self._metadata_table is None or self._metadata_vocabularies is None:
+            raise ValueError("training metadata vocabulary must be built before validation")
+        _attach_metadata(dataset, self._metadata_table, self._metadata_vocabularies)
+        return dataset
+
+    def preprocess_batch(self, batch: dict[str, Any]) -> dict[str, Any]:
+        """Set model context before each training forward; validation uses its own validator hook."""
+        batch = super().preprocess_batch(batch)
+        from ultralytics.utils.torch_utils import unwrap_model
+
+        set_batch_metadata(unwrap_model(self.model), batch.get("metadata"))
+        return batch
+
+    def validate(self):
+        """Ensure EMA carries the training-only vocabulary needed by the metadata validator."""
+        if self.ema is not None and self._metadata_vocabularies_serialized is not None:
+            self.ema.ema.metadata_vocabularies = self._metadata_vocabularies_serialized
+        return super().validate()
+
+    def get_validator(self):
+        return AcquisitionDetectionValidator(
+            self.test_loader, save_dir=self.save_dir, args=self.args, _callbacks=self.callbacks
+        )
+
     def set_model_names_for_load(self, model):
-        """Attach dataset class names; the stock helper is reused when available."""
         setter = getattr(super(), "set_model_names_for_load", None)
         return setter(model) if callable(setter) else model
 
 
-class SARYOLO(YOLO):
-    """``YOLO`` facade whose ``detect`` task uses the SAR-YOLO model and trainer.
-
-    Use this exactly like ``ultralytics.YOLO``::
-
-        from saryolo import SARYOLO
-
-        model = SARYOLO("configs/models/full_s.yaml")
-        model.train(data="configs/datasets/ssdd.yaml", epochs=100, imgsz=640, seed=0)
-
-    Loading a *trained* checkpoint works through plain ``YOLO`` too, because the
-    checkpoint pickles the SAR-YOLO model object and importing ``saryolo``
-    registers the layers it needs.
-    """
-
-    @property
-    def task_map(self) -> dict[str, dict[str, Any]]:
-        """Ultralytics task registry with the ``detect`` entry replaced."""
-        task_map = {key: dict(value) for key, value in super().task_map.items()}
-        task_map["detect"]["model"] = SARYOLODetectionModel
-        task_map["detect"]["trainer"] = SARYOLOTrainer
-        return task_map
-
-
-def is_saryolo_yaml(model_path: str) -> bool:
-    """Whether a model YAML references at least one SAR-YOLO layer."""
-    from pathlib import Path
-
-    path = Path(model_path)
-    if not path.is_file() or path.suffix not in (".yaml", ".yml"):
-        return False
-    text = path.read_text()
-    return any(
-        name in text
-        for name in (
-            "SARFeatureEnhancement",
-            "SpeckleAwareFeatureModule",
-            "SARAdaptiveAttention",
-            "AdaptiveMultiScaleFusion",
-            "SEAttention",
-            "ECAAttention",
-            "CBAMAttention",
-        )
-    )
-
-
 def resolve_model_class(model_path: str):
-    """Pick the right Ultralytics facade for a model path.
-
-    A YAML containing SAR layers must go through :class:`SARYOLO` so the SAR-aware
-    criterion is built; everything else (including stock baselines and any
-    pickled checkpoint) can use plain ``YOLO``.
-    """
-    from pathlib import Path
-
-    if is_saryolo_yaml(model_path):
-        return SARYOLO
-    if Path(model_path).suffix in (".yaml", ".yml"):
+    """Pick the appropriate facade for stock/custom YAMLs and checkpoints."""
+    path = Path(model_path)
+    if path.suffix in (".yaml", ".yml") and not is_saryolo_yaml(model_path):
         return YOLO
-    return SARYOLO  # checkpoints: unpickling restores the model class regardless
+    return SARYOLO
 
 
 def load_model(model_path: str, verbose: bool = False):
-    """Load a model, choosing the correct facade automatically."""
+    """Load a stock or SAR-YOLO model, selecting its facade from the model path."""
     return resolve_model_class(model_path)(model_path, verbose=verbose)
 
 
 def clone_overrides(overrides: dict) -> dict:
-    """Deep-copy overrides so Ultralytics cannot mutate a shared config dict."""
+    """Deep-copy overrides before passing them to Ultralytics, which may mutate them."""
     return deepcopy(overrides)
+
+
+class SARYOLO(YOLO):
+    """YOLO facade whose detect task uses the SAR-YOLO model and trainer."""
+
+    @property
+    def task_map(self) -> dict[str, dict[str, Any]]:
+        task_map = {key: dict(value) for key, value in super().task_map.items()}
+        task_map["detect"]["model"] = SARYOLODetectionModel
+        task_map["detect"]["trainer"] = SARYOLOTrainer
+        task_map["detect"]["validator"] = AcquisitionDetectionValidator
+        return task_map
+
+
+def is_saryolo_yaml(model_path: str) -> bool:
+    """Whether a YAML references a custom SAR-YOLO or conditioning layer."""
+    path = Path(model_path)
+    if not path.is_file() or path.suffix not in (".yaml", ".yml"):
+        return False
+    names = (
+        "SARFeatureEnhancement", "SpeckleAwareFeatureModule", "SARAdaptiveAttention",
+        "AdaptiveMultiScaleFusion", "SEAttention", "ECAAttention", "CBAMAttention",
+        "AcquisitionConditionedAdapter", "TargetPriorModulation", "SpatialFrequencyRepresentation",
+        "ContextAggregation", "TargetAwareRefinement", "SARInputAdapter",
+    )
+    return any(name in path.read_text() for name in names)

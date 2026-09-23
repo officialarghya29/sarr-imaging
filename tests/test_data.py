@@ -295,10 +295,8 @@ def test_relative_path_resolves_without_touching_ultralytics_settings(tmp_path):
 
 
 # ---------------------------------------------------------------------- acquisition profiles
-def test_sardet_source_profile_matches_the_real_stem_layouts():
-    """The profiles must key on the actual SARDet-100K stem shapes; a prefix rule that
-    matches in theory but not on real stems would leave sources without acquisition
-    metadata and the conditioning arms comparing unknowns."""
+def test_sardet_source_profile_matches_real_stems_without_inventing_values():
+    """Recognized source prefixes carry exact values only; mixed/ranged fields stay unknown."""
     from saryolo.data.convert import write_acquisition_metadata
     from saryolo.data.metadata import MetadataTable
 
@@ -308,18 +306,19 @@ def test_sardet_source_profile_matches_the_real_stem_layouts():
         "OGSOD_0001", "SIVED_0001",
     ]
     root = tmp_path_factory_factory()
-    for s in stems:
-        (root / f"{s}.jpg").write_bytes(b"x")
-    out = write_acquisition_metadata(root, root / "meta.json", "sardet100k")
-    table = MetadataTable.load(out)
+    for stem in stems:
+        (root / f"{stem}.jpg").write_bytes(b"x")
+    table = MetadataTable.load(write_acquisition_metadata(root, root / "meta.json", "sardet100k"))
 
-    # Every declared source matched at least one stem...
-    matched = {str(v.sensor) for v in table.entries.values() if v.sensor is not None}
-    assert matched == {"gaofen3", "mixed", "hisea1", "terrasarx", "airborne"}
-    # ...and every image carries a resolution, the field the cross-resolution rule bins.
-    assert all(v.resolution_m is not None for v in table.entries.values())
-    # Distinct resolutions exist, so resolution folds are actually buildable.
-    assert len({v.resolution_m for v in table.entries.values()}) >= 4
+    assert table.get("AIR_SARShip_1.0_001_0001").sensor == "gaofen3"
+    assert table.get("MSAR_000001").sensor == "hisea1"
+    assert table.get("SADD_0001").sensor == "terrasarx"
+    assert table.get("SAR-AIRcraft_0001_0").resolution_m == 1.0
+    assert table.get("OGSOD_0001").resolution_m == 3.0
+    assert table.get("HRSID_JPG_0001_0_800_10190_10990").sensor is None
+    assert table.get("HRSID_JPG_0001_0_800_10190_10990").resolution_m is None
+    assert table.get("SSDD_000001").sensor is None
+    assert table.get("AIR_SARShip_1.0_001_0001").resolution_m is None
 
 
 def _tmp_root():
@@ -341,7 +340,7 @@ def test_profile_refuses_when_nothing_matches():
 
     root = _tmp_root()
     (root / "junk_001.jpg").write_bytes(b"x")
-    with pytest.raises(ValueError, match="matched none of"):
+    with pytest.raises(ValueError, match="no documented acquisition values"):
         write_acquisition_metadata(root, root / "meta.json", "sardet100k")
 
 
@@ -358,13 +357,46 @@ def test_profile_refuses_a_dataset_without_a_verified_profile():
         write_acquisition_metadata(root, root / "meta.json", "ssdd")
 
 
-def test_hrsid_standalone_profile_applies_to_every_image():
+def test_hrsid_requires_verified_per_image_metadata_instead_of_midpoints():
+    import csv
+
+    import pytest
+
     from saryolo.data.convert import write_acquisition_metadata
     from saryolo.data.metadata import MetadataTable
 
     root = _tmp_root()
-    for s in ("P0001_0_800_10190_10990", "P0002_200_1000_11220_12020"):
-        (root / f"{s}.jpg").write_bytes(b"x")
-    out = write_acquisition_metadata(root, root / "meta.json", "hrsid")
-    table = MetadataTable.load(out)
-    assert all(v.resolution_m == 1.5 for v in table.entries.values())
+    stems = ("P0001_0_800_10190_10990", "P0002_200_1000_11220_12020")
+    for stem in stems:
+        (root / f"{stem}.jpg").write_bytes(b"x")
+    with pytest.raises(ValueError, match="no documented acquisition values"):
+        write_acquisition_metadata(root, root / "missing.json", "hrsid")
+
+    sidecar = root / "per_image.csv"
+    with sidecar.open("w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=("stem", "sensor", "resolution_m", "polarization"))
+        writer.writeheader()
+        writer.writerow({"stem": stems[0], "sensor": "sentinel1", "resolution_m": "0.5", "polarization": "VV"})
+        writer.writerow({"stem": stems[1], "sensor": "terrasarx", "resolution_m": "3", "polarization": "HH"})
+    table = MetadataTable.load(write_acquisition_metadata(root, root / "meta.json", "hrsid", sidecar=sidecar))
+    assert table.get(stems[0]).resolution_m == 0.5
+    assert table.get(stems[0]).sensor == "sentinel1"
+    assert table.get(stems[1]).resolution_m == 3.0
+    assert table.get(stems[1]).sensor == "terrasarx"
+
+
+def test_sardet_profiles_recognize_sources_but_leave_unknowns_null():
+    import json
+
+    from saryolo.data.convert import write_acquisition_metadata
+    from saryolo.data.metadata import MetadataTable
+
+    root = _tmp_root()
+    (root / "SAR-AIRcraft_001.jpg").write_bytes(b"x")
+    sidecar = root / "metadata.json"
+    sidecar.write_text(json.dumps({"SAR-AIRcraft_001": {"sensor": "verified", "resolution_m": 2.5}}))
+    table = MetadataTable.load(write_acquisition_metadata(root, root / "out.json", "sardet100k", sidecar))
+    record = table.get("SAR-AIRcraft_001")
+    assert record.sensor == "verified"
+    assert record.resolution_m == 2.5
+    assert record.band == "C"  # exact profile field retained if the sidecar omits it

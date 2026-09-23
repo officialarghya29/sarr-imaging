@@ -154,8 +154,13 @@ def run_experiment(
         # Ultralytics resolves a relative `path` against its global datasets_dir, not the
         # YAML's own directory, so the data config is resolved explicitly and portably first.
         from saryolo.data.yolo import resolve_data_yaml
+        from saryolo.training.trainer import metadata_augmentation_overrides
 
         data_yaml = resolve_data_yaml(cfg.dataset_path)
+        # The detector and conditioning ablations must see identical geometric/photometric
+        # pipelines. For an acquisition-conditioned dataset only, mixing transforms are
+        # removed because a composite image cannot truthfully carry one acquisition label.
+        overrides.update(metadata_augmentation_overrides(data_yaml))
         model = load_model(str(cfg.model_path))
         # Phase 3: the init stage is stated in the config (default `none`, i.e. a fresh
         # build from the model YAML) and recorded, so a fine-tuned number can never be

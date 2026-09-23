@@ -80,7 +80,7 @@ def test_init_refuses_a_checkpoint_sharing_no_compatible_tensors(baseline_model,
     monkeypatch.chdir(tmp_path)
     bogus = tmp_path / "bogus.pt"
     torch.save({"model": torch.nn.Conv2d(3, 3, 1)}, bogus)
-    with pytest.raises(ValueError, match="no parameter transferred"):
+    with pytest.raises(ValueError, match="no shape-compatible parameter transferred"):
         apply_init(baseline_model, str(bogus))
 
 

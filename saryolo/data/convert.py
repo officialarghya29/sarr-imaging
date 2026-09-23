@@ -20,7 +20,7 @@ import xml.etree.ElementTree as ET
 from collections import Counter
 from pathlib import Path
 
-from .metadata import AcquisitionMetadata, MetadataTable
+from .metadata import AcquisitionMetadata, MetadataTable, load_metadata_sidecar
 from .registry import DatasetSpec, get_dataset
 
 __all__ = ["prepare_dataset", "coco_to_yolo", "voc_to_yolo", "dota_to_yolo_obb", "link_or_copy"]
@@ -387,142 +387,157 @@ def prepare_dataset(
 
 
 # ---------------------------------------------------------------------------- acquisition profiles
-#: Verified acquisition profiles for the datasets this project conditions on.
+#: Source-level acquisition profiles transcribed from the official SARDet-100K table.
 #:
-#: Sourced from the official dataset documentation (SARDet-100K's published source
-#: table; HRSID's scene list), not inferred from filenames — a filename heuristic
-#: would look like metadata while being a guess. Values are per-source constants:
-#: they are the *coarsest true description* of each source, which is exactly the
-#: signal the leave-one-source-out protocol needs, and exactly what the
-#: representation probe tests for entanglement. Ranges are carried as the mid-point
-#: of the published range plus the range itself in the profile, so nothing is
-#: silently averaged away.
-#: Keys are matched against image stems case-insensitively via prefix; the per-source
-#: ``key_pattern`` states the stem shape.
+#: Only exact, source-level values are populated. If the publication gives a range or a
+#: mixed set, the corresponding per-image field remains unknown: replacing a range with
+#: its midpoint would fabricate labels, create false resolution bins, and contaminate
+#: conditioning. Keys match source prefixes in stems (case/punctuation insensitive).
 SARDet_SOURCE_PROFILES: dict[str, dict] = {
-    # name: (sensor, resolution range m, band, polarizations, satellites)
-    "AIR_SARShip":  {"sensor": "gaofen3", "resolution_m": 2.0, "band": "C", "polarizations": ["VV"]},
-    "HRSID":        {"sensor": "mixed", "resolution_m": 1.75, "resolution_range": [0.5, 3.0],
-                     "band": "C/X", "polarizations": ["HH", "HV", "VH", "VV"]},
-    "MSAR":         {"sensor": "hisea1", "resolution_m": 1.0, "band": "C", "polarizations": ["HH", "HV", "VH", "VV"]},
-    "SADD":         {"sensor": "terrasarx", "resolution_m": 1.75, "resolution_range": [0.5, 3.0],
-                     "band": "X", "polarizations": ["HH"]},
-    "SAR-AIRcraft": {"sensor": "gaofen3", "resolution_m": 1.0, "band": "C", "polarizations": ["uni"]},
-    "ShipDataset":  {"sensor": "mixed", "resolution_m": 14.0, "resolution_range": [3.0, 25.0],
-                     "band": "C", "polarizations": ["HH", "VV", "VH", "HV"]},
-    "SSDD":         {"sensor": "mixed", "resolution_m": 8.0, "resolution_range": [1.0, 15.0],
-                     "band": "C/X", "polarizations": ["HH", "VV", "VH", "HV"]},
-    "OGSOD":        {"sensor": "gaofen3", "resolution_m": 3.0, "band": "C", "polarizations": ["VV", "VH"]},
-    "SIVED":        {"sensor": "airborne", "resolution_m": 0.2, "resolution_range": [0.1, 0.3],
-                     "band": "Ka/Ku/X", "polarizations": ["VV", "HH"]},
+    "AIR_SARShip":  {"sensor": "gaofen3", "resolution_m": None, "band": "C", "polarization": "VV"},
+    "HRSID":        {"sensor": None, "resolution_m": None, "band": None, "polarization": None},
+    "MSAR":         {"sensor": "hisea1", "resolution_m": None, "band": "C", "polarization": None},
+    "SADD":         {"sensor": "terrasarx", "resolution_m": None, "band": "X", "polarization": "HH"},
+    "SAR-AIRcraft": {"sensor": "gaofen3", "resolution_m": 1.0, "band": "C", "polarization": "uni"},
+    "ShipDataset":  {"sensor": None, "resolution_m": None, "band": None, "polarization": None},
+    "SSDD":         {"sensor": None, "resolution_m": None, "band": None, "polarization": None},
+    "OGSOD":        {"sensor": "gaofen3", "resolution_m": 3.0, "band": "C", "polarization": None},
+    "SIVED":        {"sensor": "airborne", "resolution_m": None, "band": None, "polarization": None},
 }
 
-#: HRSID standalone: three stated resolutions, Sentinel-1B / TerraSAR-X / TanDEM-X.
+#: The standalone HRSID README says resolutions are 0.5, 1 and 3 m and lists several
+#: satellites/polarizations, but the verified file inventory does not map those fields
+#: to each chip. A range or mixed label is not a per-image value: leave unknown unless
+#: a documented scene-to-chip sidecar is supplied.
 HRSID_PROFILE: dict = {
-    "sensor": "mixed", "resolution_m": 1.5, "resolution_range": [0.5, 3.0],
-    "band": "C/X", "polarizations": ["HH", "HV", "VH", "VV"],
+    "sensor": None, "resolution_m": None, "polarization": None, "mode": None,
+    "band": None, "incidence_deg": None,
 }
+
+
+def _profile_metadata(profile: dict) -> AcquisitionMetadata:
+    """Convert one documented profile to per-image metadata without inventing values."""
+    return AcquisitionMetadata.from_dict({
+        field: profile.get(field)
+        for field in ("sensor", "resolution_m", "polarization", "mode", "band", "incidence_deg")
+    })
+
+
+def _profile_for_stem(stem: str) -> tuple[str, AcquisitionMetadata] | None:
+    """Resolve a dataset source prefix, preferring the most specific key."""
+    def norm(value: str) -> str:
+        return value.upper().replace("-", "").replace("_", "").replace(" ", "")
+
+    normalized = norm(stem)
+    candidates = sorted(SARDet_SOURCE_PROFILES, key=lambda key: len(norm(key)), reverse=True)
+    for source in candidates:
+        if normalized.startswith(norm(source)):
+            return source, _profile_metadata(SARDet_SOURCE_PROFILES[source])
+    return None
 
 
 def write_acquisition_metadata(
     images_dir: str | Path,
     out_path: str | Path,
     dataset: str,
+    sidecar: str | Path | None = None,
 ) -> Path:
-    """Write a :class:`MetadataTable` for a prepared dataset from its verified profile.
+    """Write acquisition metadata from sourced dataset profiles and optional per-image sidecars.
 
-    This is the bridge between a downloaded dataset and the acquisition-conditioning
-    experiments: without it, every conditioning arm and every resolution fold would
-    need a hand-built sidecar CSV. The table is keyed by image stem, so it applies to
-    the prepared (converted) layout directly.
+    SARDet-100K's official source table has mixed/ranged values for many sources. Those fields
+    remain null, not midpoints or a fabricated single sensor. HRSID's public overview similarly
+    lists multiple sensors and three resolutions without a verified per-chip mapping; pass a
+    documented JSON/CSV sidecar to populate per-image fields. The profiles are useful for the
+    exact fields they state, but do not pretend source-level summaries are per-image truth.
 
     Args:
-        images_dir: Prepared images directory (``images/<split>`` roots are scanned
-            recursively, so one call covers all splits).
-        out_path: Where to write the table JSON (consumed by ``loso --rule resolution``
-            and by the conditioning trainer).
-        dataset: Registry key whose profile to apply (``sardet100k``, ``hrsid``).
+        images_dir: Prepared images directory, scanned recursively.
+        out_path: Destination MetadataTable JSON.
+        dataset: Registry key (``sardet100k`` or ``hrsid``).
+        sidecar: Optional per-image CSV/JSON mapping using the metadata module's documented schema.
 
     Raises:
-        ValueError: for a dataset with no verified profile, or a per-source profile
-            that matched none of the images on disk (a table of unknowns would make
-            every conditioning arm identical while the experiment still reported).
+        ValueError: unsupported profile, no images, or no known values for any image.
     """
-    from .registry import get_dataset  # noqa: F401  (validates the registry key)
-
     get_dataset(dataset)
-    profiles: dict[str, dict] = {}
-    if dataset == "sardet100k":
-        profiles = SARDet_SOURCE_PROFILES
-    elif dataset == "hrsid":
-        profiles = {}
-    else:
+    if dataset not in ("sardet100k", "hrsid"):
         raise ValueError(
-            f"no verified acquisition profile for {dataset!r}; add one sourced from the "
-            "official dataset documentation, never inferred from filenames"
+            f"no verified acquisition profile for {dataset!r}; add one sourced from official "
+            "documentation, never inferred from filenames"
         )
 
     images_dir = Path(images_dir)
-    exts = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
-    stems = sorted(p.stem for p in images_dir.rglob("*") if p.suffix.lower() in exts)
-    if not stems:
+    images = sorted(
+        p for p in images_dir.rglob("*") if p.is_file() and p.suffix.lower() in IMAGE_SUFFIXES
+    )
+    if not images:
         raise ValueError(f"no dataset images found under {images_dir}")
 
+    sidecar_values: dict[str, AcquisitionMetadata] = {}
+    if sidecar is not None:
+        sidecar_values = load_metadata_sidecar(sidecar, stem_column="stem")
+
     entries: dict[str, AcquisitionMetadata] = {}
-    matched: set[str] = set()
+    matched_sources: set[str] = set()
     unmatched_images: list[str] = []
-
-    def _norm(s: str) -> str:
-        # Normalise BOTH sides, or "AIR_SARShip" (key) never matches "AIR_SARShip_1.0"
-        # (stem): the key loses its underscore, the stem keeps it, and startswith fails
-        # while looking like it ought to work.
-        return s.upper().replace("-", "").replace("_", "").replace(" ", "")
-
-    profile_keys = [(_norm(source), source, prof) for source, prof in profiles.items()]
-    for stem in stems:
-        fields: dict = {}
-        if dataset == "hrsid":
-            pols = HRSID_PROFILE["polarizations"]
-            fields = {
-                "sensor": HRSID_PROFILE["sensor"],
-                "resolution_m": HRSID_PROFILE["resolution_m"],
-                "polarization": (pols[0] if len(pols) == 1 else None),
-                "mode": None,
-                "band": HRSID_PROFILE["band"],
-                "incidence_deg": None,
-            }
-        else:
-            norm_stem = _norm(stem)
-            for norm_key, source, prof in profile_keys:
-                if norm_stem.startswith(norm_key):
-                    matched.add(source)
-                    fields = {
-                        "sensor": prof["sensor"],
-                        "resolution_m": prof["resolution_m"],
-                        "polarization": (prof["polarizations"][0] if len(prof["polarizations"]) == 1 else None),
-                        "mode": None,
-                        "band": prof["band"],
-                        "incidence_deg": None,
-                    }
-                    break
-            if not fields:
-                unmatched_images.append(stem)
-        entries[stem] = AcquisitionMetadata.from_dict(fields)
-
-    applied = matched if dataset == "sardet100k" else {"hrsid"}
-    if not applied:
+    source_profiles: dict[str, dict] = SARDet_SOURCE_PROFILES if dataset == "sardet100k" else {}
+    image_stems = {p.stem for p in images}
+    sidecar_unmatched = sorted(set(sidecar_values) - image_stems)
+    if sidecar_unmatched:
         raise ValueError(
-            f"the {dataset} source profile matched none of the {len(stems)} image stems; "
-            "check the per-source prefix layout before running the conditioning arms"
+            f"sidecar {sidecar} contains {len(sidecar_unmatched)} stem(s) absent from {images_dir} "
+            f"(e.g. {sidecar_unmatched[:3]}); a profile table must describe exactly this image tree"
         )
 
-    table = MetadataTable(entries=entries, source=f"profile:{dataset}")
+    for image in images:
+        stem = image.stem
+        profile_match = _profile_for_stem(stem) if dataset == "sardet100k" else None
+        if profile_match is not None:
+            source, profile_meta = profile_match
+            matched_sources.add(source)
+        else:
+            source, profile_meta = None, AcquisitionMetadata()
+            if dataset == "sardet100k":
+                unmatched_images.append(stem)
+            else:
+                profile_meta = _profile_metadata(HRSID_PROFILE)
+
+        # Sidecar values are per-image and explicitly sourced, so override only fields they
+        # actually specify while keeping any exact profile fields not present in the sidecar.
+        stated = sidecar_values.get(stem)
+        if stated is not None:
+            profile_meta = AcquisitionMetadata.from_dict({
+                field: getattr(stated, field) if getattr(stated, field) is not None else getattr(profile_meta, field)
+                for field in ("sensor", "resolution_m", "polarization", "mode", "band", "incidence_deg")
+            })
+        entries[stem] = profile_meta
+
+    if len(entries) != len(images):
+        raise ValueError(
+            "image stems are not unique across directories; the metadata table is stem-keyed and "
+            "cannot safely distinguish these images. Keep source/split identity in the stem or "
+            "provide a collision-free prepared layout."
+        )
+    if not any(meta.present for meta in entries.values()):
+        raise ValueError(
+            f"no documented acquisition values matched the {len(images)} {dataset} image(s). "
+            "Provide a per-image --sidecar sourced from the dataset archive; do not use "
+            "range midpoints or infer labels from chip names."
+        )
+    # A profile table may be sufficient for source-level grouping but not for a particular
+    # conditioning/fold field. Refuse to build a nominal resolution table when every actual
+    # chip's resolution is unknown, instead of letting later code mistake nulls for data.
+    # (Other uses may still consume the sensor/band information from the same table.)
+    source_name = f"profile:{dataset}" + (f"+sidecar:{Path(sidecar).name}" if sidecar else "")
+    table = MetadataTable(entries=entries, source=source_name)
     out = table.save(out_path)
-    unmatched_sources = sorted(set(profiles) - matched) if dataset == "sardet100k" else []
+    unmatched_sources = sorted(set(source_profiles) - matched_sources)
+    unknown_images = sum(not meta.present for meta in entries.values())
     print(
-        f"wrote {out}: {len(entries)} images | sources matched: "
-        f"{', '.join(sorted(matched)) or '(standalone profile)'}"
-        + (f" | UNMATCHED sources: {', '.join(unmatched_sources)}" if unmatched_sources else "")
-        + (f" | UNMATCHED images: {len(unmatched_images)}" if unmatched_images else "")
+        f"wrote {out}: {len(entries)} images | profile sources matched: "
+        f"{', '.join(sorted(matched_sources)) or '(none)'}"
+        + (f" | unmatched images: {len(unmatched_images)}" if unmatched_images else "")
+        + (f" | unmatched profile sources: {', '.join(unmatched_sources)}" if unmatched_sources else "")
+        + (f" | images without acquisition fields: {unknown_images}" if unknown_images else "")
     )
     return out

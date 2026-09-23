@@ -57,8 +57,16 @@ def set_batch_metadata(model, metadata) -> bool:
     if metadata is None:
         context.clear()
     else:
-        continuous, categorical, availability = metadata
-        context.set(continuous, categorical, availability)
+        if isinstance(metadata, dict):
+            continuous = metadata.get("continuous")
+            categorical = metadata.get("categorical")
+            availability = metadata.get("availability")
+        else:
+            continuous, categorical, availability = metadata
+        if continuous is None:
+            context.clear()
+        else:
+            context.set(continuous, categorical, availability)
     return True
 
 
