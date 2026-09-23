@@ -8,9 +8,9 @@
 | --- | --- |
 | **Licence** | MIT for the code — datasets are never redistributed |
 | **Stack** | Python 3.10+ · Ultralytics 8.4.155 · PyTorch 2.x |
-| **Architectures** | 80 variants wired; every one builds and runs a forward pass |
-| **Experiments** | 80 configured; each reproducible from a committed YAML |
-| **Tests** | 200 passing — no dataset download and no GPU needed |
+| **Architectures** | 87 variants wired; every one builds and runs a forward pass |
+| **Experiments** | 88 configured; each reproducible from a committed YAML |
+| **Tests** | 242 passing — no dataset download and no GPU needed |
 | **Accuracy results** | none yet — not one number in this repository is fabricated |
 
 ---
@@ -20,7 +20,7 @@
 | | |
 | --- | --- |
 | **What this is** | A complete, reproducible research pipeline for SAR object detection: dataset audit → baseline → ten documented components → ablations → removal tests → robustness → efficiency → cross-dataset → paper. |
-| **What is proven** | The infrastructure. 169 tests pass; the baseline reproduces stock YOLO11 exactly; all nine modules are measurably identity functions at initialisation *and* demonstrably not frozen; every model trains end to end. |
+| **What is proven** | The infrastructure. 242 tests pass; the baseline reproduces stock YOLO11 exactly; all eleven modules are measurably identity functions at initialisation *and* demonstrably not frozen; every model trains end to end. |
 | **What is *not* proven** | Accuracy. **No model has been trained on a real SAR dataset in this repository.** There is no result table here with numbers in it, and the table generators refuse to print one. |
 | **Why that's the point** | A detector paper is only as strong as its ablations. If the machinery that produces those ablations cannot be trusted, every number downstream is unverifiable. Build the instrument first. |
 
@@ -184,11 +184,11 @@ Full mathematics, derivations and pseudocode: [`docs/METHOD.md`](docs/METHOD.md)
 
 ## Part III · The instrument
 
-![Measured identity-at-initialisation property for all nine modules](docs/assets/identity_property.svg)
+![Measured identity-at-initialisation property for all eleven modules](docs/assets/identity_property.svg)
 
 ### The two guarantees the whole paper rests on
 
-**Guarantee 1 — exact identity at initialisation.** Every module returns `f(x) = x` **exactly**, not approximately, because its residual gate is zero-initialised (`out = x + 0 · branch`). A freshly built SAR-YOLO is therefore *numerically identical* to its baseline, and the measured deviation above is `0.0e+00` for all nine. Without this, a "module helps" result is confounded with "the extra layers happened to change the initial function". With it, a measured difference has exactly one available explanation: the module **learned** something.
+**Guarantee 1 — exact identity at initialisation.** Every module returns `f(x) = x` **exactly**, not approximately, because its residual gate is zero-initialised (`out = x + 0 · branch`). A freshly built SAR-YOLO is therefore *numerically identical* to its baseline, and the measured deviation above is `0.0e+00` for all ten. Without this, a "module helps" result is confounded with "the extra layers happened to change the initial function". With it, a measured difference has exactly one available explanation: the module **learned** something.
 
 **Guarantee 2 — the gate can actually open.** Identity comes from the gate *alone*, so the residual branch must **not** also be zero-initialised. That combination looks harmless and is fatal: with `branch = 0`, the gate gradient `dL/dα = ⟨dL/dout, branch⟩` is identically zero, so `α` never leaves 0 — and `dL/d(branch) = α · dL/dout` is zero for the same reason. Both vanish together, and the module stays a permanent no-op that passes every identity test.
 
@@ -281,6 +281,14 @@ The prior is the paper's central hypothesis, so it gets the most careful ablatio
 | | low contrast | 16.230 | a *different* degradation family: does the principle generalise past speckle? |
 | | low SNR | 16.230 | additive noise rather than multiplicative |
 | | ours, speckle 4 looks | 16.230 | **`EXP-019`**: every row is size-identical to the control, so the variable is the objective |
+| **Conditioning** (33) | no adapter — the control | 16.230 | `v2_full` itself: the cross-sensor claim has to beat this |
+| | metadata gain | 16.278 | +0.049M: fewest parameters of any design |
+| | metadata shift | 16.278 | +0.049M: the *other* half of FiLM, alone |
+| | film, sensor only | 16.307 | can it transfer to an unseen sensor? **No — by construction.** |
+| | film, resolution only | 16.306 | a continuous field that exists for any sensor |
+| | film, physical descriptors only | 16.307 | **the arm the headline claim stands on**: usable when no sensor embedding row exists |
+| | ours, film sensor+resolution | 16.307 | the two fields a deployment is most likely to know |
+| | ours, spatial modulation | 16.311 | the most expressive arm — has to beat the cheaper ones to be kept |
 | **Removal** | − clutter / − prior / − freq / − context / − refinement / − prior spectral | 16.061 / 16.048 / 16.127 / 15.066 / 15.854 / 16.230 | each against its own reference: full v2 at 16.230, except − prior spectral which removes Module G against `v2_prior_spectral` at 16.586 — a strict removal of 356,320 params, bit-identical to full v2 |
 
 The **capacity-matched** row is the methodological point. Comparing "learned spatial prior" against "uniform learned prior" would confound *spatial selectivity* with *parameter count* — the larger arm could win for reasons that have nothing to do with the hypothesis. `tp_channel` therefore uses the proposed arm's exact evidence network and averages its output over space, so the two arms are byte-for-byte the same size (asserted in `test_target_prior_arms_are_capacity_matched_where_claimed`) and differ in one respect only: whether the prior is allowed to vary across the image. If `tp_channel` matches `v2_full`, the spatial-prior claim is dead — and the paper must say so.
@@ -295,6 +303,10 @@ The same discipline applies to Component 9. A zero-initialised spectral gain wou
 
 **It is a loss slot, not an architectural one, and the difference decides where its arms live.** The term was implemented and unit-tested before any variant used it, which left it unreachable from the experiment matrix — nothing in `configs/` switched it on. It now has a runnable ladder row (`EXP-019`) and its own slot study (`EXP-321…326`), and every enabled arm states its degradation and severity **explicitly** rather than inheriting them, so the perturbation a run trains under can be read off its own config. The arms deliberately do *not* join the removal slot: a removal there is verified by a strict parameter drop, and a loss term can never produce one — all six consistency arms are byte-for-byte the same size as the control, and that equality is the point. It is also what makes the comparison clean: with the graph fixed, an accuracy difference is the objective and nothing else. The sweep over speckle ×1 / ×16 / low-contrast / low-SNR exists because a term that only helps when the benchmark corruption happens to match its training corruption is a tuned constant rather than a principle, and the paper has to be able to tell those apart.
 
+**Acquisition conditioning is the cross-sensor claim, and its arms are chosen so the claim can fail.** The whole reason this slot exists is the leave-one-source-out protocol: a detector trained on several sensors and tested on one it has never seen. That rules out the obvious shortcut — a learned embedding table indexed by sensor id — because the held-out sensor has no row in that table. The categorical path is *unavailable exactly where the claim is tested*. So the field-set arms are the load-bearing ones, and they are ordered by what they can transfer: `film:sensor` cannot reach an unseen sensor by construction, `film:resolution` can (a continuous field every acquisition has), and `film:continuous_only` (resolution, band, incidence) is the arm the headline result has to come from. If the categorical arm is the only one that helps, the method does not generalise and the paper must say so. Two further properties are pinned by test rather than asserted: a fresh conditioned model is numerically identical to the unconditioned one (the modulation is gated and the gate starts at zero, while the rest of the path starts *non-zero* — a zero-initialised modulation would have a vanishing gate gradient and could never open), and a field an arm does not consume has both its value and its availability flag zeroed, so `sensor`-only and `resolution`-only are genuinely information-free with respect to each other rather than merely ignoring the value at the end. The cost is stated plainly: under 0.5% of parameters for every arm, and the metadata is applied per sample and broadcast over space, because a batch drawn across sources would otherwise average the acquisitions together and destroy the very signal being tested.
+
+**The field-set arms are near-matched in capacity, but not byte-identical, and that is a real caveat rather than a rounding detail.** `cond_sensor`, `cond_resolution` and `cond_continuous` differ by at most ~1.1k parameters (0.007% of the model) because each consumes a different number of continuous descriptors. That is tight enough to attribute a difference to *which fields* are read, but it is not the byte-for-byte equality the target-prior and consistency slots achieve, so the paper should report the parameter count per arm rather than claiming exact capacity matching.
+
 Component 11 needs a control that is uncommon in detection papers, because "deformable convolution" comparisons usually give the proposed arm *both* a new network and a new operation. `rf_local` therefore keeps the identical mixing network and removes only the offsets, so `ours − local` is attributable to **deformation** rather than to the extra convolution. Two further tests make the mechanism falsifiable at the unit level: a zero offset field must reproduce `local` exactly up to float32 round-off (measured: `7e-7`), while a **0.04-cell** displacement moves the output by `0.4` — six orders of magnitude larger, so the tolerance is demonstrably not hiding a real shift. And the base grid's corners are asserted at exactly `(-1, -1)` and `(1, 1)`, which is what pins `align_corners` to the sampling convention rather than leaving it to chance.
 
 ![Test-suite composition across the repository's modules](docs/assets/tests.svg)
@@ -308,16 +320,24 @@ Component 11 needs a control that is uncommon in detection papers, because "defo
 | Check | Result | Evidence |
 | --- | --- | --- |
 | Baseline reproduces stock YOLO11 exactly | `2,624,080` (n), `9,458,752` (s) | `test_baseline_matches_stock_yolo11_parameter_count` |
-| **All 75 architectures construct and forward** | pass, at even and odd input sizes | `test_every_variant_builds_and_forwards` |
+| **All 87 architectures construct and forward** | pass, at even and odd input sizes | `test_every_variant_builds_and_forwards` |
 | Declared scales build at the right stride count | pass | `test_declared_scale_variants_build` |
-| Every SAR module is an **exact** identity at init | `max\|f(x)−x\| = 0.0e+00` ×9 | measured live + `test_each_module_is_exactly_identity_at_init` |
+| Every SAR module is an **exact** identity at init | `max\|f(x)−x\| = 0.0e+00` ×10 | measured live + `test_each_module_is_exactly_identity_at_init` |
 | **No module is silently frozen at init** | every learnable mode has a non-zero gate gradient | `test_no_module_is_frozen_at_init` |
 | **All gates leave zero during real training** | `25/25` non-zero after 2 epochs | `SMOKE-003` checkpoint (checked dynamically, not just statically) |
 | **The consistency term reaches the loss through the real path** | weighted `sar_loss` > unweighted, second view run, BN counters advance by exactly 1 | `test_consistency_term_reaches_the_total_loss_through_the_model`, `test_consistency_pass_does_not_disturb_batchnorm_running_stats` |
+| **A fresh conditioned model equals the unconditioned one** | `max\|v2_full − cond_*\| = 0.0` for all seven arms; the inserted adapters shift layer indices, so the stock-layer copy is what makes this exact | `test_new_arms_are_neutral_at_init_relative_to_v2`, `test_each_module_is_exactly_identity_at_init` |
+| **Metadata cannot change the output while the gate is closed** | supplying a *known* acquisition to an untrained adapter is still a bit-exact identity | `test_metadata_cannot_change_the_output_while_the_gate_is_closed` |
+| **An unused metadata field carries no information** | value *and* availability flag are both masked, so sensor-only vs. resolution-only is a real comparison | `test_an_unused_field_cannot_reach_the_descriptor` |
+| **Each conditioning arm reads exactly the fields it declares** | `gain/shift/spatial` read all six; `film:sensor_resolution` reads two; `continuous_only` reads the three physical descriptors | `test_each_conditioning_arm_reads_exactly_its_declared_fields` |
+| **Conditioning is per-sample, not per-batch** | row *i* of a mixed-source batch equals row *i* run alone — the LOSO recipe depends on it | `test_conditioning_is_per_sample_not_per_batch` |
+| **An out-of-vocabulary sensor is refused, not clamped** | clamping would map an unseen sensor onto a trained-on one, silently | `test_a_vocabulary_mismatch_raises_instead_of_snapping_to_a_nearby_sensor` |
+| **LOSO refuses to report a number it cannot back** | one group, or a zero-ground-truth fold, raises instead of yielding a score | `tests/test_groups.py`, `tests/test_metrics.py` |
+| **No README-cited test can be missing** | every test name in a code span must exist, and a truncated name counts as unverifiable rather than being skipped | `test_every_test_cited_in_the_readme_exists` |
 | Deformable refinement's grid identity is pinned | zero offset → `7e-7` dev; 0.04-cell shift → `0.4` | `test_refinement_resampling_is_an_identity_at_zero_offset` |
 | Offsets move the grid, and only in the adaptive arm | pass | `test_refinement_offsets_actually_move_the_sampling_grid`, `..._are_feature_adaptive_only_in_deform_mode` |
 | SAR-YOLO predicts identically to baseline at init | max abs diff `0.0` (v1 **and** v2) | `test_models_output_identically_to_baseline_at_init` |
-| Filenames cannot silently downgrade the scale | pass (75 variants) | `test_variant_filenames_encode_scale` |
+| Filenames cannot silently downgrade the scale | pass (87 variants) | `test_variant_filenames_encode_scale` |
 | Mode names cannot break the parser | pass (no keyword or `parse_model`-local collision) | `test_module_mode_names_are_safe_for_parse_model` |
 | Spectral branch is resolution- and AMP-safe | odd, non-square and fp16 inputs pass | `test_frequency_module_is_resolution_independent` |
 | Every ablation arm has a runnable config | pass | `test_every_ablation_arm_has_a_runnable_experiment_config` |
@@ -327,7 +347,7 @@ Component 11 needs a control that is uncommon in detection papers, because "defo
 | COCO matcher agrees with hand-computed cases | pass | `tests/test_metrics.py` |
 | No table can emit an unmeasured number | pass | `tests/test_repo.py` |
 | The README cost table matches the measured models | pass | `test_readme_cost_table_matches_the_measured_models` |
-| Oriented (9-field) labels are diagnosed, not dropped | reported as `oriented_labels` | `test_validator_diagnoses_oriented_labels_...` |
+| Oriented (9-field) labels are diagnosed, not dropped | reported as `oriented_labels` | `test_validator_diagnoses_oriented_labels_instead_of_calling_them_malformed` |
 | A dataset cannot validate clean while its boxes are unreadable | pass | same test |
 | Malformed VOC XML cannot abort a batch conversion | counted as `skipped_annotations` | `test_voc_converter_survives_malformed_annotations` |
 | Every registry dataset ships a matching data config | pass | `test_every_registry_dataset_has_a_matching_data_config` |
@@ -401,7 +421,7 @@ That writes one directory per held-out source containing `train.txt` / `val.txt`
 
 The two exist because `evaluate_detections` reads the config's `val` entry. A single config with `val: val.txt` would report a score measured on sources the model trained on — an in-domain number wearing a cross-source label — and nothing about the output would look wrong.
 
-The rule is **stated, never inferred**, because no universal one is safe: some archives ship a directory per sensor, some encode it in the filename, some only in a metadata table. `--rule parent|regex|sidecar` covers those three, and the fallback is an explicit mapping rather than a heuristic.
+The rule is **stated, never inferred**, because no universal one is safe: some archives ship a directory per sensor, some encode it in the filename, some only in a metadata table. `--rule parent|regex|sidecar|resolution` covers those, and the fallback is an explicit mapping rather than a heuristic. The **`resolution` rule is the cross-resolution protocol (Experiment D)**: it takes `--metadata <table.json>` — built with `python -m saryolo.cli metadata --images <dir> --sidecar <csv>` when the archive states acquisition in a CSV — plus `--edges 5,10,20` (no default: the bin width decides what "cross-resolution" even means), bins each image's `resolution_m` into half-open groups labelled like `resolution_m>10`, and holds out one bin per fold exactly as LOSO holds out a sensor. The bins are physical quantities, not cluster IDs, so a fold trained on `resolution_m<=10` and evaluated on `resolution_m>10` answers the question the experiment asks — can the detector bridge a resolution gap it never saw — rather than a random split. `saryolo.data.binned_rule` refuses degenerate inputs the same way the source rules do: a single bin, a non-ascending edge list, and an image with no metadata row (unless `--allow-unmatched`, which the printed summary then discloses).
 
 Every guard below exists because its failure mode is *silent* — the run completes and reports a number:
 
@@ -417,7 +437,14 @@ Every guard below exists because its failure mode is *silent* — the run comple
 
 That last one was live: a split given as a `.txt` image list had its labels derived by string-replacing `images` → `labels` on the *list path*, so no ground truth was ever read and `mAP50` came back `None` while the command reported success. The list form is exactly what a fold emits, so without the fix the whole protocol would have measured nothing. Ground truth is now read **before** inference, so an unresolvable split fails immediately instead of after a full prediction pass.
 
-**What this does not yet do.** The protocol is step one. The model-side half — a small adapter conditioned on acquisition metadata (sensor, resolution, polarisation) at the stem and neck — is **not implemented**, and no cross-source number exists yet; every cell stays `TBD` until a fold has actually been trained. The protocol is what makes that number trustworthy when it lands.
+**Both halves are now built; neither is measured.** The protocol is one half and the model side is the other: a lightweight adapter conditioned on acquisition metadata, placed **first in the per-level chain** at P3/P4/P5 so every later slot operates on acquisition-conditioned features (see the conditioning slot above and Component 33 in `docs/METHOD.md`). What does not exist is a cross-source *number* — no fold has been trained, so every cell stays `TBD`.
+
+Two things must be established, and only the first is currently true:
+
+1. that the baseline **degrades measurably** across sources — if it does not, there is no problem and the adapter is unmotivated;
+2. that `cond_continuous`, the arm that can reach an unseen source because it reads only physically-ordered fields, **recovers part of that degradation** against the `v2_full` control.
+
+Note the placement is a deliberate departure from the original plan, which put the adapter at the stem and neck. It sits in the neck because that is the only place `parse_model` can consume a second signal at all — a custom layer receives one tensor, and the metadata arrives through a context object the model fills before the forward pass rather than as a graph edge. The stem variant is the separate `in_*` slot study. If `cond_continuous` fails while `cond_sensor` succeeds, the honest conclusion is that the method specialises to known sensors rather than generalising to new ones — a negative result the slot is instrumented to detect, not to hide.
 
 ---
 
@@ -444,8 +471,8 @@ uv pip install --python .venv/bin/python torch torchvision --index-url https://d
 uv pip install --python .venv/bin/python ultralytics pytest
 source .venv/bin/activate
 
-pytest tests/ -q                                          # 200 tests
-python -m saryolo arch --variant all --nc 1               # emit 75 model YAMLs
+pytest tests/ -q                                          # 242 tests
+python -m saryolo arch --variant all --nc 1               # emit 87 model YAMLs
 python -m saryolo synth-data --out datasets/processed/synthetic_smoke
 python -m saryolo train --exp configs/exp/_smoke_baseline.yaml
 python -m saryolo train --exp configs/exp/_smoke_full.yaml
@@ -523,6 +550,7 @@ Every arm below sits in the *same slot* with every other component held fixed, a
 | `EXP-291…296` | refinement (11) | none · **local (capacity control)** · fixed offsets · offset sweep (25% · 100%) · ours-adaptive |
 | `EXP-311…314` | input adapter (12) | raw (`identity`) · local-statistics · learned · ours-hybrid |
 | `EXP-321…326` | consistency (SEC. 4) | off (control) · speckle ×1 · speckle ×16 · low-contrast · low-SNR · **ours, speckle ×4** |
+| `EXP-331…338` | conditioning (33) | none (control) · gain · shift · film-sensor · film-resolution · film-physical-only · **ours film sensor+resolution** · spatial |
 
 The `EXP-26x` range answers SEC. 14 of the brief directly: the transform is the *variable*, so FFT, block-DCT and Haar wavelet are compared in one slot with everything else held fixed, rather than assuming the FFT is right. `EXP-294/295` sweep the refinement's `max_offset` bound; it is logged as an **open sweep, not a tuned constant**, because the learned offsets sit at ~94% of the bound where `tanh`'s gradient is smallest — so the bound may well be too tight.
 
@@ -569,7 +597,7 @@ Two details carry the weight of the claim:
 ```
 saryolo/
 ├── nn/
-│   ├── arch.py            symbolic builder: 80 variants, all indices computed
+│   ├── arch.py            symbolic builder: 87 variants, all indices computed
 │   ├── modules/
 │   │   ├── input_adapter.py SIA (Comp 12) + raw / local / learned arms
 │   │   ├── enhancement.py SFE (Comp 1) + log / standardize / CLAHE baselines

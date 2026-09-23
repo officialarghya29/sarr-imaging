@@ -91,6 +91,17 @@ class ModelSpec:
     refinement: str | None = None
     refinement_max_offset: float = 0.5
     fusion: str | None = None
+    #: Acquisition-conditioned adapter: ``"<mode>:<field set>"``, e.g. ``"film:all"`` or
+    #: ``"scale:continuous_only"``. A single string rather than two fields because the ablation
+    #: always varies them together, and a half-specified arm is a wiring mistake waiting to
+    #: happen.
+    conditioning: str | None = None
+    #: Categorical table sizes for the conditioning adapter, in ``CATEGORICAL_FIELDS`` order
+    #: (``sensor``, ``polarization``, ``mode``). Emitted into the YAML because an embedding table
+    #: that disagrees with the vocabulary used to encode the data would silently mis-index every
+    #: sensor. A tuple of ints rather than a string: ``parse_model`` literal-evals every string
+    #: argument and a non-literal one raises ``SyntaxError``, which is not suppressed.
+    conditioning_vocab: tuple[int, ...] = (2, 2, 2)
     levels: tuple[str, ...] = ("p3", "p4", "p5")
     sar_loss: dict[str, float] | None = None
     notes: str = ""
@@ -271,6 +282,16 @@ def build_yaml_dict(spec: ModelSpec) -> dict[str, Any]:
     if n_p2 is not None:
         heads["p2"] = n_p2
     for lvl in spec.levels:
+        if spec.conditioning:
+            # Placed first in the per-level chain so that every later slot -- prior, attention,
+            # context, refinement -- operates on acquisition-conditioned features. Putting it
+            # after them would condition the final modulation only, and the ablation would then
+            # be measuring a different (weaker) intervention than the one being claimed.
+            mode, _, field_set = spec.conditioning.partition(":")
+            heads[lvl] = b.add(
+                "head", heads[lvl], 1, "AcquisitionConditionedAdapter",
+                ["ch", heads[lvl], mode, field_set or "all", list(spec.conditioning_vocab)],
+            )
         if spec.prior:
             heads[lvl] = b.add(
                 "head", heads[lvl], 1, "TargetPriorModulation", ["ch", heads[lvl], spec.prior, 3, 8]
@@ -577,10 +598,40 @@ VARIANTS.update({
     "fr_dct": _v2("fr_dct", frequency="dct",
                   notes="Frequency study: 8x8 block DCT-II with learnable radial bands."),
     "fr_wavelet": _v2("fr_wavelet", frequency="wavelet",
-                      notes="Frequency study: one-level Haar with learnable per-sub-band gains."),
+                      notes="Frequency study: one-level Haar with learnable per-sub-band gains."),})
+
+
+# --- Acquisition conditioning (the cross-sensor claim), applied to the full v2 model.
+    #
+    # Two independent dimensions are wired here because the brief asks for both, and they answer
+    # different questions:
+    #
+    #   * *mode* -- how the metadata modulates the feature (scale / shift / film / spatial). This
+    #     is the adapter-design ablation, and it is deliberately small: the point is to find the
+    #     simplest design that works, so a more elaborate one has to beat these and not merely
+    #     beat a plain detector.
+    #   * *field set* -- which acquisition parameters are consumed. `continuous_only` is the arm
+    #     that matters most for the headline claim: it uses only the physically-ordered fields, so
+    #     it is the one that can transfer to a sensor with no embedding row at all. If the
+    #     categorical arm is the only one that helps, the claim fails on its own terms.
+VARIANTS.update({
+    "cond_gain": _v2("cond_gain", conditioning="gain:all",
+                      notes="Conditioning slot: metadata gain only (fewest parameters)."),
+    "cond_shift": _v2("cond_shift", conditioning="shift:all",
+                      notes="Conditioning slot: metadata offset only."),
+    "cond_film": _v2("cond_film", conditioning="film:sensor_resolution",
+                     notes="Conditioning slot: PROPOSED arm -- per-channel modulation from sensor and resolution, the two fields a deployment is most likely to know."),
+    "cond_sensor": _v2("cond_sensor", conditioning="film:sensor",
+                       notes="Conditioning slot: sensor embedding only. Cannot transfer to an unseen sensor by construction."),
+    "cond_resolution": _v2("cond_resolution", conditioning="film:resolution",
+                           notes="Conditioning slot: resolution only, a continuous field that exists for any sensor."),
+    "cond_continuous": _v2("cond_continuous", conditioning="film:continuous_only",
+                           notes="Conditioning slot: physical descriptors only (resolution, band, incidence) -- the arm that can reach an unseen sensor."),
+    "cond_spatial": _v2("cond_spatial", conditioning="spatial:all",
+                        notes="Conditioning slot: position-dependent modulation, the most expressive arm."),
 })
 
-# --- Module A (SIA) slot study. The brief forbids assuming which input representation is
+    # --- Module A (SIA) slot study. The brief forbids assuming which input representation is
 # right, so all four arms are wired and none is in the v2 default: the adapter has to earn
 # its place in the full model through this comparison, not by being assumed.
 VARIANTS.update({

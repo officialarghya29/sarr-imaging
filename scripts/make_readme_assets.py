@@ -216,6 +216,14 @@ def measure_identity() -> list[dict]:
         # other module, so it belongs in this measurement rather than being left out and the
         # count quietly kept at eight.
         ("SIA", "Component 12 - input adapter", M.SARInputAdapter(c, mode="hybrid")),
+        # The acquisition-conditioned adapter (the cross-sensor claim) is held to the same
+        # contract as everything else, so it is measured here too. Mode ``film`` is its proposed
+        # arm. With no metadata context the module falls back to an explicitly *unknown*
+        # acquisition rather than bypassing itself, so this measurement is taken on the real
+        # forward path -- which is the case that matters, since that is what an untrained build
+        # with no metadata actually runs.
+        ("CND", "Component 33 - acquisition conditioning",
+         M.AcquisitionConditionedAdapter(c, mode="film", fields="sensor_resolution")),
     ]
     rows = []
     for short, label, module in cases:

@@ -17,6 +17,7 @@ import pytest
 from saryolo.data.groups import (
     Fold,
     SourceRule,
+    binned_rule,
     discover_sources,
     leave_one_out_folds,
     write_loso_splits,
@@ -289,6 +290,112 @@ def test_written_folds_carry_runnable_configs_with_val_pointing_at_the_held_out_
         # Without class names there is nothing to train against, so no configs are invented.
         bare = write_loso_splits(folds, Path(tmp) / "bare", groups=groups)
         assert not (bare / folds[0].name / "data.yaml").exists()
+
+
+def test_binned_rule_splits_a_continuous_field_into_resolution_groups():
+    """The cross-resolution protocol: resolution is a number, so it is binned, not keyed.
+
+    A cross-resolution experiment that silently produced one bin would build folds and report a
+    number that has nothing to do with resolution, which is why the bin count is asserted here
+    as well as the labels.
+    """
+    values = {"low": 3.0, "mid": 8.0, "high": 15.0, "higher": 40.0}
+    rule = binned_rule(values, [5, 10, 20], field="resolution_m")
+    assert rule.mapping == {
+        "low": "resolution_m<=5",
+        "mid": "5<resolution_m<=10",
+        "high": "10<resolution_m<=20",
+        "higher": "resolution_m>20",
+    }
+    assert len(set(rule.mapping.values())) == 4
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (5.0, "resolution_m<=5"),        # the edge itself belongs to the lower bin
+        (5.0001, "5<resolution_m<=10"),
+        (10.0, "5<resolution_m<=10"),
+        (10.0001, "10<resolution_m<=20"),
+        (20.0, "10<resolution_m<=20"),
+        (20.0001, "resolution_m>20"),
+        (0.001, "resolution_m<=5"),      # below the first edge, so not dropped
+        (1e6, "resolution_m>20"),        # far above the last
+    ],
+)
+def test_bins_are_half_open_and_unbounded_at_both_ends(value, expected):
+    """An out-of-range resolution must land in a bin, never fall out of the grouping.
+
+    A closed range would silently drop the extremes -- and those are exactly the resolutions a
+    cross-resolution experiment cares about.
+    """
+    # ``low`` and ``high`` anchor the extremes so at least two bins are always populated; the
+    # single-bin guard would otherwise fire for the cases under test and mask the boundary
+    # behaviour being checked.
+    rule = binned_rule({"a": value, "low": 1.0, "high": 1e6}, [5, 10, 20])
+    assert rule.mapping["a"] == expected
+
+
+def test_binned_rule_refuses_an_image_it_cannot_place():
+    """An unbinnable image must be an error, because its absence is invisible downstream."""
+    with pytest.raises(ValueError, match="have no resolution_m recorded"):
+        binned_rule({"a": 1.0, "b": None, "c": 9.0}, [5])
+    # Explicit opt-in is allowed, and it is then the caller's stated choice.
+    rule = binned_rule({"a": 1.0, "b": None, "c": 9.0}, [5], allow_missing=True)
+    assert "b" not in rule.mapping
+    # And if *everything* is missing there is nothing left to group.
+    with pytest.raises(ValueError, match="no image has a recorded"):
+        binned_rule({"a": None}, [5], allow_missing=True)
+
+
+@pytest.mark.parametrize(
+    ("values", "edges", "match"),
+    [
+        ({"a": 1.0, "b": 9.0}, [], "at least one bin edge"),
+        ({"a": 1.0, "b": 9.0}, [10, 5], "strictly ascending"),
+        ({"a": 1.0, "b": 9.0}, [5, 5], "strictly ascending"),
+        ({"a": 1.0, "b": 2.0}, [5, 10], "single bin"),
+        ({"a": float("nan"), "b": 9.0}, [5], "cannot be binned"),
+        ({"a": float("inf"), "b": 9.0}, [5], "cannot be binned"),
+    ],
+)
+def test_binned_rule_refuses_degenerate_bins(values, edges, match):
+    """Each of these would produce a run that completes while measuring the wrong thing.
+
+    NaN is the subtle one: it compares false against every edge, so it would fall through to the
+    last bin and be reported as the *highest* resolution class with nothing looking wrong.
+    """
+    with pytest.raises(ValueError, match=match):
+        binned_rule(values, edges)
+
+
+def test_a_single_bin_is_refused_before_folds_are_built():
+    """The one failure that is easy to miss: folds still build, a number is still reported.
+
+    Checked through ``discover_sources`` as well, because a caller may hand the rule on rather
+    than constructing it here -- the refusal has to survive the whole path.
+    """
+    values = {f"chip_{i}": 3.0 for i in range(10)}
+    with pytest.raises(ValueError, match="single bin"):
+        binned_rule(values, [20])
+
+    # Constructed directly, a one-bin sidecar rule reaches the two-source guard instead.
+    one_bin = SourceRule.sidecar({f"chip_{i}": "res<=20" for i in range(10)})
+    with pytest.raises(ValueError, match="Only one source"):
+        discover_sources([f"/x/chip_{i}.png" for i in range(10)], one_bin)
+
+
+def test_binned_rule_labels_are_stable_and_stripped_of_float_noise():
+    """Labels go into directory names and fold ids, so they must not carry ``10.0`` style noise.
+
+    A label like ``10.0<resolution_m<=20.0`` would also make the fold directory names awkward
+    on the command line, which is where they are used.
+    """
+    rule = binned_rule({"a": 1.0, "b": 15.0, "c": 50.0}, [10.0, 20.0])
+    assert sorted(set(rule.mapping.values())) == [
+        "10<resolution_m<=20", "resolution_m<=10", "resolution_m>20"
+    ]
+    assert not any(".0" in label for label in rule.mapping.values())
 
 
 def test_sidecar_rule_keys_from_an_explicit_mapping():

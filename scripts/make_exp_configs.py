@@ -118,6 +118,12 @@ ABLATION_SLOTS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     # carries the gain, which is the difference between a principle and a tuned constant.
     ("consistency", "32", ("v2_full", "cons_sev1", "cons_sev16", "cons_lowcontrast",
                             "cons_lowsnr", "v2_cons")),
+    # Acquisition conditioning -- the cross-sensor claim. Two sub-studies share one slot because
+    # they vary the same insertion point: the adapter *design* (scale / shift / film / spatial) and
+    # the *metadata field set* (sensor-only through continuous-only). `v2_full` is the control, so
+    # this slot answers "does any conditioning help?" as well as "which design and which fields?".
+    ("conditioning", "33", ("v2_full", "cond_gain", "cond_shift", "cond_sensor",
+                            "cond_resolution", "cond_continuous", "cond_film", "cond_spatial")),
     # Appended rather than inserted, so the ids of the slots above keep their meaning
     # (an id is referenced by the ledger and by the paper tables).
     ("refinement", "29", ("rf_none", "rf_local", "rf_static", "rf_off25", "rf_off100", "v2_full")),

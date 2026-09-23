@@ -45,8 +45,10 @@ discovered path shape, so the failure tells you how to write the right rule.
 from __future__ import annotations
 
 import json
+import math
 import random
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -54,6 +56,7 @@ __all__ = [
     "SourceRule",
     "SourceGroups",
     "Fold",
+    "binned_rule",
     "discover_sources",
     "leave_one_out_folds",
     "write_loso_splits",
@@ -155,6 +158,110 @@ class SourceRule:
             return match.group(1) if match else None
         assert self.mapping is not None
         return self.mapping.get(Path(path).stem) or self.mapping.get(Path(path).name)
+
+
+def _format_bound(value: float) -> str:
+    """Compact, stable label for a bin boundary (``5`` rather than ``5.0``)."""
+    return f"{value:g}"
+
+
+def binned_rule(
+    values: dict[str, float | None],
+    edges: Sequence[float],
+    field: str = "resolution_m",
+    allow_missing: bool = False,
+) -> SourceRule:
+    """Group images into bins of a *continuous* acquisition field.
+
+    This is the cross-resolution protocol (Experiment D of the brief), and it exists because
+    :meth:`SourceRule.parent` and :meth:`SourceRule.regex` cannot express it: resolution is a
+    number, not a directory name, and the same sensor spans a range. Grouping by equality
+    (``MetadataTable.groups``) would give one group per distinct value -- on Sentinel-1 that is
+    a group per metre, so almost every "source" would be a handful of chips.
+
+    The bins are half-open and unbounded at both ends -- ``(-inf, e1]``, ``(e1, e2]``, ...,
+    ``(en, +inf)`` -- so every finite value lands in exactly one bin. Open ends matter: the
+    lowest and highest resolutions in a real archive are usually *not* near the edges a caller
+    guesses, and a closed range would either drop them or need a special case.
+
+    Args:
+        values: Image stem -> value from the metadata table. A stem present here with a
+            ``None`` value means the field was recorded as unknown for that image.
+        edges: Ascending bin boundaries, at least one.
+        field: Field name, used only to label the groups.
+        allow_missing: Permit images whose value is unknown or absent. Off by default for the
+            same reason as in :func:`discover_sources`: such an image belongs to no bin, so it
+            is absent from every fold and silently shrinks the held-out set. An "unknown
+            resolution" group would be worse still -- it would be held out as a fold that tests
+            nothing about resolution.
+
+    Returns:
+        A ``sidecar`` rule whose keys are bin labels such as ``resolution_m<=5`` and
+        ``resolution_m>20``.
+
+    Raises:
+        ValueError: If ``edges`` is empty or not strictly ascending, if any value is not
+            finite, or if values are missing and ``allow_missing`` is False.
+    """
+    edges = [float(e) for e in edges]
+    if not edges:
+        raise ValueError("at least one bin edge is required")
+    for previous, current in zip(edges, edges[1:], strict=False):
+        if current <= previous:
+            raise ValueError(
+                f"bin edges must be strictly ascending, got {edges}; a repeated or reversed "
+                f"edge makes an empty bin, which would be reported as a 'source' with no images"
+            )
+
+    labels = [f"{field}<={_format_bound(edges[0])}"]
+    labels += [
+        f"{_format_bound(lo)}<{field}<={_format_bound(hi)}"
+        for lo, hi in zip(edges, edges[1:], strict=False)
+    ]
+    labels.append(f"{field}>{_format_bound(edges[-1])}")
+
+    def label_for(value: float) -> str:
+        for i, edge in enumerate(edges):
+            if value <= edge:
+                return labels[i]
+        return labels[-1]
+
+    mapping: dict[str, str] = {}
+    missing: list[str] = []
+    for stem, value in values.items():
+        if value is None:
+            missing.append(stem)
+            continue
+        number = float(value)
+        # NaN compares false against every edge, so it would fall through to the last bin and be
+        # reported as the *highest* resolution class without anything looking wrong.
+        if not math.isfinite(number):
+            raise ValueError(f"{stem}: {field} is {number!r}, which cannot be binned")
+        mapping[stem] = label_for(number)
+
+    if missing and not allow_missing:
+        raise ValueError(
+            f"{len(missing)} image(s) have no {field} recorded (e.g. {sorted(missing)[:3]}). "
+            f"They belong to no bin, so they would be absent from every fold -- and the "
+            f"evaluation set would shrink to a subset nobody chose. Fill the metadata table, "
+            f"or pass allow_missing=True and accept that the cross-resolution number is "
+            f"computed on the rest."
+        )
+    if not mapping:
+        raise ValueError(
+            f"no image has a recorded {field}, so no bin could be populated. Building folds from "
+            f"this rule would produce nothing to train or test on."
+        )
+    if len(set(mapping.values())) < 2:
+        # Say so precisely, because this is the one failure of a cross-resolution run that is
+        # easy to miss: the folds still build and the run still reports a number.
+        raise ValueError(
+            f"every image with a recorded {field} falls into a single bin "
+            f"({sorted(set(mapping.values()))}) by edges {edges}. Cross-resolution evaluation "
+            f"needs at least two populated bins; widen the edges, or the data does not contain "
+            f"a resolution shift to measure."
+        )
+    return SourceRule.sidecar(mapping)
 
 
 @dataclass

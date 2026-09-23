@@ -29,6 +29,12 @@ from .attention import (
     SEAttention,
     build_attention,
 )
+from .conditioning import (
+    FIELD_SETS,
+    AcquisitionConditionedAdapter,
+    AcquisitionEncoder,
+    MetadataContext,
+)
 from .context import ContextAggregation
 from .enhancement import SARFeatureEnhancement
 from .frequency import SpatialFrequencyRepresentation
@@ -49,6 +55,11 @@ __all__ = [
     "ContextAggregation",
     "TargetAwareRefinement",
     "SARInputAdapter",
+    # Acquisition conditioning (cross-sensor generalisation)
+    "AcquisitionConditionedAdapter",
+    "AcquisitionEncoder",
+    "MetadataContext",
+    "FIELD_SETS",
     # Attention baselines / registry
     "IdentityAttention",
     "SEAttention",
@@ -71,6 +82,7 @@ CUSTOM_MODULES = {
     "ContextAggregation": ContextAggregation,
     "TargetAwareRefinement": TargetAwareRefinement,
     "SARInputAdapter": SARInputAdapter,
+    "AcquisitionConditionedAdapter": AcquisitionConditionedAdapter,
     "IdentityAttention": IdentityAttention,
     "SEAttention": SEAttention,
     "ECAAttention": ECAAttention,

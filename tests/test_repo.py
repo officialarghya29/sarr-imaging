@@ -11,6 +11,7 @@ These exist because both failure modes are silent and expensive:
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -132,6 +133,94 @@ def test_readme_references_only_existing_assets():
     assert referenced, "README references no assets; did the chart links get dropped?"
     missing = sorted(ref for ref in referenced if not (REPO_ROOT / ref).exists())
     assert not missing, f"README points at files that do not exist: {missing}"
+
+
+#: A backtick code span in the README. Citations are read from code spans rather than from raw
+#: prose, because a bare ``test_``-prefixed word in a sentence is not a claim about the suite.
+README_CODE_SPAN = re.compile(r"`([^`\n]+)`")
+
+#: A whole-token test identifier: the *entire* span element must be the name, with no ellipsis and
+#: no path. A truncated citation such as ``test_something_...`` is therefore not a valid citation
+#: and is reported as one of the unreadable entries rather than quietly skipped -- a name the
+#: guard cannot verify is exactly the case it exists to catch.
+README_TEST_TOKEN = re.compile(r"^test_[a-z0-9_]+$")
+
+#: A cited test *file*, e.g. ``tests/test_metrics.py``.
+README_TEST_PATH = re.compile(r"^(?:tests/)?test_[a-z0-9_]+\.py$")
+
+
+def test_every_test_cited_in_the_readme_exists():
+    """A test cited in the README must name a test that actually runs.
+
+    The evidence table is the README's strongest claim: it says "this property is pinned by that
+    test". A citation to a renamed or never-written test is worse than no citation, because it
+    reads as verification while verifying nothing, and nothing else in this suite looks at it --
+    the asset test validates image paths, not identifiers.
+
+    Two failure modes are caught, and the second is the subtle one:
+
+    * a cited name that does not exist (three such citations were nearly committed -- the names
+      were plausible, the tests did not exist);
+    * a cited name that is *truncated* (``test_validator_diagnoses_oriented_labels_...``), which
+      is unverifiable and so is treated as a failure rather than skipped. That one was real and
+      already in the README when this guard was written.
+    """
+    readme = (REPO_ROOT / "README.md").read_text()
+
+    tokens: set[str] = set()
+    paths: set[str] = set()
+    unreadable: set[str] = set()
+    for span in README_CODE_SPAN.findall(readme):
+        for raw in re.split(r"[,·]", span):
+            item = raw.strip()
+            if not item:
+                continue
+            if README_TEST_TOKEN.match(item):
+                tokens.add(item)
+            elif README_TEST_PATH.match(item):
+                paths.add(item)
+            elif item.startswith("test_"):
+                unreadable.add(item)
+
+    assert tokens or paths, "the README cites no tests; did the evidence table get dropped?"
+
+    defined: set[str] = set()
+    for path in sorted((REPO_ROOT / "tests").glob("*.py")):
+        defined.update(re.findall(r"^def (test_[a-z0-9_]+)", path.read_text(), flags=re.MULTILINE))
+
+    problems = [f"{name} (no such test)" for name in sorted(tokens) if name not in defined]
+    problems += [
+        f"{name} (cited path does not exist)"
+        for name in sorted(paths)
+        if not (REPO_ROOT / "tests" / Path(name).name).exists()
+    ]
+    problems += [f"{name} (not a checkable name -- truncated or malformed)" for name in sorted(unreadable)]
+    assert not problems, (
+        "the README cites tests that cannot be verified:\n  "
+        + "\n  ".join(problems)
+        + "\nEither the test was renamed (update the README) or it was never written (write it)."
+    )
+
+
+def test_the_test_citation_guard_is_not_vacuous():
+    """The guard above must detect a missing citation, and must not fire on a real one."""
+    readme = (REPO_ROOT / "README.md").read_text()
+    cited = {
+        item.strip()
+        for span in README_CODE_SPAN.findall(readme)
+        for item in re.split(r"[,·]", span)
+        if README_TEST_TOKEN.match(item.strip())
+    }
+    assert cited, "the guard found no identifiers to check, so it would pass vacuously"
+    # A plausible but unwritten name must not be mistaken for a real one.
+    assert "test_definitely_not_written_anywhere" not in cited
+    # And a truncated name must be classified as unreadable rather than accepted.
+    truncated = "test_validator_diagnoses_oriented_labels_..."
+    assert not README_TEST_TOKEN.match(truncated)
+    assert README_TEST_TOKEN.match("test_validator_diagnoses_oriented_labels_instead_of_calling_them_malformed")
+    # File citations are legitimate and must be recognised as paths, not identifiers.
+    assert README_TEST_PATH.match("tests/test_metrics.py")
+    assert not README_TEST_TOKEN.match("tests/test_metrics.py")
 
 
 def test_readme_generated_charts_exist():

@@ -23,6 +23,8 @@ import argparse
 import json
 from pathlib import Path
 
+from saryolo.data.groups import IMAGE_SUFFIXES
+
 
 def _cmd_datasets(args) -> int:
     from saryolo.data import list_datasets
@@ -140,6 +142,41 @@ def _cmd_stats(args) -> int:
         save_statistics(stats, args.out)
         figures = plot_statistics(stats, args.out)
         print(f"  wrote {len(figures)} figures to {args.out}\n")
+    return 0
+
+
+def _cmd_metadata(args) -> int:
+    """Build an acquisition-metadata table from a per-image CSV sidecar.
+
+    The missing third input of the conditioning experiments. The ``--rule resolution``
+    branch of ``loso`` needs a saved :class:`MetadataTable` JSON, and ``build_metadata_table``
+    provides no CLI route to one for archives that state acquisition only in a table (SAR-Ship-Dataset,
+    chip releases of SARDet-100K). This command is that route, and is deliberately small:
+    the CSV is stated, never scraped from filenames, because a scraped value would look like
+    metadata while being a guess.
+    """
+    from saryolo.data.metadata import build_metadata_table, load_metadata_sidecar
+
+    images_dir = Path(args.images_dir)
+    if not images_dir.is_dir():
+        raise SystemExit(f"--images {images_dir} is not a directory")
+    sidecar_path = Path(args.sidecar)
+    if not sidecar_path.is_file():
+        raise SystemExit(f"--sidecar {sidecar_path} does not exist")
+    sidecar = load_metadata_sidecar(sidecar_path)
+    images = sorted(p for p in images_dir.iterdir() if p.suffix.lower() in IMAGE_SUFFIXES)
+    if not images:
+        raise SystemExit(f"no dataset images found under {images_dir} (tried {', '.join(IMAGE_SUFFIXES)})")
+    try:
+        table = build_metadata_table(images, sidecar=sidecar)
+    except ValueError as exc:
+        # An all-unknown table (sidecar matching no stems) raises ValueError; a traceback
+        # would still point at the cause, but SystemExit keeps every CLI refusal in the
+        # same shape the loso command uses.
+        raise SystemExit(f"cannot build the metadata table: {exc}") from None
+    out = table.save(args.out)
+    print(f"wrote {out}: {len(table)} images, coverage "
+          + ", ".join(f"{field}={cov:.0%}" for field, cov in table.coverage().items()))
     return 0
 
 
@@ -428,6 +465,57 @@ def _cmd_loso(args) -> int:
         if not args.pattern:
             raise SystemExit("--rule regex requires --pattern (with one capture group)")
         rule = SourceRule.regex(args.pattern)
+    elif args.rule == "resolution":
+        # The cross-resolution protocol. Both inputs are stated rather than inferred: the bin
+        # edges are a modelling choice, and the metadata table is where the resolution lives.
+        # Guessing either would produce a run that "completes" while measuring nothing.
+        from saryolo.data.groups import binned_rule
+        from saryolo.data.metadata import MetadataTable
+
+        if not args.metadata:
+            raise SystemExit(
+                "--rule resolution requires --metadata (a metadata table JSON); resolution is "
+                "not in the filename, so it has to be read from the table built by "
+                "`python -m saryolo datasets`/`saryolo.data.metadata`"
+            )
+        table_path = Path(args.metadata).resolve()
+        if not table_path.exists():
+            raise SystemExit(f"--metadata {table_path} does not exist")
+        if not args.edges:
+            raise SystemExit(
+                "--rule resolution requires --edges, e.g. --edges 5,10,20. There is no default: "
+                "the bin width is a modelling choice that decides what 'cross-resolution' means"
+            )
+        try:
+            edges = [float(e) for e in str(args.edges).replace(",", " ").split()]
+        except ValueError:
+            raise SystemExit(f"--edges {args.edges!r} is not a list of numbers") from None
+
+        table = MetadataTable.load(table_path)
+        values = {
+            stem: getattr(table.get(stem), "resolution_m", None)
+            for stem in table.entries
+        }
+        # Only images that are actually present count. A metadata row for an image outside
+        # --images would otherwise populate a bin that has nothing to evaluate on.
+        present = {p.stem for p in paths}
+        values = {stem: value for stem, value in values.items() if stem in present}
+        absent = sorted(present - set(values))
+        if absent:
+            raise SystemExit(
+                f"{len(absent)} image(s) have no row in {table_path.name} "
+                f"(e.g. {absent[:3]}). They cannot be binned, so they would be absent from "
+                f"every fold without anything reporting it. Rebuild the metadata table over "
+                f"this directory."
+            )
+        # A bad binning is a user error, not a crash: the ValueError carries the diagnosis, and
+        # a traceback would bury it. Same convention as the fold-building path below.
+        try:
+            rule = binned_rule(
+                values, edges, field="resolution_m", allow_missing=args.allow_unmatched
+            )
+        except ValueError as exc:
+            raise SystemExit(f"cannot build a resolution rule: {exc}") from None
     else:
         if not args.sidecar:
             raise SystemExit("--rule sidecar requires --sidecar (a JSON image -> source mapping)")
@@ -614,6 +702,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--sample", type=int, default=300)
     p.set_defaults(func=_cmd_stats)
 
+    p = sub.add_parser("metadata", help="build an acquisition-metadata table from a per-image CSV sidecar")
+    p.add_argument("--images", required=True, dest="images_dir",
+                   help="directory of dataset images the table describes")
+    p.add_argument("--sidecar", required=True,
+                   help="CSV with a stem column plus acquisition fields (sensor, resolution_m, ...)")
+    p.add_argument("--out", default="datasets/metadata.json")
+    p.set_defaults(func=_cmd_metadata)
+
     p = sub.add_parser("arch", help="emit SAR-YOLO model YAMLs")
     p.add_argument("--variant", default="all")
     p.add_argument("--nc", type=int, default=1)
@@ -699,12 +795,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--images", required=True, help="directory holding the images to group by source")
     p.add_argument("--data", default=None,
                    help="dataset data.yaml; supplies class names so each fold gets a runnable config")
-    p.add_argument("--rule", default="parent", choices=["parent", "regex", "sidecar"],
-                   help="how the source key is derived; stated, never guessed (default: parent)")
+    p.add_argument("--rule", default="parent", choices=["parent", "regex", "sidecar", "resolution"],
+                   help="how the source key is derived; stated, never guessed (default: parent). "
+                        "'resolution' bins a continuous metadata field -- the cross-resolution "
+                        "protocol, which 'parent'/'regex' cannot express")
     p.add_argument("--root", default=None, help="for --rule parent: root the key is relative to")
     p.add_argument("--depth", type=int, default=1, help="for --rule parent: path components kept")
     p.add_argument("--pattern", default=None, help="for --rule regex: pattern with one capture group")
     p.add_argument("--sidecar", default=None, help="for --rule sidecar: JSON image -> source mapping")
+    p.add_argument("--metadata", default=None, dest="metadata",
+                   help="for --rule resolution: metadata table JSON (saryolo.data.metadata)")
+    p.add_argument("--edges", default=None, dest="edges",
+                   help="for --rule resolution: comma-separated ascending bin edges in metres, "
+                        "e.g. '5,10,20'; bins are unbounded at both ends")
     p.add_argument("--allow-unmatched", action="store_true",
                    help="permit unkeyed images (default: refuse, they would silently shrink the test set)")
     p.add_argument("--val-ratio", type=float, default=0.2, dest="val_ratio")

@@ -1,5 +1,5 @@
 {
-  "variants": 80,
+  "variants": 87,
   "zoo": {
     "baseline_n": {
       "variant": "baseline",
@@ -541,6 +541,12 @@
       "label": "Component 12 - input adapter",
       "max_abs_deviation": 0.0,
       "identical": true
+    },
+    {
+      "short": "CND",
+      "label": "Component 33 - acquisition conditioning",
+      "max_abs_deviation": 0.0,
+      "identical": true
     }
   ],
   "datasets": {
@@ -587,8 +593,8 @@
   },
   "dataset_count": 5,
   "experiments": {
-    "total": 78,
-    "config_files": 80,
+    "total": 86,
+    "config_files": 88,
     "with_results": [],
     "ledger_runs": 14,
     "non_experiment_runs": [
@@ -599,17 +605,18 @@
     ]
   },
   "tests": {
-    "total": 200,
+    "total": 242,
     "by_file": {
-      "tests/test_arch.py": 54,
+      "tests/test_arch.py": 61,
       "tests/test_augmentation.py": 15,
-      "tests/test_cli.py": 13,
+      "tests/test_cli.py": 19,
+      "tests/test_conditioning.py": 9,
       "tests/test_data.py": 19,
-      "tests/test_groups.py": 17,
+      "tests/test_groups.py": 35,
       "tests/test_hard_examples.py": 20,
       "tests/test_losses.py": 24,
       "tests/test_metrics.py": 15,
-      "tests/test_repo.py": 23
+      "tests/test_repo.py": 25
     }
   }
 }

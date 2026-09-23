@@ -171,6 +171,11 @@ IDENTITY_MODES: dict[str, tuple[str, ...]] = {
     "ContextAggregation": ("multi", "local", "regional", "none"),
     "TargetAwareRefinement": ("deform", "static", "local", "none"),
     "SARInputAdapter": ("hybrid", "local", "learned", "identity"),
+    # The conditioning adapter's modes *and* its field sets both travel through
+    # ``parse_model`` as string arguments, so both vocabularies are registered: the mode and
+    # the field set each have to survive ``ast.literal_eval``, and a field set is what selects
+    # which acquisition columns the arm reads.
+    "AcquisitionConditionedAdapter": ("gain", "shift", "film", "spatial"),
 }
 
 #: Control modes that have no residual to learn from: they either return the input
@@ -192,10 +197,15 @@ def _declared_vocabularies() -> dict[str, tuple[str, ...]]:
         name: tuple(getattr(M, name).MODES)
         for name in ("SARFeatureEnhancement", "SpeckleAwareFeatureModule", "AdaptiveMultiScaleFusion",
                      "TargetPriorModulation", "SpatialFrequencyRepresentation", "ContextAggregation",
-                     "TargetAwareRefinement", "SARInputAdapter")
+                     "TargetAwareRefinement", "SARInputAdapter", "AcquisitionConditionedAdapter")
     }
     vocab["attention slot"] = tuple(M.ATTENTION_BUILDERS)
     vocab["attention gate"] = ("adaptive", "static")
+    # The field sets are a second string vocabulary on the same YAML row, not a sub-detail of
+    # the mode: `cond_film` and `cond_sensor` differ *only* in this argument, so a field-set
+    # name that `parse_model` substituted or mangled would silently collapse two ablation arms
+    # onto the same model while the table still reported them as different rows.
+    vocab["conditioning fields"] = tuple(M.FIELD_SETS)
     return vocab
 
 
@@ -303,6 +313,13 @@ def test_models_output_identically_to_baseline_at_init(variant):
         "in_identity", "in_local", "in_learned", "in_hybrid",
         # The alternative-frequency arms and the offset sweep must likewise start neutral.
         "fr_dct", "fr_wavelet", "rf_off25", "rf_off100",
+        # Every conditioning arm, including the proposed one. This is the claim the slot rests
+        # on: a conditioned build must be numerically the unconditioned model at step 0, or the
+        # cross-sensor comparison would be measuring a changed initial function rather than the
+        # conditioning. The inserted adapters shift downstream layer indices, which is why the
+        # stock-layer copy below is the only way to make this comparison exact.
+        "cond_gain", "cond_shift", "cond_sensor", "cond_resolution", "cond_continuous",
+        "cond_film", "cond_spatial",
     ],
 )
 def test_new_arms_are_neutral_at_init_relative_to_v2(variant):

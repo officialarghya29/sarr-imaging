@@ -9,6 +9,7 @@ pin that the correct invocation still succeeds, so the fix cannot be "make it al
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import cv2
@@ -146,6 +147,79 @@ def _sensor_images(root, sensors: dict[str, int]):
     return root
 
 
+def test_metadata_command_builds_a_table_the_resolution_rule_accepts(tmp_path, capsys):
+    """The missing third input of the conditioning experiments: archives that state
+    acquisition only in a CSV. The command's output has to be consumable by ``loso
+    --rule resolution`` without hand-editing, so that is exactly what this asserts."""
+    root = tmp_path / "images"
+    root.mkdir()
+    rows = ["stem,sensor,resolution_m,polarization,mode,band,incidence_deg"]
+    for i in range(20):
+        stem = f"sentinel1_{i:03d}"
+        (root / f"{stem}.png").write_bytes(b"x")
+        rows.append(f"{stem},sentinel1,10.0,VV,stripmap,C,33.0")
+    for i in range(20):
+        stem = f"gaofen3_{i:03d}"
+        (root / f"{stem}.png").write_bytes(b"x")
+        rows.append(f"{stem},gaofen3,3.0,VV,stripmap,C,33.0")
+    csv_path = tmp_path / "acquisition.csv"
+    csv_path.write_text("\n".join(rows) + "\n")
+    table_path = tmp_path / "metadata.json"
+
+    code = main(["metadata", "--images", str(root), "--sidecar", str(csv_path),
+                 "--out", str(table_path)])
+    assert code == 0, capsys.readouterr().out
+    assert table_path.exists()
+    printed = capsys.readouterr().out
+    assert "40 images" in printed
+    assert "sensor=100%" in printed
+
+    # The table feeds the cross-resolution rule directly -- the hand-off that has to work.
+    data_cfg = tmp_path / "data.yaml"
+    data_cfg.write_text(f"path: {root}\nnc: 1\nnames:\n- ship\nval: images\n")
+    code = main(["loso", "--images", str(root), "--data", str(data_cfg), "--rule", "resolution",
+                 "--metadata", str(table_path), "--edges", "5", "--min-test-images", "5",
+                 "--out", str(tmp_path / "folds")])
+    assert code == 0, capsys.readouterr().out
+    assert sorted(p.name for p in (tmp_path / "folds").iterdir() if p.is_dir()) == [
+        "resolution_m<=5", "resolution_m>5"
+    ]
+
+
+def test_metadata_command_refuses_a_sidecar_matching_nothing(tmp_path):
+    """A table of all-unknowns would make every conditioning arm identical while the
+    experiment still reports a result -- the quietest way to kill the ablation."""
+    root = tmp_path / "images"
+    root.mkdir()
+    for i in range(4):
+        (root / f"chip_{i}.png").write_bytes(b"x")
+    csv_path = tmp_path / "acquisition.csv"
+    csv_path.write_text("stem,sensor,resolution_m\nother_0,sentinel1,10.0\n")
+
+    with pytest.raises(SystemExit, match="cannot build the metadata table"):
+        main(["metadata", "--images", str(root), "--sidecar", str(csv_path),
+              "--out", str(tmp_path / "metadata.json")])
+
+
+def test_metadata_command_needs_real_inputs(tmp_path):
+    root = tmp_path / "images"
+    root.mkdir()
+    (root / "chip_0.png").write_bytes(b"x")
+    with pytest.raises(SystemExit, match="is not a directory"):
+        main(["metadata", "--images", str(tmp_path / "nope"),
+              "--sidecar", str(tmp_path / "s.csv"), "--out", str(tmp_path / "m.json")])
+    with pytest.raises(SystemExit, match="does not exist"):
+        main(["metadata", "--images", str(root), "--sidecar", str(tmp_path / "nope.csv"),
+              "--out", str(tmp_path / "m.json")])
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    csv_path = tmp_path / "s.csv"
+    csv_path.write_text("stem,sensor\n")
+    with pytest.raises(SystemExit, match="no dataset images"):
+        main(["metadata", "--images", str(empty), "--sidecar", str(csv_path),
+              "--out", str(tmp_path / "m.json")])
+
+
 def test_loso_writes_one_runnable_fold_per_source(tmp_path, capsys):
     root = _sensor_images(tmp_path / "raw", {"s1": 20, "g3": 20})
     data_cfg = tmp_path / "data.yaml"
@@ -183,6 +257,84 @@ def test_loso_needs_a_rule_it_can_actually_apply(tmp_path):
         main(["loso", "--images", str(root), "--rule", "regex", "--out", str(tmp_path / "o")])
     with pytest.raises(SystemExit, match="requires --sidecar"):
         main(["loso", "--images", str(root), "--rule", "sidecar", "--out", str(tmp_path / "o")])
+    # The resolution rule needs both of its inputs stated, and neither is guessable: the bin
+    # width is a modelling choice, and the resolution is not in the filename.
+    with pytest.raises(SystemExit, match="requires --metadata"):
+        main(["loso", "--images", str(root), "--rule", "resolution", "--out", str(tmp_path / "o")])
+    table = _metadata_table(tmp_path / "meta.json", {p.stem: 5.0 for p in root.rglob("*.png")})
+    with pytest.raises(SystemExit, match="requires --edges"):
+        main(["loso", "--images", str(root), "--rule", "resolution", "--metadata", str(table),
+              "--out", str(tmp_path / "o")])
+
+
+def _metadata_table(path, resolutions: dict[str, float | None]):
+    """Minimal metadata table JSON, in the shape ``MetadataTable.load`` expects."""
+    entries = {
+        stem: {"sensor": "sentinel1", "resolution_m": value, "polarization": "VV",
+               "mode": None, "band": "C", "incidence_deg": 35.0}
+        for stem, value in resolutions.items()
+    }
+    path.write_text(json.dumps({"source": "test", "entries": entries, "vocabularies": {}}))
+    return path
+
+
+def test_loso_resolution_rule_builds_cross_resolution_folds(tmp_path, capsys):
+    """Experiment D end to end: resolution bins become the held-out 'sources'."""
+    root = tmp_path / "raw"
+    root.mkdir(parents=True)
+    resolutions = {}
+    for i in range(40):
+        stem = f"chip_{i:03d}"
+        (root / f"{stem}.png").write_bytes(b"x")
+        resolutions[stem] = 5.0 if i < 20 else 20.0
+    table = _metadata_table(tmp_path / "meta.json", resolutions)
+    data_cfg = tmp_path / "data.yaml"
+    data_cfg.write_text(f"path: {root}\nnc: 1\nnames:\n- ship\nval: images\n")
+    out = tmp_path / "crossres"
+
+    code = main(["loso", "--images", str(root), "--data", str(data_cfg), "--rule", "resolution",
+                 "--metadata", str(table), "--edges", "10", "--min-test-images", "5",
+                 "--out", str(out)])
+    assert code == 0, capsys.readouterr().out
+    assert "2 source(s)" in capsys.readouterr().out
+    assert sorted(p.name for p in out.iterdir() if p.is_dir()) == [
+        "resolution_m<=10", "resolution_m>10"
+    ]
+    for fold in ("resolution_m<=10", "resolution_m>10"):
+        assert (out / fold / "eval_holdout.yaml").exists()
+
+
+def test_loso_resolution_rule_refuses_an_image_it_cannot_bin(tmp_path):
+    """An image with no metadata row would vanish from every fold without a word."""
+    root = tmp_path / "raw"
+    root.mkdir(parents=True)
+    resolutions = {}
+    for i in range(20):
+        stem = f"chip_{i:03d}"
+        (root / f"{stem}.png").write_bytes(b"x")
+        resolutions[stem] = 5.0 if i < 10 else 20.0
+    del resolutions["chip_000"]
+    table = _metadata_table(tmp_path / "meta.json", resolutions)
+
+    with pytest.raises(SystemExit, match="no row in"):
+        main(["loso", "--images", str(root), "--rule", "resolution",
+              "--metadata", str(table), "--edges", "10", "--out", str(tmp_path / "o")])
+
+
+def test_loso_resolution_rule_refuses_bins_that_measure_nothing(tmp_path):
+    """One populated bin means there is no resolution shift, so the claim is untestable."""
+    root = tmp_path / "raw"
+    root.mkdir(parents=True)
+    resolutions = {}
+    for i in range(20):
+        stem = f"chip_{i:03d}"
+        (root / f"{stem}.png").write_bytes(b"x")
+        resolutions[stem] = 3.0
+    table = _metadata_table(tmp_path / "meta.json", resolutions)
+
+    with pytest.raises(SystemExit, match="single bin"):
+        main(["loso", "--images", str(root), "--rule", "resolution",
+              "--metadata", str(table), "--edges", "10", "--out", str(tmp_path / "o")])
 
 
 # ------------------------------------------------------------------- arch/registry

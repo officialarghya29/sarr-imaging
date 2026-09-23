@@ -1,0 +1,292 @@
+# SAR-YOLO / cond_film  -- GENERATED FILE, do not edit by hand.
+# Regenerate with:  python -m saryolo arch --variant cond_film
+# scale=s  levels=p2-p3-p4-p5  modules=sfe, speckle, frequency, fusion, prior, attention, context, refine, p2_head
+# sar_loss={'w_sep': 0.2, 'w_small': 0.5, 'w_smooth': 0.05, 'margin': 1.0, 'bg_frac': 0.25}
+#
+# NOTE: when this file is loaded, ultralytics derives the compound scale from the
+# FILE NAME (guess_model_scale), overwriting the 'scale' key below. The file must
+# therefore keep its 'yolo11s_' prefix or it will silently build at scale 'n'.
+# Conditioning slot: PROPOSED arm -- per-channel modulation from sensor and resolution, the two fields a deployment is most likely to know.
+#
+# [from, repeats, module, args]
+nc: 1
+scale: s
+scales:
+  n: [0.5, 0.25, 1024]
+  s: [0.5, 0.5, 1024]
+  m: [0.5, 1.0, 512]
+  l: [1.0, 1.0, 512]
+  x: [1.0, 1.5, 512]
+backbone:
+- - -1
+  - 1
+  - Conv
+  - [64, 3, 2]
+- - -1
+  - 1
+  - Conv
+  - [128, 3, 2]
+- - -1
+  - 2
+  - C3k2
+  - [256, false, 0.25]
+- - -1
+  - 1
+  - SARFeatureEnhancement
+  - [ch, sfe, 3, 8]
+- - -1
+  - 1
+  - Conv
+  - [256, 3, 2]
+- - -1
+  - 2
+  - C3k2
+  - [512, false, 0.25]
+- - -1
+  - 1
+  - Conv
+  - [512, 3, 2]
+- - -1
+  - 2
+  - C3k2
+  - [512, true]
+- - -1
+  - 1
+  - Conv
+  - [1024, 3, 2]
+- - -1
+  - 2
+  - C3k2
+  - [1024, true]
+- - -1
+  - 1
+  - SPPF
+  - [1024, 5]
+- - -1
+  - 2
+  - C2PSA
+  - [1024]
+- - -1
+  - 1
+  - SpeckleAwareFeatureModule
+  - [ch, sfm_clutter, 8, 3]
+- - -1
+  - 1
+  - SpatialFrequencyRepresentation
+  - [ch, sff, 8, 8]
+head:
+- - -1
+  - 1
+  - nn.Upsample
+  - [null, 2, nearest]
+- - [14, 7]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 1
+  - AdaptiveMultiScaleFusion
+  - - ch
+    - [14, 7]
+    - 8
+    - amf
+- - -1
+  - 2
+  - C3k2
+  - [512, false]
+- - -1
+  - 1
+  - nn.Upsample
+  - [null, 2, nearest]
+- - [18, 5]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 1
+  - AdaptiveMultiScaleFusion
+  - - ch
+    - [18, 5]
+    - 8
+    - amf
+- - -1
+  - 2
+  - C3k2
+  - [256, false]
+- - -1
+  - 1
+  - nn.Upsample
+  - [null, 2, nearest]
+- - [22, 3]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 1
+  - AdaptiveMultiScaleFusion
+  - - ch
+    - [22, 3]
+    - 8
+    - amf
+- - -1
+  - 2
+  - C3k2
+  - [128, false]
+- - -1
+  - 1
+  - Conv
+  - [128, 3, 2]
+- - [26, 21]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 1
+  - AdaptiveMultiScaleFusion
+  - - ch
+    - [26, 21]
+    - 8
+    - amf
+- - -1
+  - 2
+  - C3k2
+  - [256, false]
+- - -1
+  - 1
+  - Conv
+  - [256, 3, 2]
+- - [30, 17]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 1
+  - AdaptiveMultiScaleFusion
+  - - ch
+    - [30, 17]
+    - 8
+    - amf
+- - -1
+  - 2
+  - C3k2
+  - [512, false]
+- - -1
+  - 1
+  - Conv
+  - [512, 3, 2]
+- - [34, 13]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 1
+  - AdaptiveMultiScaleFusion
+  - - ch
+    - [34, 13]
+    - 8
+    - amf
+- - -1
+  - 2
+  - C3k2
+  - [1024, true]
+- - 25
+  - 1
+  - AcquisitionConditionedAdapter
+  - - ch
+    - 25
+    - film
+    - sensor_resolution
+    - [2, 2, 2]
+- - 38
+  - 1
+  - TargetPriorModulation
+  - [ch, 38, learned, 3, 8]
+- - 39
+  - 1
+  - SARAdaptiveAttention
+  - [ch, 39, 16, 7, adaptive]
+- - 40
+  - 1
+  - ContextAggregation
+  - [ch, 40, multi, 8]
+- - 41
+  - 1
+  - TargetAwareRefinement
+  - [ch, 41, deform, 3, 0.5]
+- - 29
+  - 1
+  - AcquisitionConditionedAdapter
+  - - ch
+    - 29
+    - film
+    - sensor_resolution
+    - [2, 2, 2]
+- - 43
+  - 1
+  - TargetPriorModulation
+  - [ch, 43, learned, 3, 8]
+- - 44
+  - 1
+  - SARAdaptiveAttention
+  - [ch, 44, 16, 7, adaptive]
+- - 45
+  - 1
+  - ContextAggregation
+  - [ch, 45, multi, 8]
+- - 46
+  - 1
+  - TargetAwareRefinement
+  - [ch, 46, deform, 3, 0.5]
+- - 33
+  - 1
+  - AcquisitionConditionedAdapter
+  - - ch
+    - 33
+    - film
+    - sensor_resolution
+    - [2, 2, 2]
+- - 48
+  - 1
+  - TargetPriorModulation
+  - [ch, 48, learned, 3, 8]
+- - 49
+  - 1
+  - SARAdaptiveAttention
+  - [ch, 49, 16, 7, adaptive]
+- - 50
+  - 1
+  - ContextAggregation
+  - [ch, 50, multi, 8]
+- - 51
+  - 1
+  - TargetAwareRefinement
+  - [ch, 51, deform, 3, 0.5]
+- - 37
+  - 1
+  - AcquisitionConditionedAdapter
+  - - ch
+    - 37
+    - film
+    - sensor_resolution
+    - [2, 2, 2]
+- - 53
+  - 1
+  - TargetPriorModulation
+  - [ch, 53, learned, 3, 8]
+- - 54
+  - 1
+  - SARAdaptiveAttention
+  - [ch, 54, 16, 7, adaptive]
+- - 55
+  - 1
+  - ContextAggregation
+  - [ch, 55, multi, 8]
+- - 56
+  - 1
+  - TargetAwareRefinement
+  - [ch, 56, deform, 3, 0.5]
+- - [42, 47, 52, 57]
+  - 1
+  - Detect
+  - [nc]
+sar_loss: {w_sep: 0.2, w_small: 0.5, w_smooth: 0.05, margin: 1.0, bg_frac: 0.25}

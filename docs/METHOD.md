@@ -635,6 +635,105 @@ replicated into three, an input adapter has less to work with than it appears. I
 fails to beat `in_identity`, the correct conclusion is that the stem is not where SAR's missing
 prior lives — not that the adapter was implemented badly.
 
+## Component 33 — Acquisition-Conditioned Adapter (CND)
+
+The cross-sensor claim. One detector is trained across several SAR sources and then asked to work
+on a source it has never seen; the failure is not a lack of capacity but the reuse of features
+learned under one acquisition distribution as though acquisitions did not differ. The hypothesis
+is narrow and falsifiable: *conditioning the feature modulation on the acquisition parameters
+recovers part of that loss, on sources that were never trained on.*
+
+```text
+SAR image ──▶ backbone ──▶ P3 / P4 / P5
+                                │
+                                ├── CND(metadata) ── first in the per-level chain
+                                │        ├── prior
+                                │        ├── attention
+                                │        ├── context
+                                │        └── refinement
+                                ▼
+                              Detect
+x' = x * (1 + alpha * gamma(m)) + alpha * beta(m)      alpha = 0 at init  =>  exact identity
+```
+
+### The held-out sensor has no embedding row
+
+That one fact decides the design and rules out the obvious shortcut. The fastest way to condition
+on a sensor is a learned embedding table indexed by sensor id — and it is *unavailable exactly
+where the claim is tested*, because the held-out sensor was never in the table. Conditioning
+therefore runs on two channels:
+
+| channel | fields | can reach an unseen source? |
+| --- | --- | --- |
+| categorical | learned embeddings for sensors already seen | no — by construction |
+| continuous | resolution, nominal band wavelength, incidence angle | yes — these exist for any sensor |
+
+Both feed one encoder, and the arms exist to find which of them carries the generalisation. **If
+only the categorical channel matters, the claim fails on its own terms**, and the paper must say
+so. `cond_continuous` is therefore the arm the headline result has to come from; `cond_sensor` is
+the arm that tests the shortcut and is expected to be the one that cannot transfer.
+
+### Two properties that are pinned by test
+
+**Identity at initialisation survives being handed metadata.** A fresh conditioned model is
+numerically the unconditioned one, and the modulation path starts *non-zero* behind a zero gate.
+Both halves matter: with a zero-initialised branch on top of a zero gate, `dL/dalpha = <dL/dout,
+gamma*x + beta>` is identically zero and the adapter can never leave identity while looking
+perfectly healthy — the same frozen-module failure that Component 1 originally had. Identity is
+bought by the gate and by nothing else. Measured: `max |v2_full − cond_*| = 0.0` for all seven
+arms, after matching the *stock* layers in order (the inserted adapters shift every downstream
+index, so a positional state-dict load is not possible). Supplying a *known* acquisition to an
+untrained adapter still changes nothing, which is what makes "SAR-YOLO matches YOLO at step 0"
+true for datasets that carry metadata as well as for those that do not.
+
+**An unused field is genuinely information-free.** The field ablation is only meaningful if the
+`sensor`-only and `resolution`-only arms cannot see each other's field. For a field an arm does
+not consume, both the value *and* the availability flag are masked — masking the value alone
+would still let the encoder learn from *whether* a field was present. The test varies each
+omitted field's value and its availability flag separately and requires the descriptor to be
+bit-identical, and then checks the converse (a consumed field must move it) so the equality is
+not vacuous.
+
+### Refusal rather than guessing, and per-sample by necessity
+
+An index the embedding table cannot represent **raises**, naming the field and the offending
+index. Clamping is the tempting fix and the wrong one: it maps an unseen sensor onto a sensor
+that *was* trained on — precisely the confusion the design exists to prevent — and it does so
+silently while the run still reports a result. The failure mode this creates is real and was hit
+while writing these tests: a model built with one vocabulary and fed batches encoded with
+another. The error message says which two vocabularies disagree rather than leaving a bare
+"index out of range".
+
+Conditioning is **per sample, not per batch**, and that is forced by the protocol rather than
+chosen: the LOSO recipe trains on three sources at once, so a single per-batch descriptor would
+average the acquisitions together and destroy the signal being tested. The encoder is applied per
+sample and the modulation is broadcast over space, which is what keeps the cost near zero. The
+row count must match the batch — a mismatch is a wiring bug, and broadcasting it away would
+attach one image's acquisition to another image's features and still produce a plausible run.
+
+An *absent* context is encoded as an explicitly unknown acquisition (all-zero values, every
+availability flag off) rather than bypassing the module, so "this image's parameters were never
+recorded" is a state the model is trained on rather than a hole in the graph.
+
+### Measured cost
+
+| arm | mode | fields | parameters | Δ vs `v2_full` |
+| --- | --- | --- | ---: | ---: |
+| `v2_full` | — | — | 16,229,583 | control |
+| `cond_gain` | gain | all | 16,278,099 | +0.049M |
+| `cond_shift` | shift | all | 16,278,099 | +0.049M |
+| `cond_resolution` | film | resolution | 16,306,003 | +0.076M |
+| `cond_continuous` | film | resolution, band, incidence | 16,306,515 | +0.077M |
+| `cond_sensor` | film | sensor | 16,306,963 | +0.077M |
+| `cond_film` | film | sensor + resolution | 16,307,091 | +0.078M |
+| `cond_spatial` | spatial | all | 16,311,331 | +0.082M |
+
+Every arm is under 0.5% of the model. One honest caveat: the four `film` field-set arms differ by
+at most ~1.1k parameters because each consumes a different number of continuous descriptors.
+That is tight enough to attribute a difference to *which fields* are read, but it is **not** the
+byte-for-byte equality the target-prior slot achieves, so the parameter count should be reported
+per arm rather than claimed as exactly capacity-matched.
+
 ## Training strategies that are not modules
 
 Two parts of the brief change *what the model sees* rather than *what the model is*. Both live
@@ -746,9 +845,31 @@ So the derivation is explicit:
 | `parent` | the first `--depth` path components below `--root` (one directory per source) |
 | `regex` | a single capture group in the filename |
 | `sidecar` | an explicit image → source mapping |
+| `resolution` | a *binned continuous field* from a metadata table — the cross-resolution protocol |
 
-Three strategies rather than one because no universal rule is safe — but the
+Four strategies rather than one because no universal rule is safe — but the
 fallback is a stated mapping, never a heuristic silently guessing a sensor.
+
+The fourth rule is Experiment D of the master plan. The unit of the LOSO fold is a
+*group*, and nothing in the machinery cares whether a group is a sensor or a range
+of a physical quantity: binning each image's `resolution_m` at stated edges
+(`--edges 5,10,20`; no default, because the bin width decides what "cross-resolution"
+even means) yields groups labelled `resolution_m<=10`, `resolution_m>10`, and so on —
+half-open, unbounded at both ends, with a stable label format stripped of float
+noise. Holding out one bin is then exactly the cross-resolution experiment: a model
+trained on `resolution_m<=10` and evaluated on `resolution_m>10` is tested on a
+resolution regime it never saw. The bins are physical quantities rather than
+cluster IDs, which matters for the claim: a cluster found in feature space could be
+an artefact of the embedding, whereas a bin edge is a modelling choice that is
+stated in the fold manifest and can be defended or attacked directly.
+
+The table itself comes from `python -m saryolo.cli metadata --images <dir>
+--sidecar <csv>`, for archives that state acquisition in a table rather than in the
+file layout. Both ends refuse the failure mode that matters: the *builder* rejects a
+sidecar matching no stems (an all-unknown table would make every conditioning arm
+identical while the ablation still reported a result), and the *rule* rejects an
+image with no metadata row, which would otherwise vanish from every fold and shrink
+the test set without a word.
 
 **Every guard exists because its failure is silent.** A rule that matches nothing,
 fewer than two sources, unkeyed images, groups whose last component is
@@ -777,6 +898,17 @@ now catches: labels for a `.txt` split were derived by string-replacing
 back `None`, and the command still exited successfully. Ground truth is read before
 inference, so this fails immediately rather than after a prediction pass.
 
-**Not yet built.** The protocol is one half of the claim. The model-side half — an
-adapter conditioned on acquisition metadata — is not implemented, and no cross-source
-number exists yet; unmeasured cells stay `TBD`.
+**Both halves are now built; neither is measured.** The protocol above is one half of the
+claim and the model side is the other (Component 33). What does not exist is a cross-source
+*number*: the folds and the adapter are wired and tested, but no GPU run against real data has
+produced a result, so every cross-source cell stays `TBD`. Two things have to be established
+before the claim can be made, and only the first is currently verified:
+
+1. that the baseline degrades measurably across sources at all — if it does not, there is no
+   problem to solve and the adapter is unmotivated;
+2. that `cond_continuous` (the arm that can reach an unseen source) recovers part of that
+   degradation against the `v2_full` control of identical size.
+
+If (2) fails while `cond_sensor` succeeds, the honest conclusion is that the method specialises
+to known sensors rather than generalising to new ones — a negative result the slot is
+instrumented to detect, not to hide.
