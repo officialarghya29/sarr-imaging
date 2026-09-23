@@ -292,3 +292,79 @@ def test_relative_path_resolves_without_touching_ultralytics_settings(tmp_path):
     images_dir, labels_dir = split_dirs(resolved)
     assert images_dir == dataset / "images" / "val"
     assert labels_dir == dataset / "labels" / "val"
+
+
+# ---------------------------------------------------------------------- acquisition profiles
+def test_sardet_source_profile_matches_the_real_stem_layouts():
+    """The profiles must key on the actual SARDet-100K stem shapes; a prefix rule that
+    matches in theory but not on real stems would leave sources without acquisition
+    metadata and the conditioning arms comparing unknowns."""
+    from saryolo.data.convert import write_acquisition_metadata
+    from saryolo.data.metadata import MetadataTable
+
+    stems = [
+        "AIR_SARShip_1.0_001_0001", "HRSID_JPG_0001_0_800_10190_10990", "MSAR_000001",
+        "SADD_0001", "SAR-AIRcraft_0001_0", "ShipDataset_000001", "SSDD_000001",
+        "OGSOD_0001", "SIVED_0001",
+    ]
+    root = tmp_path_factory_factory()
+    for s in stems:
+        (root / f"{s}.jpg").write_bytes(b"x")
+    out = write_acquisition_metadata(root, root / "meta.json", "sardet100k")
+    table = MetadataTable.load(out)
+
+    # Every declared source matched at least one stem...
+    matched = {str(v.sensor) for v in table.entries.values() if v.sensor is not None}
+    assert matched == {"gaofen3", "mixed", "hisea1", "terrasarx", "airborne"}
+    # ...and every image carries a resolution, the field the cross-resolution rule bins.
+    assert all(v.resolution_m is not None for v in table.entries.values())
+    # Distinct resolutions exist, so resolution folds are actually buildable.
+    assert len({v.resolution_m for v in table.entries.values()}) >= 4
+
+
+def _tmp_root():
+    import tempfile
+    from pathlib import Path
+
+    return Path(tempfile.mkdtemp())
+
+
+tmp_path_factory_factory = _tmp_root
+
+
+def test_profile_refuses_when_nothing_matches():
+    """A profile matching no stems must be a refusal, not an all-unknown table that
+    silently makes every conditioning arm identical."""
+    import pytest
+
+    from saryolo.data.convert import write_acquisition_metadata
+
+    root = _tmp_root()
+    (root / "junk_001.jpg").write_bytes(b"x")
+    with pytest.raises(ValueError, match="matched none of"):
+        write_acquisition_metadata(root, root / "meta.json", "sardet100k")
+
+
+def test_profile_refuses_a_dataset_without_a_verified_profile():
+    """Profiles are sourced from official documentation only; a dataset without one
+    must fail loudly instead of inventing acquisition values."""
+    import pytest
+
+    from saryolo.data.convert import write_acquisition_metadata
+
+    root = _tmp_root()
+    (root / "x.jpg").write_bytes(b"x")
+    with pytest.raises(ValueError, match="no verified acquisition profile"):
+        write_acquisition_metadata(root, root / "meta.json", "ssdd")
+
+
+def test_hrsid_standalone_profile_applies_to_every_image():
+    from saryolo.data.convert import write_acquisition_metadata
+    from saryolo.data.metadata import MetadataTable
+
+    root = _tmp_root()
+    for s in ("P0001_0_800_10190_10990", "P0002_200_1000_11220_12020"):
+        (root / f"{s}.jpg").write_bytes(b"x")
+    out = write_acquisition_metadata(root, root / "meta.json", "hrsid")
+    table = MetadataTable.load(out)
+    assert all(v.resolution_m == 1.5 for v in table.entries.values())

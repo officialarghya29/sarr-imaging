@@ -9,9 +9,10 @@ not — every accuracy cell in every table is `TBD` until a real training run ha
 
 | Master phase | Status in this repo | Evidence |
 | --- | --- | --- |
-| 0. Research landscape | **Started, not closed** | `docs/research_gap.md` — verified entries + flagged full-text reads; novelty claims are frozen until those are done |
+| 0. Research landscape | **Started, not closed** | `docs/research_gap.md` — verified entries + flagged full-text reads; the two closest works (SARFormer, Zhang et al. 2026) read and differentiated; novelty claims frozen until the remaining abstract reads |
 | 1. Dataset audit | Built (tooling) | `check-data` / `stats` commands; EXP-001…003 configured; refuses oriented-label and empty-dataset traps |
 | 1b. Leakage check | Built | Per-fold leakage mode in `loso --leakage`; duplicate detection |
+| 1c. Acquisition metadata for the primary datasets | Built | Verified per-source profiles (SARDet-100K's official 10-source table; HRSID's stated resolutions/sensors) → `write_acquisition_metadata` → MetadataTable → LOSO resolution folds + conditioning arms. The cs231n mirror vendors HRSID+SSDD with on-disk counts, the fastest licensed route to the pilot datasets |
 | 2. YOLO11 baseline | Built, **not measured** | Baseline reproduces stock YOLO11 exactly (identity test); EXP-004 configured |
 | 3. RGB-pretraining baseline | **Missing** | Nothing in the repo establishes the RGB→SAR fine-tuning arm or the random-init control. Required before the input-adapter claim |
 | 4. SAR input adapter | Built | Component 12 (SIA), slot EXP-311…314, identity-at-init verified |

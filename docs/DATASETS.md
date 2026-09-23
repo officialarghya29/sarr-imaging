@@ -146,6 +146,36 @@ final chosen configurations at scale.
 The six classes are severely imbalanced (cars dominate), so report per-class AP
 as well as mAP. `saryolo.data.statistics` reports the imbalance ratio explicitly.
 
+### Acquisition profiles: the conditioning bridge (verified 2026-09-23)
+
+SARDet-100K publishes a per-source table of target, resolution, band, polarization
+and satellites — the exact signal the acquisition-conditioning arms and the
+leave-one-source-out protocol need.
+`saryolo.data.convert.SARDet_SOURCE_PROFILES` records it (AIR_SARShip, HRSID, MSAR,
+SADD, SAR-AIRcraft, ShipDataset, SSDD, OGSOD, SIVED; the paper's release notes list
+`SAR-Ship-Dataset` as `ShipDataset`), and
+`saryolo.data.convert.write_acquisition_metadata(images_dir, out, dataset="sardet100k")`
+turns it into a `MetadataTable` JSON keyed by image stem, ready for
+`loso --rule resolution --metadata` and for the conditioning trainer.
+
+Two things the profiles deliberately do *not* do: they do not invent values
+(every entry is sourced from the official table; ranges are carried as mid-point
+plus the published range), and they do not guess silently — a stem matching no
+source is counted and reported, a dataset without a verified profile is refused,
+and all-zero matching raises. HRSID standalone gets the same treatment with its
+three stated resolutions (0.5 / 1 / 3 m) and its Sentinel-1B / TerraSAR-X /
+TanDEM-X scene list; per-image per-polarization labels are not published, so
+`polarization` stays unknown rather than guessed.
+
+The cs231n mirror (<https://github.com/DonnieRaymond3/cs231n_ship_detection>)
+vendors both HRSID (`HRSID/HRSID_JPG/JPEGImages/` + COCO JSON: 5,604 images,
+train 3,642 / test 1,962) and SSDD (1,160 images; four label variants — use
+`BBox_SSDD` for horizontal-box detectors) with on-disk verification counts, which
+makes it the fastest licensed route to both pilot datasets. Its HRSID copy is the
+same official release, so all HRSID handling above applies unchanged; SSDD's
+inshore/offshore test subsets (46/186) are the intended cross-scenery probe and
+map onto our scene-grouped splits.
+
 ---
 
 ## Preparation workflow
