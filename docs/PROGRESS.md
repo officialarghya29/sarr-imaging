@@ -56,6 +56,17 @@ The two **missing** items on the critical path that do not need a GPU:
 1. ~~RGB-pretraining baseline arm~~ — **built**: `init:` config key + EXP-401…403 arms (verified transfer counts).
 2. ~~Representation-diagnosis tooling~~ — **built**: `saryolo.evaluation.probes` + the `probe` CLI.
 
+Latest additions (this session):
+3. ~~Multi-seed aggregation~~ — **built**: `build_multi_seed` now deduplicates restarted seed
+   runs (one row per `train_seed`, latest wins), reports sample std **and best/worst**
+   (SARVO Phase-40 contract), and keeps per-seed values visible even when only one seed has
+   finished (mean/std still TBD — one run is not validation). 12 new tests in
+   `tests/test_tables.py` pin the aggregation; the paper-tables module had no tests before.
+4. ~~Red-team review~~ — **built**: `reports/red_team_review.md` attacks the design while
+   every measurement-dependent verdict is marked `BLOCKED-ON-RUN` (no numbers exist yet).
+   Largest open engineering gap it records: **RT-DETR transfer is unimplemented** (W6), so
+   architecture-generality claims stay out of scope until it lands.
+
 What remains on the critical path needs a GPU: run `docs/RUNBOOK_SSDD.md` end to end. Every
 CPU-side prerequisite is now in place.
 

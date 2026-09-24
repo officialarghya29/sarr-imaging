@@ -363,28 +363,59 @@ def build_efficiency(ledger) -> Table:
     return table
 
 
+def _latest_per_seed(records, experiment_id: str):
+    """Latest completed record per training seed for one experiment id.
+
+    Seed arms share an ``experiment_id`` (see the generated ``EXP-012_seed*``
+    configs) and are distinguished by ``train_seed``. The ledger is append-only,
+    so a restarted seed run leaves *two* completed rows behind; the earlier one
+    is superseded, not evidence. Counting both would drag the seed's mean and
+    inflate ``n seeds`` with a rerun -- exactly the kind of number that looks
+    like variance and is actually a crashed job. One row per seed, the latest.
+    """
+    latest: dict[object, object] = {}
+    for record in records:
+        if record.experiment_id != experiment_id or record.status != "completed":
+            continue
+        if record.metrics.get("mAP50_95") is None:
+            continue
+        latest[record.train_seed] = record  # later append wins
+    return list(latest.values())
+
+
 def build_multi_seed(ledger, experiment_id: str = "EXP-012") -> Table:
-    """TABLE 9 — mean +/- std over seeds, plus the per-seed values."""
-    records = [r for r in _ledger_rows(ledger) if r.experiment_id == experiment_id]
-    values = [r.metrics.get("mAP50_95") for r in records if r.metrics.get("mAP50_95") is not None]
+    """TABLE 9 — mean +/- std over seeds, plus the per-seed values.
+
+    One row per training seed (the latest completed run of it), and best/worst
+    reported alongside mean and sample std: a seed whose result sits far outside
+    the rest is information about the method, not noise to be averaged away.
+    """
+    records = _latest_per_seed(_ledger_rows(ledger), experiment_id)
+    values = [r.metrics["mAP50_95"] for r in records]
     table = Table(
         "multi_seed",
         "Multi-seed validation. A single-seed difference of a few tenths of a point is not "
-        "evidence, so the headline result is reported as mean +/- std over seeds.",
-        ["Metric", "Mean", "Std", "n seeds", "Per-seed values"],
+        "evidence, so the headline result is reported as mean +/- std over seeds. "
+        "Std is the sample standard deviation; one row per training seed.",
+        ["Metric", "Mean", "Std", "Best", "Worst", "n seeds", "Per-seed values"],
     )
+    # The per-seed column is filled whenever a value exists; mean/std/best/worst
+    # need at least two seeds, because a single run is not validation.
+    per_seed = ", ".join(f"{v:.4f}" for v in values) if values else TBD
     if len(values) >= 2:
         import statistics
 
         table.rows.append([
             "mAP50:95",
             f"{statistics.mean(values):.4f}",
-            f"{statistics.pstdev(values):.4f}",
+            f"{statistics.stdev(values):.4f}",
+            f"{max(values):.4f}",
+            f"{min(values):.4f}",
             str(len(values)),
-            ", ".join(f"{v:.4f}" for v in values),
+            per_seed,
         ])
     else:
-        table.rows.append(["mAP50:95", TBD, TBD, str(len(values)), TBD])
+        table.rows.append(["mAP50:95", TBD, TBD, TBD, TBD, str(len(values)), per_seed])
     return table
 
 
