@@ -1,0 +1,112 @@
+# SAR-YOLO / RT-DETR conditioning feasibility variant -- GENERATED FILE, do not edit by hand.
+# Regenerate with:  python scripts/make_rtdetr_variant.py
+# Graph: stock ultralytics yolov8-rtdetr (scale s) + one AcquisitionConditionedAdapter
+# inserted on the deepest neck level (P5) before the decoder. See SARYOLORTDetectionModel
+# in saryolo/nn/model.py for the scope of this arm (feasibility, not a measured result).
+#
+# [from, repeats, module, args]
+nc: 1
+scales:
+  s: [0.33, 0.5, 1024]
+backbone:
+- - -1
+  - 1
+  - Conv
+  - [64, 3, 2]
+- - -1
+  - 1
+  - Conv
+  - [128, 3, 2]
+- - -1
+  - 3
+  - C2f
+  - [128, true]
+- - -1
+  - 1
+  - Conv
+  - [256, 3, 2]
+- - -1
+  - 6
+  - C2f
+  - [256, true]
+- - -1
+  - 1
+  - Conv
+  - [512, 3, 2]
+- - -1
+  - 6
+  - C2f
+  - [512, true]
+- - -1
+  - 1
+  - Conv
+  - [1024, 3, 2]
+- - -1
+  - 3
+  - C2f
+  - [1024, true]
+- - -1
+  - 1
+  - SPPF
+  - [1024, 5]
+head:
+- - -1
+  - 1
+  - nn.Upsample
+  - [None, 2, nearest]
+- - [-1, 6]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 3
+  - C2f
+  - [512]
+- - -1
+  - 1
+  - nn.Upsample
+  - [None, 2, nearest]
+- - [-1, 4]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 3
+  - C2f
+  - [256]
+- - -1
+  - 1
+  - Conv
+  - [256, 3, 2]
+- - [-1, 12]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 3
+  - C2f
+  - [512]
+- - -1
+  - 1
+  - Conv
+  - [512, 3, 2]
+- - [-1, 9]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 3
+  - C2f
+  - [1024]
+- - -1
+  - 1
+  - AcquisitionConditionedAdapter
+  - - ch
+    - 21
+    - film
+    - sensor_resolution
+    - [2, 2, 2]
+- - [15, 18, 22]
+  - 1
+  - RTDETRDecoder
+  - [nc]

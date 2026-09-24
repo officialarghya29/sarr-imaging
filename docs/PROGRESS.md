@@ -64,8 +64,15 @@ Latest additions (this session):
    `tests/test_tables.py` pin the aggregation; the paper-tables module had no tests before.
 4. ~~Red-team review~~ — **built**: `reports/red_team_review.md` attacks the design while
    every measurement-dependent verdict is marked `BLOCKED-ON-RUN` (no numbers exist yet).
-   Largest open engineering gap it records: **RT-DETR transfer is unimplemented** (W6), so
-   architecture-generality claims stay out of scope until it lands.
+5. ~~Paper-structure skeleton (SARVO Phase 55)~~ — **built**: `reports/paper/` holds the
+   section skeletons (abstract → limitations), each with its evidence source and its blocked
+   status; the README gained the Part X paper-assembly section.
+6. ~~RT-DETR feasibility arm (red-team W6)~~ — **built, not measured**:
+   `SARYOLORTDetectionModel` + generator-derived `configs/models/rtdetr/rtdetr_s_cond_film.yaml`
+   (`scripts/make_rtdetr_variant.py`, `--check` guards drift). Proven end to end through the
+   real vocabulary path: adapter in graph, decoder consumes conditioned features, held-out
+   sensor → unknown row, bit-identical to stock at init. The training-loop integration and
+   any LOSO number remain open — feasibility ≠ result.
 
 What remains on the critical path needs a GPU: run `docs/RUNBOOK_SSDD.md` end to end. Every
 CPU-side prerequisite is now in place.

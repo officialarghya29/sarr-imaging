@@ -92,9 +92,18 @@ than the seed spread is not evidence.
 
 Everything currently runs on the YOLO11-family graph. The master workflow
 requires demonstrating the mechanism on a second detector (RT-DETR) before
-calling it architecture-general. As of this review, **no RT-DETR integration
-exists in the codebase** — this is the largest open engineering gap, and until
-it lands the claim must be scoped to "one detector family".
+calling it architecture-general.
+
+*Update (feasibility arm built):* `SARYOLORTDetectionModel`
+(`saryolo/nn/model.py`) plus the generator-derived variant
+(`configs/models/rtdetr/rtdetr_s_cond_film.yaml`, produced by
+`scripts/make_rtdetr_variant.py`) prove the conditioned adapter inserts into an
+RT-DETR graph, that vocabulary preparation works through the *same*
+`prepare_conditioned_config` path as YOLO, that a held-out sensor lands on the
+unknown row, and that the graph stays bit-identical to stock at init
+(`tests/test_rtdetr_arm.py`). **This is feasibility, not a measured result** —
+the RT-DETR training-loop integration (task-map wiring, loss checks) remains
+open, and no cross-architecture claim may be made until a LOSO number exists.
 
 ## W7 — Protocol fairness
 

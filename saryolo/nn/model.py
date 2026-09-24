@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from ultralytics.nn.tasks import DetectionModel
+from ultralytics.nn.tasks import DetectionModel, RTDETRDetectionModel
 
 from .losses import build_criterion
 
-__all__ = ["SARYOLODetectionModel", "attach_metadata_context"]
+__all__ = ["SARYOLODetectionModel", "SARYOLORTDetectionModel", "attach_metadata_context"]
 
 #: Batch key carrying per-image acquisition metadata as a ``(continuous, categorical,
 #: availability)`` triple of tensors.
@@ -68,6 +68,34 @@ def set_batch_metadata(model, metadata) -> bool:
         else:
             context.set(continuous, categorical, availability)
     return True
+
+
+class SARYOLORTDetectionModel(RTDETRDetectionModel):
+    """RT-DETR facade carrying the same acquisition-metadata context.
+
+    Scope (honest, per ``reports/red_team_review.md`` W6): this is the *feasibility*
+    arm for the architecture-generality claim. It proves the conditioned adapter inserts
+    into an RT-DETR graph, builds, runs, and consumes the metadata context — nothing more.
+    The training-loop integration (a task-map entry wiring the conditioned predictor into
+    RT-DETR's trainer, and loss-side checks) is the remaining work before a cross-architecture
+    number can be measured, and no claim of architecture-generality may be made until it is.
+
+    The adapter itself is agnostic: it modulates whatever feature map it is inserted after,
+    and the module registration (``saryolo.nn.register``) makes it resolvable from *any*
+    Ultralytics YAML, including RT-DETR's.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.n_conditioned_adapters = attach_metadata_context(self)
+
+    def init_criterion(self):
+        """RT-DETR's own loss. The SAR-aware criterion is a v8-head construct."""
+        if getattr(self, "args", None) is None:
+            from types import SimpleNamespace
+
+            self.args = SimpleNamespace(box=5.0, cls=1.0)
+        return super().init_criterion()
 
 
 class SARYOLODetectionModel(DetectionModel):
