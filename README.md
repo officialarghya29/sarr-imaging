@@ -6,7 +6,7 @@
 
 *Four modules, each derived from a failure mode of SAR imagery — and each one ablatable.*
 
-![status](https://img.shields.io/badge/tests-283_passing-22c55e) ![honesty](https://img.shields.io/badge/fabricated_results-0-black) ![arch](https://img.shields.io/badge/architectures-87_wired-3b82f6) ![exps](https://img.shields.io/badge/experiments-91_configured-8b5cf6) ![license](https://img.shields.io/badge/license-MIT-94a3b8)
+![status](https://img.shields.io/badge/tests-316_passing-22c55e) ![honesty](https://img.shields.io/badge/fabricated_results-0-black) ![arch](https://img.shields.io/badge/architectures-87_wired-3b82f6) ![exps](https://img.shields.io/badge/experiments-91_configured-8b5cf6) ![license](https://img.shields.io/badge/license-MIT-94a3b8)
 
 </div>
 
@@ -24,7 +24,7 @@
 | **Stack** | Python 3.10+ · Ultralytics 8.4.155 · PyTorch 2.x |
 | **Architectures** | 87 variants wired; every one builds and runs a forward pass |
 | **Experiments** | 91 configured; each reproducible from a committed YAML |
-| **Tests** | 305 passing — no dataset download and no GPU needed |
+| **Tests** | 316 passing — no dataset download and no GPU needed |
 | **Accuracy results** | none yet — not one number in this repository is fabricated |
 
 ---
@@ -60,7 +60,7 @@ SAR image ──► SIA ──► backbone ──► components 1/2/9 ──► 
 | | |
 | --- | --- |
 | **What this is** | A complete, reproducible research pipeline for SAR object detection: dataset audit → baseline → ten documented components → ablations → removal tests → robustness → efficiency → cross-dataset → paper. |
-| **What is proven** | The infrastructure. 305 tests pass; the baseline reproduces stock YOLO11 exactly; all eleven modules are measurably identity functions at initialisation *and* demonstrably not frozen; every model trains end to end. |
+| **What is proven** | The infrastructure. 316 tests pass; the baseline reproduces stock YOLO11 exactly; all eleven modules are measurably identity functions at initialisation *and* demonstrably not frozen; every model trains end to end. |
 | **What is *not* proven** | Accuracy. **No model has been trained on a real SAR dataset in this repository.** There is no result table here with numbers in it, and the table generators refuse to print one. |
 | **Why that's the point** | A detector paper is only as strong as its ablations. If the machinery that produces those ablations cannot be trusted, every number downstream is unverifiable. Build the instrument first. |
 
@@ -375,6 +375,9 @@ Component 11 needs a control that is uncommon in detection papers, because "defo
 | **Conditioning survives a real training run, not just a unit test** | the actual `SARYOLOTrainer` runs over a metadata-bearing dataset: batches carry aligned descriptors and an adapter gate leaves zero | `tests/test_conditioning_smoke.py` |
 | **Validation conditions too — the model is not silently fed an "unknown" acquisition** | the validator is handed a *path* by `final_eval`, and a path carries no context, so the metrics would describe an unconditioned model; resolution is pinned for every handle | `test_conditioned_validation_conditions_on_metadata`, `test_the_validator_resolves_a_real_module_from_every_handle_it_is_given`, `test_checkpoint_vocabularies_come_back_frozen_not_rebuilt` |
 | **A conditioned checkpoint is probed *conditioned*** | feeding it no acquisition would report the *unconditioned* representation, invalidating the baseline-vs-conditioned comparison; vocabularies are read from the checkpoint, and the extraction leaves no acquisition behind | `test_probe_conditions_a_conditioned_checkpoint`, `test_collect_head_features_applies_the_acquisition_it_is_given`, `test_collect_head_features_leaves_no_acquisition_behind`, `test_probe_refuses_a_conditioned_checkpoint_without_acquisition` |
+| **A withheld acquisition field encodes exactly like an absent one** | value *and* availability zeroed, categorical id forced to the reserved unknown row — the missing-metadata study measures real degradation, not a fabricated `resolution = 0.1 m` | `test_masked_field_encodes_like_a_never_recorded_field`, `test_a_masked_categorical_field_lands_on_the_unknown_row`, `tests/test_field_mask.py` |
+| **The LOSO protocol runs end to end on a conditioned model** | three sensors in the fixture, one held out of training only: the vocabulary cannot name the held-out sensor, validation still conditions on it, and the unseen sensor lands on the unknown row while its physical descriptors survive | `test_a_conditioned_model_trains_without_the_held_out_sensor_and_still_validates_on_it` |
+| **A metadata-field restriction survives fold generation** | `loso --metadata-fields sensor` writes the restriction into every fold config, so no fold's number is measured under a different protocol than its neighbour | `test_a_metadata_field_restriction_is_written_into_every_fold_config` |
 | **LOSO refuses to report a number it cannot back** | one group, or a zero-ground-truth fold, raises instead of yielding a score | `tests/test_groups.py`, `tests/test_metrics.py` |
 | **No README-cited test can be missing** | every test name in a code span must exist, and a truncated name counts as unverifiable rather than being skipped | `test_every_test_cited_in_the_readme_exists` |
 | Deformable refinement's grid identity is pinned | zero offset → `7e-7` dev; 0.04-cell shift → `0.4` | `test_refinement_resampling_is_an_identity_at_zero_offset` |
@@ -514,7 +517,7 @@ uv pip install --python .venv/bin/python torch torchvision --index-url https://d
 uv pip install --python .venv/bin/python ultralytics pytest
 source .venv/bin/activate
 
-pytest tests/ -q                                          # 305 tests
+pytest tests/ -q                                          # 316 tests
 python -m saryolo arch --variant all --nc 1               # emit 87 model YAMLs
 python -m saryolo synth-data --out datasets/processed/synthetic_smoke
 python -m saryolo train --exp configs/exp/_smoke_baseline.yaml

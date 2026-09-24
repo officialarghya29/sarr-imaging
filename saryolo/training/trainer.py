@@ -128,16 +128,42 @@ def _model_has_conditioner(cfg: Any) -> bool:
     )
 
 
-def _metadata_descriptor(table, vocabularies, stem: str) -> dict[str, torch.Tensor]:
-    """Convert one sourced record to CPU tensors, ready for DataLoader collation."""
+def _metadata_descriptor(table, vocabularies, stem: str, field_mask=None) -> dict[str, torch.Tensor]:
+    """Convert one sourced record to CPU tensors, ready for DataLoader collation.
+
+    ``field_mask`` implements the missing-metadata degradation study (master workflow, the
+    metadata ablation): a run can declare that only some acquisition fields are *delivered*
+    even though the table carries them all. Masking zeroes the value and the availability flag
+    together -- and forces a categorical id to the reserved unknown index -- so a withheld
+    field is encoded exactly like a field that was never recorded, which is what makes "the
+    model degrades gracefully without metadata" a measurable claim instead of a hope.
+    """
+    from saryolo.data.field_mask import apply_metadata_mask
     from saryolo.data.metadata import encode_metadata
 
     continuous, categorical, availability = encode_metadata(table.get(stem), vocabularies)
-    return {
+    descriptor = {
         "continuous": torch.tensor(continuous, dtype=torch.float32),
         "categorical": torch.tensor(categorical, dtype=torch.long),
         "availability": torch.tensor(availability, dtype=torch.float32),
     }
+    return apply_metadata_mask(descriptor, field_mask)
+
+
+def data_config_field_mask(data: dict[str, Any]):
+    """The field mask a dataset config requests, validated and ready to apply.
+
+    ``metadata_fields`` in the data YAML names the acquisition fields a run *delivers* to the
+    adapter. The distinction from the adapter's own ``fields`` argument matters: that selects
+    which fields the *module* reads (a graph-level ablation), this selects which fields the
+    *data* supplies (a deployment-level degradation). The full-model arms of the missing-
+    metadata study need the second, because a graph that only ever reads ``sensor`` has no
+    resolution to lose.
+    """
+    from saryolo.data.field_mask import metadata_field_mask, resolve_metadata_fields
+
+    kept = resolve_metadata_fields(data.get("metadata_fields"))
+    return metadata_field_mask(kept)
 
 
 def encode_prediction_metadata(
@@ -205,7 +231,7 @@ class AcquisitionMetadataDetectionDataset(YOLODataset):
         return result
 
 
-def _attach_metadata(dataset: YOLODataset, table, vocabularies) -> None:
+def _attach_metadata(dataset: YOLODataset, table, vocabularies, field_mask=None) -> None:
     """Join a metadata table to a constructed dataset without changing its sample order."""
     if not isinstance(dataset, YOLODataset):
         raise TypeError(f"metadata conditioning supports YOLO detection datasets, got {type(dataset).__name__}")
@@ -219,7 +245,9 @@ def _attach_metadata(dataset: YOLODataset, table, vocabularies) -> None:
             f"(e.g. {missing[:3]}); rebuild the table for this exact split"
         )
     dataset.__class__ = AcquisitionMetadataDetectionDataset
-    dataset._acquisition_rows = {stem: _metadata_descriptor(table, vocabularies, stem) for stem in stems}
+    dataset._acquisition_rows = {
+        stem: _metadata_descriptor(table, vocabularies, stem, field_mask=field_mask) for stem in stems
+    }
 
 
 def _native_module(handle) -> Any | None:
@@ -326,7 +354,10 @@ class AcquisitionDetectionValidator(DetectionValidator):
             from saryolo.data.metadata import Vocabulary
 
             vocabularies = {key: Vocabulary.from_dict(value) for key, value in serialized.items()}
-            _attach_metadata(dataset, table_config["table"], vocabularies)
+            _attach_metadata(
+                dataset, table_config["table"], vocabularies,
+                field_mask=data_config_field_mask(self.data),
+            )
         else:
             conditioned = getattr(model, "n_conditioned_adapters", 0)
             if not conditioned and self._metadata_checkpoint is not None:
@@ -424,7 +455,10 @@ class SARYOLOTrainer(DetectionTrainer):
             self._metadata_table = table_config["table"]
         elif self._metadata_table is None or self._metadata_vocabularies is None:
             raise ValueError("training metadata vocabulary must be built before validation")
-        _attach_metadata(dataset, self._metadata_table, self._metadata_vocabularies)
+        _attach_metadata(
+            dataset, self._metadata_table, self._metadata_vocabularies,
+            field_mask=data_config_field_mask(self.data),
+        )
         return dataset
 
     def preprocess_batch(self, batch: dict[str, Any]) -> dict[str, Any]:

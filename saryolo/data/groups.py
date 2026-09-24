@@ -472,6 +472,7 @@ def write_loso_splits(
     names: list[str] | None = None,
     nc: int | None = None,
     acquisition_metadata: str | Path | None = None,
+    metadata_fields: list[str] | tuple[str, ...] | str | None = None,
 ) -> Path:
     """Persist one directory per fold, plus a manifest recording how it was built.
 
@@ -550,6 +551,12 @@ def write_loso_splits(
                 )
                 fold_metadata = fold_table.save(fold_dir / "acquisition_metadata.json")
                 base["acquisition_metadata"] = str(fold_metadata.resolve())
+            if metadata_fields is not None:
+                # The missing-metadata degradation must survive fold generation: a run that
+                # withholds, say, resolution has to withhold it in every fold, or one fold's
+                # number would be measured under a different protocol than its neighbour's and
+                # the per-fold comparison would quietly mix protocols.
+                base["metadata_fields"] = list(metadata_fields)
             (fold_dir / "data.yaml").write_text(
                 header + yaml.safe_dump(
                     {**base, "train": str(fold_dir / "train.txt"),

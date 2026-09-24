@@ -292,6 +292,39 @@ def test_written_folds_carry_runnable_configs_with_val_pointing_at_the_held_out_
         assert not (bare / folds[0].name / "data.yaml").exists()
 
 
+def test_a_metadata_field_restriction_is_written_into_every_fold_config(tmp_path):
+    """The missing-metadata protocol must survive fold generation.
+
+    A restriction delivered to ``write_loso_splits`` but dropped from the fold configs would
+    let one fold train with full metadata while its neighbour trained with fields withheld --
+    and the per-fold table would compare numbers measured under different protocols. Both
+    configs per fold must carry the restriction, and the CLI-level validation has already
+    refused unknown field names by the time this runs.
+    """
+    import yaml
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        paths = _sensor_tree(root, {"s1": 30, "g3": 40})
+        groups = discover_sources(paths, SourceRule.parent(root))
+        folds = leave_one_out_folds(groups, min_test_images=10)
+        out = write_loso_splits(
+            folds, Path(tmp) / "loso", groups=groups, names=["ship"],
+            metadata_fields=["sensor"],
+        )
+
+        for fold in folds:
+            for config_name in ("data.yaml", "eval_holdout.yaml"):
+                cfg = yaml.safe_load((out / fold.name / config_name).read_text())
+                assert cfg["metadata_fields"] == ["sensor"], (fold.name, config_name)
+
+        # No restriction in, no restriction written: a full-metadata run must not gain a
+        # stale key just because the writer knows how to write one.
+        plain = write_loso_splits(folds, Path(tmp) / "plain", groups=groups, names=["ship"])
+        cfg = yaml.safe_load((plain / folds[0].name / "data.yaml").read_text())
+        assert "metadata_fields" not in cfg
+
+
 def test_binned_rule_splits_a_continuous_field_into_resolution_groups():
     """The cross-resolution protocol: resolution is a number, so it is binned, not keyed.
 

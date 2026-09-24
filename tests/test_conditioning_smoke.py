@@ -375,6 +375,155 @@ def test_conditioned_validation_conditions_on_metadata(tmp_path, conditioned_con
         )
 
 
+# ---------------------------------------------------------------------- the LOSO protocol
+
+def _write_loso_fixture(tmp_path: Path, n_per_sensor: int = 3) -> tuple[Path, Path]:
+    """A three-sensor dataset (s1, g3, tsx) plus its acquisition table.
+
+    The held-out sensor (``tsx``) exists *only* in the val split, mirroring the
+    leave-one-source-out protocol: the model never trains on it, and every deployment claim
+    this project makes is tested exactly there. Brightness differs per sensor so the runs are
+    not degenerate, but no assertion depends on the model learning anything.
+    """
+    import cv2
+
+    root = tmp_path / "ds"
+    sensors = (("s1", 40, 10.0), ("g3", 160, 3.0), ("tsx", 220, 1.5))
+    entries: dict[str, dict] = {}
+    for split in ("train", "val"):
+        images = root / "images" / split
+        labels = root / "labels" / split
+        images.mkdir(parents=True)
+        labels.mkdir(parents=True)
+        for i in range(n_per_sensor):
+            for sensor, brightness, res in sensors:
+                if sensor == "tsx" and split == "train":
+                    continue  # the held-out source is never in training
+                stem = f"{sensor}_{i:03d}"
+                img = np.full((64, 64), brightness, dtype=np.uint8)
+                img[24:40, 24:40] = np.clip(img[24:40, 24:40].astype(int) + 60, 0, 255).astype(np.uint8)
+                cv2.imwrite(str(images / f"{stem}.png"), img)
+                (labels / f"{stem}.txt").write_text("0 0.500000 0.500000 0.250000 0.250000\n")
+                entries[stem] = {
+                    "sensor": sensor, "resolution_m": res, "polarization": None,
+                    "mode": None, "band": "C", "incidence_deg": 33.0,
+                }
+
+    import json
+
+    table_path = tmp_path / "acquisition_metadata.json"
+    table_path.write_text(json.dumps({
+        "source": "test:synthetic-loso", "entries": entries, "vocabularies": {},
+    }))
+    data_yaml = tmp_path / "data.yaml"
+    data_yaml.write_text(yaml.safe_dump({
+        "path": str(root), "nc": 1, "names": ["target"],
+        "train": str(root / "images" / "train"), "val": str(root / "images" / "val"),
+        "acquisition_metadata": str(table_path),
+    }, sort_keys=False))
+    return root, data_yaml
+
+
+def test_a_conditioned_model_trains_without_the_held_out_sensor_and_still_validates_on_it(
+    tmp_path, conditioned_config, monkeypatch
+):
+    """The protocol end to end: unseen sensor in the val batch, vocabulary that cannot name it.
+
+    This is the deployment claim in miniature. Three properties have to hold at once or the
+    claim is not being tested:
+
+    1. the training vocabulary contains only the *training* sensors -- the held-out sensor has
+       no embedding row, which is the entire reason the categorical path cannot transfer and
+       the continuous fields exist;
+    2. validation runs on the held-out source and reaches the model -- the unseen acquisition
+       is encoded, not skipped;
+    3. the unseen sensor lands on the reserved unknown index, the row the adapter actually
+       reads for a sensor it has never seen.
+
+    A failure in any of the three quietly becomes "we measured the seen sensor again", which
+    is the most expensive way to be wrong in this project.
+    """
+    root, data_yaml = _write_loso_fixture(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    from ultralytics.cfg import DEFAULT_CFG_DICT
+    from ultralytics.utils import SETTINGS
+
+    from saryolo.data.metadata import UNKNOWN_INDEX, MetadataTable, encode_metadata
+    from saryolo.training.trainer import SARYOLOTrainer
+
+    SETTINGS.update({"datasets_dir": str(tmp_path)})
+
+    overrides = {
+        "model": str(conditioned_config["model_yaml"]),
+        "data": str(data_yaml),
+        "epochs": 2,
+        "imgsz": 64,
+        "batch": 4,
+        "seed": 0,
+        "workers": 0,
+        "plots": False,
+        "val": True,
+        "save": False,
+        "project": str(tmp_path / "runs"),
+        "name": "loso_smoke",
+        "exist_ok": True,
+        "cache": False,
+        "device": "cpu",
+        "mosaic": 0.0,
+        "mixup": 0.0,
+        "cutmix": 0.0,
+        "copy_paste": 0.0,
+        "verbose": False,
+        "warmup_epochs": 0.0,
+        "lr0": 0.05,
+        "momentum": 0.9,
+        "weight_decay": 0.0,
+        "nbs": 8,
+    }
+    SARYOLOTrainer(cfg=DEFAULT_CFG_DICT, overrides=overrides).train()
+
+    # 1. Training-only vocabulary: the held-out sensor has no row.
+    model = trainer_model(tmp_path)
+    vocab = model.metadata_vocabularies["sensor"]
+    assert set(vocab["entries"]) == {"g3", "s1"}, (
+        f"the training vocabulary saw the held-out sensor: {vocab['entries']}"
+    )
+
+    # 2 + 3. The held-out split encodes against that frozen vocabulary: its sensor lands on
+    # the unknown index, and its physical descriptors survive, which is the path that is
+    # supposed to transfer.
+    table = MetadataTable.load(tmp_path / "acquisition_metadata.json")
+    from saryolo.data.metadata import Vocabulary
+
+    vocabs = {k: Vocabulary.from_dict(v) for k, v in model.metadata_vocabularies.items()}
+    held_out = sorted((root / "images" / "val").glob("tsx_*.png"))
+    assert held_out, "fixture lost its held-out source"
+    for image in held_out:
+        meta = table.get(image.stem)
+        _continuous, categorical, availability = encode_metadata(meta, vocabs)
+        assert categorical[0] == UNKNOWN_INDEX, (
+            f"{image.stem}: the unseen sensor encoded as a known one at index {categorical[0]}"
+        )
+        assert availability[0] == 1.0, "the unseen sensor must be *known-unknown*, not absent"
+        # And the fields that can transfer are still there.
+        i_res = ("resolution_m", "incidence_deg", "band").index("resolution_m")
+        assert availability[i_res] == 1.0 and _continuous[i_res] > 0.0
+
+
+def trainer_model(tmp_path: Path):
+    """The trained conditioned model of the most recent run in ``tmp_path``.
+
+    Kept as a helper so the assertion block reads as the protocol, not as checkpoint plumbing.
+    """
+    import torch
+
+    checkpoints = sorted((tmp_path / "runs").rglob("last.pt"))
+    assert checkpoints, "no checkpoint was written"
+    payload = torch.load(checkpoints[-1], map_location="cpu", weights_only=False)
+    return payload.get("ema") or payload.get("model")
+
+
 def test_conditioned_metadata_rows_match_their_own_images(tmp_path, conditioned_config, monkeypatch):
     """Each training image must receive its own acquisition row, not a neighbour's.
 

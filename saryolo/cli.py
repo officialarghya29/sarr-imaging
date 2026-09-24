@@ -789,6 +789,16 @@ def _cmd_loso(args) -> int:
             raise SystemExit(f"--sidecar {side} does not exist")
         rule = SourceRule.sidecar(json.loads(side.read_text()))
 
+    if getattr(args, "metadata_fields", None):
+        try:
+            from saryolo.data.field_mask import resolve_metadata_fields
+
+            resolve_metadata_fields(args.metadata_fields)
+        except (TypeError, ValueError) as exc:
+            # Refused here rather than at training time, so a typo in the field list costs one
+            # command instead of a fold generation followed by a failed run.
+            raise SystemExit(f"--metadata-fields: {exc}") from None
+
     # A bad rule is a user error, not a crash: report what was found and how to fix it
     # without a traceback, so the message is the whole diagnosis.
     try:
@@ -817,6 +827,7 @@ def _cmd_loso(args) -> int:
     out_dir = write_loso_splits(
         folds, args.out, groups=groups, seed=args.seed, names=names,
         acquisition_metadata=acquisition_metadata,
+        metadata_fields=getattr(args, "metadata_fields", None),
     )
 
     print(f"\nleave-one-source-out folds -> {out_dir}")
@@ -1100,6 +1111,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="for --rule resolution: metadata table JSON (saryolo.data.metadata)")
     p.add_argument("--acquisition-metadata", default=None,
                    help="optional per-image acquisition table copied into each fold config for conditioned training")
+    p.add_argument("--metadata-fields", default=None, dest="metadata_fields",
+                   help="comma-separated acquisition fields the runs may see (missing-metadata "
+                        "degradation study); withheld fields are encoded as absent, and the "
+                        "restriction is written into every fold config so all folds share one protocol")
     p.add_argument("--edges", default=None, dest="edges",
                    help="for --rule resolution: comma-separated ascending bin edges in metres, "
                         "e.g. '5,10,20'; bins are unbounded at both ends")
