@@ -338,6 +338,28 @@ def _cmd_probe(args) -> int:
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     inner = inner.to(device).eval()
 
+    # A conditioned checkpoint must be diagnosed *conditioned*. Feeding it no acquisition
+    # would exercise its "unknown" branch, so the features would be the unconditioned ones
+    # and the baseline-vs-conditioned comparison -- the whole point of this probe -- would
+    # be silently invalid. The vocabularies come from the checkpoint, never rebuilt here: a
+    # rebuilt vocabulary renumbers the embedding table under trained weights.
+    probe_vocabularies = None
+    if getattr(inner, "n_conditioned_adapters", 0):
+        from saryolo.data.metadata import Vocabulary
+
+        serialized = getattr(inner, "metadata_vocabularies", None)
+        if not serialized:
+            raise SystemExit(
+                f"{weights} contains a conditioned adapter but no frozen metadata vocabulary; "
+                "it cannot be diagnosed conditioned"
+            )
+        if table is None:
+            raise SystemExit(
+                "this checkpoint is acquisition-conditioned, so the probe must supply each "
+                "image's acquisition: pass --metadata or --dataset"
+            )
+        probe_vocabularies = {key: Vocabulary.from_dict(value) for key, value in serialized.items()}
+
     per_level_features: dict[int, list] = {}
     per_level_labels: dict[str, list] = {}
     batch_size = args.batch
@@ -353,7 +375,15 @@ def _cmd_probe(args) -> int:
         chunk_labels = {args.field: chunk_field}
         if args.class_field:
             chunk_labels["class"] = class_labels[start : start + batch_size]
-        extraction = collect_head_features(inner, x, labels=chunk_labels)
+        chunk_metadata = None
+        if probe_vocabularies is not None:
+            from saryolo.training.trainer import encode_prediction_metadata
+
+            chunk_metadata = encode_prediction_metadata(
+                chunk, table, probe_vocabularies, allow_unknown=True
+            )
+            chunk_metadata = {k: v.to(device) for k, v in chunk_metadata.items()}
+        extraction = collect_head_features(inner, x, labels=chunk_labels, metadata=chunk_metadata)
         level_shapes = extraction.level_shapes
         for level in extraction.levels():
             per_level_features.setdefault(level, []).append(extraction.features[level])
@@ -378,6 +408,10 @@ def _cmd_probe(args) -> int:
     if class_names_present:
         report["class_vocab"] = {str(k): v for k, v in class_names_present.items()}
     report["chance_rate"] = 1.0 / len(vocab)
+    # Recorded because the two reports are only comparable if their conditioning matches: a
+    # conditioned checkpoint diagnosed without acquisition describes the *unconditioned*
+    # representation, and nothing in the accuracy numbers would reveal that.
+    report["conditioned"] = probe_vocabularies is not None
     report["note"] = (
         "diagnosis, not evidence: on an untrained checkpoint these numbers are placeholders; "
         "compare probe accuracy against the stated chance rate, not against 1.0"

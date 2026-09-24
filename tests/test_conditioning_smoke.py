@@ -31,6 +31,17 @@ import torch
 import yaml
 
 
+class _ModuleCarrier:
+    """Stands in for an inference backend, whose only relevant attribute is ``.model``.
+
+    ``AutoBackend.__getattr__`` resolves ``.model`` by forwarding to this object, so a carrier
+    reproduces the real resolution path without exporting a model to disk.
+    """
+
+    def __init__(self, model):
+        self.model = model
+
+
 def _write_conditioned_fixture(tmp_path: Path, n_per_sensor: int = 4) -> tuple[Path, Path]:
     """A tiny two-sensor dataset plus its acquisition table, ready to train on.
 
@@ -213,6 +224,155 @@ def test_one_epoch_conditioned_training_reaches_the_model(tmp_path, conditioned_
     assert getattr(model, "metadata_vocabularies", None), "no vocabulary was frozen onto the model"
     vocab = model.metadata_vocabularies["sensor"]
     assert set(vocab["entries"]) == {"g3", "s1"}, vocab
+
+
+def test_the_validator_resolves_a_real_module_from_every_handle_it_is_given(tmp_path):
+    """The validator is handed three different things; only two of them are the model.
+
+    ``Trainer.final_eval`` validates with ``self.validator(model=self.best)`` -- a **path**. A
+    path has no ``metadata_context``, so ``set_batch_metadata`` returns ``False`` and the run
+    reports numbers from an unconditioned model without any error at all. That was a real,
+    silent defect: the code stored the path as if it were the model. This pins the resolution
+    for each handle so the mistake cannot come back through a refactor.
+    """
+    import torch as _torch
+
+    from saryolo.training.trainer import _native_module
+
+    # 1. A module is returned as itself.
+    model = _torch.nn.Linear(2, 2)
+    assert _native_module(model) is model
+
+    # 2. A path is *not* a model. This is the exact case that silently disabled conditioning.
+    checkpoint = tmp_path / "weights.pt"
+    _torch.save({"model": _torch.nn.Linear(2, 2)}, checkpoint)
+    assert _native_module(checkpoint) is None
+    assert _native_module(str(checkpoint)) is None
+    assert _native_module(None) is None
+
+    # 3. An AutoBackend wraps the model rather than being it, so the native module behind
+    #    ``.model`` must be returned -- the same resolution the predictor uses. A real
+    #    AutoBackend object is used (not a stub), so the attribute forwarding that makes this
+    #    work is itself under test.
+    from ultralytics.nn.autobackend import AutoBackend
+
+    inner = _torch.nn.Linear(2, 2)
+    auto = AutoBackend.__new__(AutoBackend)
+    _torch.nn.Module.__init__(auto)
+    # AutoBackend.__getattr__ forwards an unknown attribute to ``self.backend``, which is why
+    # ``.model`` resolves at all; a backend standing in for the PyTorch one reproduces exactly
+    # that resolution without exporting a model.
+    object.__setattr__(auto, "backend", _ModuleCarrier(inner))
+    assert _native_module(auto) is inner
+
+
+def test_checkpoint_vocabularies_come_back_frozen_not_rebuilt(tmp_path):
+    """A standalone conditioned val must read the vocabulary the checkpoint was trained with.
+
+    Rebuilding one at validation time would renumber the embedding table under trained weights,
+    which is worse than failing: it produces plausible scores against the wrong rows.
+    """
+    import torch as _torch
+
+    from saryolo.training.trainer import _checkpoint_metadata_vocabularies
+
+    frozen = {"sensor": {"name": "sensor", "entries": ["g3", "s1"], "unknown_index": 0}}
+    model = _torch.nn.Linear(2, 2)
+    model.metadata_vocabularies = frozen
+
+    # Saved under ``model`` and, separately, under ``ema`` -- final_eval validates the EMA
+    # weights, so both spellings have to be read.
+    for key in ("model", "ema"):
+        path = tmp_path / f"{key}.pt"
+        _torch.save({key: model}, path)
+        assert _checkpoint_metadata_vocabularies(path) == frozen
+
+    # A checkpoint without the attribute, and a path that does not exist, both report nothing
+    # rather than inventing a vocabulary.
+    plain = tmp_path / "plain.pt"
+    _torch.save({"model": _torch.nn.Linear(2, 2)}, plain)
+    assert _checkpoint_metadata_vocabularies(plain) is None
+    assert _checkpoint_metadata_vocabularies(tmp_path / "missing.pt") is None
+
+
+def test_conditioned_validation_conditions_on_metadata(tmp_path, conditioned_config, monkeypatch):
+    """Validation must condition on metadata too, not silently fall back to "unknown".
+
+    The training-side assertion above cannot see this. During validation the model is the EMA,
+    reached through the validator rather than the trainer, and if the validator ever failed to
+    attach and then set the metadata, the adapter's own fallback would quietly serve an
+    all-unknown acquisition: the code would not raise, and mAP would just be measured
+    unconditioned. That is exactly the silent-failure shape this file exists to catch, so the
+    assertion is on the *model's context after the validator preprocessed the batch*, not on
+    any configuration text.
+    """
+    root, data_yaml = _write_conditioned_fixture(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    from ultralytics.cfg import DEFAULT_CFG_DICT
+    from ultralytics.utils import SETTINGS
+
+    from saryolo.training.trainer import AcquisitionDetectionValidator, SARYOLOTrainer
+
+    SETTINGS.update({"datasets_dir": str(tmp_path)})
+
+    observed: list[dict] = []
+
+    original_preprocess = AcquisitionDetectionValidator.preprocess
+
+    def spy_preprocess(self, batch):
+        batch = original_preprocess(self, batch)
+        model = getattr(self, "_metadata_model", None)
+        context = getattr(model, "metadata_context", None)
+        observed.append({
+            "has_metadata": batch.get("metadata") is not None,
+            "rows": None if batch.get("metadata") is None else int(batch["metadata"]["continuous"].shape[0]),
+            "img_rows": int(batch["img"].shape[0]),
+            "context_set": bool(context is not None and context.is_set),
+            # Pins that the metadata landed on a real module rather than on the checkpoint path
+            # ``final_eval`` hands the validator.
+            "model_type": type(model).__name__ if model is not None else None,
+        })
+        return batch
+
+    monkeypatch.setattr(AcquisitionDetectionValidator, "preprocess", spy_preprocess)
+
+    overrides = {
+        "model": str(conditioned_config["model_yaml"]),
+        "data": str(data_yaml),
+        "epochs": 1,
+        "imgsz": 64,
+        "batch": 4,
+        "seed": 0,
+        "workers": 0,
+        "plots": False,
+        "val": True,
+        "save": False,
+        "project": str(tmp_path / "runs"),
+        "name": "cond_val_smoke",
+        "exist_ok": True,
+        "cache": False,
+        "device": "cpu",
+        "mosaic": 0.0,
+        "mixup": 0.0,
+        "cutmix": 0.0,
+        "copy_paste": 0.0,
+        "verbose": False,
+        "warmup_epochs": 0.0,
+    }
+    SARYOLOTrainer(cfg=DEFAULT_CFG_DICT, overrides=overrides).train()
+
+    assert observed, "validation never preprocessed a batch; the conditioned val path did not run"
+    for row in observed:
+        assert row["has_metadata"], "a validation batch arrived without acquisition metadata"
+        assert row["rows"] == row["img_rows"], (
+            f"validation metadata rows ({row['rows']}) do not match image rows ({row['img_rows']})"
+        )
+        # The decisive one: the fallback would leave the context unset and still produce numbers.
+        assert row["context_set"], (
+            "the validator dropped the metadata before the model saw it; the EMA would have "
+            f"validated an *unknown* acquisition and silently reported unconditioned mAP: {row}"
+        )
 
 
 def test_conditioned_metadata_rows_match_their_own_images(tmp_path, conditioned_config, monkeypatch):

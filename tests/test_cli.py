@@ -543,6 +543,128 @@ def test_probe_dataset_route_builds_labels_from_a_profile(tmp_path, capsys):
     assert report["n_images_used"] == 8
 
 
+def _conditioned_checkpoint(tmp_path: Path, sensors: tuple[str, ...] = ("g3", "s1")) -> Path:
+    """A real ``.pt`` checkpoint of a conditioned model, carrying its frozen vocabularies.
+
+    A vocabulary only exists once a training run has frozen one, so the checkpoint -- not a
+    YAML -- is what the probe has to read it from. The embedding table is sized to the
+    vocabulary here, exactly as ``prepare_conditioned_config`` does at training time.
+    """
+    import dataclasses
+
+    import torch
+
+    from saryolo.data.metadata import Vocabulary
+    from saryolo.nn.arch import VARIANTS, build_yaml_dict
+    from saryolo.nn.model import SARYOLODetectionModel
+
+    vocab = Vocabulary.build("sensor", list(sensors))
+    size = max(vocab.size, 2)
+    spec = dataclasses.replace(VARIANTS["cond_film"], nc=1, conditioning_vocab=(size, 2, 2))
+    model = SARYOLODetectionModel(build_yaml_dict(spec), ch=3, nc=1, verbose=False)
+    model.metadata_vocabularies = {
+        "sensor": vocab.to_dict(),
+        "polarization": Vocabulary.build("polarization", []).to_dict(),
+        "mode": Vocabulary.build("mode", []).to_dict(),
+    }
+    path = tmp_path / "conditioned.pt"
+    torch.save({"model": model, "names": {0: "ship"}, "nc": 1, "epoch": -1}, path)
+    return path
+
+
+def _probe_metadata_table(tmp_path: Path, stems: list[str]) -> Path:
+    """An acquisition table covering exactly ``stems``, one sensor per stem prefix."""
+    from saryolo.data.metadata import AcquisitionMetadata, MetadataTable
+
+    table = MetadataTable(
+        entries={
+            stem: AcquisitionMetadata(sensor=stem.split("_")[0], resolution_m=10.0)
+            for stem in stems
+        },
+        source="test:probe-conditioned",
+    )
+    return table.save(tmp_path / "acquisition_metadata.json")
+
+
+def test_probe_conditions_a_conditioned_checkpoint(tmp_path, capsys):
+    """A conditioned checkpoint must be diagnosed *conditioned*.
+
+    Handed no acquisition it would exercise its "unknown" branch, so the report would describe
+    the unconditioned representation -- which is exactly the comparison the probe exists to
+    make. The vocabularies must also come from the checkpoint, never be rebuilt, or the
+    embedding table would be renumbered under trained weights.
+    """
+    import json
+
+    root = _probe_fixture(tmp_path)
+    stems = sorted(p.stem for p in (root / "images" / "val").glob("*.png"))
+    weights = _conditioned_checkpoint(tmp_path)
+    meta = _probe_metadata_table(tmp_path, stems)
+    out = tmp_path / "report"
+
+    code = main([
+        "probe", "--weights", str(weights), "--data", str(root / "data.yaml"),
+        "--field", "sensor", "--metadata", str(meta), "--split", "val",
+        "--imgsz", "64", "--batch", "8", "--out", str(out),
+    ])
+    assert code == 0, capsys.readouterr().out
+    report = json.loads((out / "representation_report.json").read_text())
+    assert report["field_vocab"] == {"0": "g3", "1": "s1"}
+    assert report["n_images_used"] == len(stems)
+    # The discriminator: without this the same test passed while the adapter ran on its
+    # "unknown acquisition" branch, i.e. while reporting the unconditioned representation.
+    assert report["conditioned"] is True
+
+
+def test_probe_refuses_a_conditioned_checkpoint_without_acquisition(tmp_path):
+    """No acquisition for a conditioned model is not a degraded diagnosis, it is a wrong one.
+
+    The model would run its unknown-acquisition branch and the report would be labelled as a
+    conditioned representation while measuring the unconditioned one. Refusing is the only
+    honest option, so this pins the refusal rather than the number.
+    """
+    root = _probe_fixture(tmp_path)
+    weights = _conditioned_checkpoint(tmp_path)
+
+    with pytest.raises(SystemExit, match="must supply each"):
+        main([
+            "probe", "--weights", str(weights), "--data", str(root / "data.yaml"),
+            "--field", "sensor", "--stem-pattern", "^([a-z0-9]+)_\\d+", "--split", "val",
+            "--imgsz", "64", "--out", str(tmp_path / "o"),
+        ])
+
+
+def test_probe_leaves_an_unconditioned_model_unconditioned(tmp_path, capsys):
+    """For a baseline, metadata is the probe *target*, not a model input.
+
+    The baseline arm has no adapter, so supplying acquisition descriptors must be a no-op on
+    the forward pass -- and the run must still succeed, since this is precisely the control
+    the conditioned report is read against.
+    """
+    import json
+
+    from saryolo.nn.arch import VARIANTS, build_yaml_dict, variant_filename
+
+    root = _probe_fixture(tmp_path)
+    spec = VARIANTS["baseline"]
+    spec.nc = 1
+    weights = tmp_path / variant_filename(spec)
+    weights.write_text(pyyaml_safe(build_yaml_dict(spec)))
+    stems = sorted(p.stem for p in (root / "images" / "val").glob("*.png"))
+    meta = _probe_metadata_table(tmp_path, stems)
+    out = tmp_path / "report"
+
+    code = main([
+        "probe", "--weights", str(weights), "--data", str(root / "data.yaml"),
+        "--field", "sensor", "--metadata", str(meta), "--split", "val",
+        "--imgsz", "64", "--out", str(out),
+    ])
+    assert code == 0, capsys.readouterr().out
+    report = json.loads((out / "representation_report.json").read_text())
+    assert report["field_vocab"] == {"0": "g3", "1": "s1"}
+    assert report["conditioned"] is False
+
+
 # ------------------------------------------------------------------- arch/registry
 def test_arch_rejects_an_unknown_variant(tmp_path):
     with pytest.raises(SystemExit):

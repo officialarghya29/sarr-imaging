@@ -24,7 +24,7 @@
 | **Stack** | Python 3.10+ · Ultralytics 8.4.155 · PyTorch 2.x |
 | **Architectures** | 87 variants wired; every one builds and runs a forward pass |
 | **Experiments** | 91 configured; each reproducible from a committed YAML |
-| **Tests** | 288 passing — no dataset download and no GPU needed |
+| **Tests** | 297 passing — no dataset download and no GPU needed |
 | **Accuracy results** | none yet — not one number in this repository is fabricated |
 
 ---
@@ -60,7 +60,7 @@ SAR image ──► SIA ──► backbone ──► components 1/2/9 ──► 
 | | |
 | --- | --- |
 | **What this is** | A complete, reproducible research pipeline for SAR object detection: dataset audit → baseline → ten documented components → ablations → removal tests → robustness → efficiency → cross-dataset → paper. |
-| **What is proven** | The infrastructure. 288 tests pass; the baseline reproduces stock YOLO11 exactly; all eleven modules are measurably identity functions at initialisation *and* demonstrably not frozen; every model trains end to end. |
+| **What is proven** | The infrastructure. 297 tests pass; the baseline reproduces stock YOLO11 exactly; all eleven modules are measurably identity functions at initialisation *and* demonstrably not frozen; every model trains end to end. |
 | **What is *not* proven** | Accuracy. **No model has been trained on a real SAR dataset in this repository.** There is no result table here with numbers in it, and the table generators refuse to print one. |
 | **Why that's the point** | A detector paper is only as strong as its ablations. If the machinery that produces those ablations cannot be trusted, every number downstream is unverifiable. Build the instrument first. |
 
@@ -372,6 +372,9 @@ Component 11 needs a control that is uncommon in detection papers, because "defo
 | **Each conditioning arm reads exactly the fields it declares** | `gain/shift/spatial` read all six; `film:sensor_resolution` reads two; `continuous_only` reads the three physical descriptors | `test_each_conditioning_arm_reads_exactly_its_declared_fields` |
 | **Conditioning is per-sample, not per-batch** | row *i* of a mixed-source batch equals row *i* run alone — the LOSO recipe depends on it | `test_conditioning_is_per_sample_not_per_batch` |
 | **An out-of-vocabulary sensor is refused, not clamped** | clamping would map an unseen sensor onto a trained-on one, silently | `test_a_vocabulary_mismatch_raises_instead_of_snapping_to_a_nearby_sensor` |
+| **Conditioning survives a real training run, not just a unit test** | the actual `SARYOLOTrainer` runs over a metadata-bearing dataset: batches carry aligned descriptors and an adapter gate leaves zero | `tests/test_conditioning_smoke.py` |
+| **Validation conditions too — the model is not silently fed an "unknown" acquisition** | the validator is handed a *path* by `final_eval`, and a path carries no context, so the metrics would describe an unconditioned model; resolution is pinned for every handle | `test_conditioned_validation_conditions_on_metadata`, `test_the_validator_resolves_a_real_module_from_every_handle_it_is_given`, `test_checkpoint_vocabularies_come_back_frozen_not_rebuilt` |
+| **A conditioned checkpoint is probed *conditioned*** | feeding it no acquisition would report the *unconditioned* representation, invalidating the baseline-vs-conditioned comparison; vocabularies are read from the checkpoint, and the extraction leaves no acquisition behind | `test_probe_conditions_a_conditioned_checkpoint`, `test_collect_head_features_applies_the_acquisition_it_is_given`, `test_collect_head_features_leaves_no_acquisition_behind`, `test_probe_refuses_a_conditioned_checkpoint_without_acquisition` |
 | **LOSO refuses to report a number it cannot back** | one group, or a zero-ground-truth fold, raises instead of yielding a score | `tests/test_groups.py`, `tests/test_metrics.py` |
 | **No README-cited test can be missing** | every test name in a code span must exist, and a truncated name counts as unverifiable rather than being skipped | `test_every_test_cited_in_the_readme_exists` |
 | Deformable refinement's grid identity is pinned | zero offset → `7e-7` dev; 0.04-cell shift → `0.4` | `test_refinement_resampling_is_an_identity_at_zero_offset` |
@@ -511,7 +514,7 @@ uv pip install --python .venv/bin/python torch torchvision --index-url https://d
 uv pip install --python .venv/bin/python ultralytics pytest
 source .venv/bin/activate
 
-pytest tests/ -q                                          # 288 tests
+pytest tests/ -q                                          # 297 tests
 python -m saryolo arch --variant all --nc 1               # emit 87 model YAMLs
 python -m saryolo synth-data --out datasets/processed/synthetic_smoke
 python -m saryolo train --exp configs/exp/_smoke_baseline.yaml

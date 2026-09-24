@@ -181,6 +181,84 @@ def test_collect_head_features_pooling_is_rowwise_independent():
         ), f"row {i} depends on its batch"
 
 
+def _conditioned_model():
+    """A built model carrying the acquisition adapter, with its gates held open.
+
+    The gate is zero at initialisation, so at init the adapter is an exact identity and a
+    conditioned forward is *supposed* to equal the unconditioned one; opening it is what makes
+    "did the metadata reach the features?" observable at all.
+    """
+    from saryolo.nn.arch import VARIANTS, build_yaml_dict
+    from saryolo.nn.model import SARYOLODetectionModel
+    from saryolo.nn.modules.conditioning import AcquisitionConditionedAdapter
+
+    model = SARYOLODetectionModel(build_yaml_dict(VARIANTS["cond_film"]), ch=3, nc=1, verbose=False)
+    for module in model.model.modules():
+        if isinstance(module, AcquisitionConditionedAdapter):
+            with torch.no_grad():
+                module.alpha.raw.fill_(0.5)
+    return model
+
+
+def _descriptors(rows: int, sensor_ids: list[int]) -> dict[str, torch.Tensor]:
+    return {
+        "continuous": torch.zeros(rows, 3),
+        "categorical": torch.tensor([[i, 0, 0] for i in sensor_ids], dtype=torch.long),
+        "availability": torch.ones(rows, 6),
+    }
+
+
+def test_collect_head_features_applies_the_acquisition_it_is_given():
+    """A conditioned checkpoint probed with no acquisition would report the unconditioned
+    representation -- the comparison the probe exists to make would be invalid."""
+    model = _conditioned_model()
+    torch.manual_seed(0)
+    images = torch.rand(2, 3, 64, 64)
+
+    plain = collect_head_features(model, images)
+    described = collect_head_features(model, images, metadata=_descriptors(2, [1, 1]))
+
+    assert set(plain.levels()) == set(described.levels())
+    # At least one level must differ, or the metadata never reached the graph.
+    assert any(
+        not torch.allclose(plain.features[lvl], described.features[lvl])
+        for lvl in plain.levels()
+    ), "supplying acquisition descriptors changed no feature, so conditioning never engaged"
+
+
+def test_collect_head_features_leaves_no_acquisition_behind():
+    """Two extractions must be independent: a diagnosis pass cannot condition the next one.
+
+    Without clearing the context, a second call would silently inherit the first call's
+    acquisition and every later reading on that model would be conditioned on stale data.
+    """
+    model = _conditioned_model()
+    torch.manual_seed(1)
+    images = torch.rand(2, 3, 64, 64)
+
+    first = collect_head_features(model, images, metadata=_descriptors(2, [1, 1]))
+    assert model.metadata_context.is_set is False, "the acquisition context outlived the extraction"
+    level = first.levels()[0]
+    # The decisive check: a fresh conditioned extraction must reproduce the first one exactly,
+    # which is only true if nothing was carried over between the two calls.
+    again = collect_head_features(model, images, metadata=_descriptors(2, [1, 1]))
+    assert torch.allclose(first.features[level], again.features[level], atol=1e-6), (
+        "the same descriptors produced different features, so state leaked between extractions"
+    )
+
+
+def test_collect_head_features_refuses_metadata_no_adapter_consumes():
+    """Handing descriptors to an unconditioned model returns unconditioned features.
+
+    That is indistinguishable from a working conditioning pass unless it is refused, and the
+    probe would then report a conditioned model's *baseline* representation.
+    """
+    model = _v2_full_model()
+    images = torch.rand(2, 3, 64, 64)
+    with pytest.raises(ValueError, match="no adapter in this model consumes it"):
+        collect_head_features(model, images, metadata=_descriptors(2, [1, 1]))
+
+
 # ---------------------------------------------------------------------- report
 def test_report_refuses_features_without_labels():
     model = _v2_full_model()

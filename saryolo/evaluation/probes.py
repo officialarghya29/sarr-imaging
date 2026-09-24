@@ -133,6 +133,7 @@ def collect_head_features(
     model: nn.Module,
     images: Tensor,
     labels: dict[str, Tensor] | None = None,
+    metadata: dict[str, Tensor] | None = None,
 ) -> FeatureExtraction:
     """Hook the detection head, forward ``images`` in eval mode, pool per level.
 
@@ -142,11 +143,27 @@ def collect_head_features(
             ``finally`` block, so a failed forward cannot leave the model wired.
         images: ``(n, C, H, W)`` batch, normalised however the model expects.
         labels: optional ``{field: (n,)}`` integer group labels to carry alongside.
+        metadata: optional encoded acquisition descriptors for *these* images, in the
+            ``(continuous, categorical, availability)`` form
+            :func:`saryolo.data.metadata.encode_metadata` produces. A conditioned
+            checkpoint that is diagnosed without it falls back to its "unknown
+            acquisition" branch, so the diagnosed representation would be the
+            *unconditioned* one -- which is precisely the comparison the probe is used
+            to make. Supplying the descriptors is therefore what makes a baseline vs.
+            conditioned diagnosis comparable at all.
 
     The model is put in eval mode for the extraction, so batch-norm running
     statistics are untouched — a diagnosis pass must not alter the thing diagnosed.
+    The acquisition context is cleared again in the same ``finally``, for the same
+    reason: a diagnosis pass must not leave the model conditioned on one batch.
     """
-    from saryolo.nn.model import SARYOLODetectionModel  # noqa: F401  (import validates the wiring)
+    from saryolo.nn.model import SARYOLODetectionModel, set_batch_metadata  # noqa: F401
+
+    if metadata is not None and not set_batch_metadata(model, metadata):
+        raise ValueError(
+            "acquisition metadata was supplied but no adapter in this model consumes it; "
+            "the extracted features would be identical to an unconditioned forward pass"
+        )
 
     head = model.model[-1]
     collected: list = []
@@ -158,6 +175,8 @@ def collect_head_features(
             model(images)
     finally:
         handle.remove()
+        if metadata is not None:
+            set_batch_metadata(model, None)
         if was_training:
             model.train()
     if not collected:

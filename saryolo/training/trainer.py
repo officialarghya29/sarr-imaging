@@ -140,11 +140,20 @@ def _metadata_descriptor(table, vocabularies, stem: str) -> dict[str, torch.Tens
     }
 
 
-def encode_prediction_metadata(paths, table, vocabularies) -> dict[str, torch.Tensor]:
-    """Encode a predictor batch in path order, preserving one acquisition per image."""
+def encode_prediction_metadata(
+    paths, table, vocabularies, allow_unknown: bool = False
+) -> dict[str, torch.Tensor]:
+    """Encode a predictor batch in path order, preserving one acquisition per image.
+
+    ``allow_unknown`` chooses between the two legitimate meanings of a missing row. Prediction
+    refuses by default: an image whose acquisition cannot be established would be scored on an
+    assumption, and the deployment path should say so rather than guess. A *diagnosis* pass is
+    the opposite case -- an image with no recorded parameters is itself one of the conditions
+    being studied, so it is encoded as the explicit unknown record instead.
+    """
     stems = [Path(path).stem for path in paths]
     missing = sorted(set(stems) - set(table.entries))
-    if missing:
+    if missing and not allow_unknown:
         raise ValueError(f"prediction metadata has no row for {len(missing)} image(s), e.g. {missing[:3]}")
     rows = [_metadata_descriptor(table, vocabularies, stem) for stem in stems]
     return {field: torch.stack([row[field] for row in rows], dim=0) for field in rows[0]}
@@ -213,17 +222,90 @@ def _attach_metadata(dataset: YOLODataset, table, vocabularies) -> None:
     dataset._acquisition_rows = {stem: _metadata_descriptor(table, vocabularies, stem) for stem in stems}
 
 
+def _native_module(handle) -> Any | None:
+    """The ``nn.Module`` that actually consumes metadata, from whatever a validator was handed.
+
+    Ultralytics hands a validator two different things depending on who called it, and only one
+    of them is the module the adapters live in:
+
+    * from a trainer, ``trainer.ema.ema`` -- already the ``nn.Module``;
+    * from ``Trainer.final_eval`` / a standalone ``val``, a *path* to a ``.pt`` checkpoint, which
+      ``BaseValidator`` wraps in an :class:`AutoBackend`. ``AutoBackend`` is itself an
+      ``nn.Module`` but it is not the model: it forwards ``.model`` to the backend it wraps.
+
+    Reading ``.model`` off the ``AutoBackend`` is the same resolution
+    :class:`AcquisitionMetadataPredictor` uses, and it matters here because a ``Path`` carries no
+    ``metadata_context``: ``set_batch_metadata`` would return ``False`` and the run would report
+    numbers from an unconditioned model while looking perfectly healthy.
+    """
+    from ultralytics.nn.autobackend import AutoBackend
+
+    if handle is None or isinstance(handle, (str, Path)):
+        return None
+    if isinstance(handle, AutoBackend):
+        return getattr(handle, "model", None)
+    return handle
+
+
+def _checkpoint_model(weights: str | Path):
+    """The model object inside a saved checkpoint, without building an inference backend for it.
+
+    Used only for reading *attributes* off a checkpoint (its frozen vocabulary, whether it is
+    conditioned). The weights are deliberately not loaded onto a device here -- the inference
+    path is ``AutoBackend``'s job -- so this stays cheap enough to call while a validator is
+    still deciding how to build its dataloader.
+    """
+    path = Path(weights)
+    if not path.is_file():
+        return None
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+    if isinstance(payload, dict):
+        # ``ema`` first: it is the weight set validation is scored on.
+        return payload.get("ema") or payload.get("model")
+    return payload
+
+
+def _checkpoint_metadata_vocabularies(weights: str | Path) -> dict | None:
+    """Read the training-only metadata vocabularies out of a checkpoint.
+
+    Needed when a conditioned model is validated standalone, because the val dataloader is built
+    before the inference model exists and the vocabulary must come from the checkpoint rather
+    than from a live training run. Nothing is rebuilt here: a vocabulary re-derived at validation
+    time would renumber the embedding table under trained weights.
+    """
+    return getattr(_checkpoint_model(weights), "metadata_vocabularies", None)
+
+
 class AcquisitionDetectionValidator(DetectionValidator):
     """Use metadata-bearing batches during trainer and standalone validation."""
 
     def __call__(self, trainer=None, model=None, **kwargs):
+        self._metadata_checkpoint = None
         if trainer is not None:
             from ultralytics.utils.torch_utils import unwrap_model
 
-            self._metadata_model = unwrap_model(trainer.ema.ema)
-        elif model is not None:
-            self._metadata_model = model
+            ema = getattr(trainer, "ema", None)
+            source = ema.ema if ema is not None else trainer.model
+            self._metadata_model = _native_module(unwrap_model(source))
+        else:
+            # A checkpoint path is the common case here (``final_eval`` validates ``best.pt``).
+            # It is remembered rather than stored as the model, so ``get_dataloader`` can take
+            # the frozen vocabularies from it and ``init_metrics`` can install the real module.
+            self._metadata_checkpoint = model if isinstance(model, (str, Path)) else None
+            self._metadata_model = _native_module(model)
         return super().__call__(trainer=trainer, model=model, **kwargs)
+
+    def init_metrics(self, model):
+        """Capture the module the inference pass really uses, before any batch is preprocessed.
+
+        This is the hook that makes the checkpoint path work: by the time the first batch is
+        preprocessed, the model exists (in training it is the EMA, standalone it is the module
+        behind the ``AutoBackend``), and this is where the validator can see it.
+        """
+        native = _native_module(model)
+        if native is not None:
+            self._metadata_model = native
+        return super().init_metrics(model)
 
     def get_dataloader(self, dataset_path, batch_size):
         from ultralytics.data import build_dataloader
@@ -231,18 +313,26 @@ class AcquisitionDetectionValidator(DetectionValidator):
         dataset = self.build_dataset(dataset_path, batch=batch_size, mode="val")
         table_config = _metadata_config(self.data)
         model = getattr(self, "_metadata_model", None)
+        serialized = getattr(model, "metadata_vocabularies", None)
         if table_config:
-            if model is None:
-                raise RuntimeError("conditioned validation model was not attached before dataloader construction")
-            serialized = getattr(model, "metadata_vocabularies", None)
+            if not serialized and self._metadata_checkpoint is not None:
+                serialized = _checkpoint_metadata_vocabularies(self._metadata_checkpoint)
             if not serialized:
-                raise ValueError("validation checkpoint has no training-only metadata vocabulary")
+                raise ValueError(
+                    "conditioned validation needs the training-only metadata vocabulary: the "
+                    "checkpoint carries none and no training run is attached. Validate through the "
+                    "trainer, or pass a checkpoint trained with acquisition metadata."
+                )
             from saryolo.data.metadata import Vocabulary
 
             vocabularies = {key: Vocabulary.from_dict(value) for key, value in serialized.items()}
             _attach_metadata(dataset, table_config["table"], vocabularies)
-        elif getattr(model, "n_conditioned_adapters", 0):
-            raise ValueError("conditioned model validation requires acquisition_metadata in the dataset YAML")
+        else:
+            conditioned = getattr(model, "n_conditioned_adapters", 0)
+            if not conditioned and self._metadata_checkpoint is not None:
+                conditioned = getattr(_checkpoint_model(self._metadata_checkpoint), "n_conditioned_adapters", 0)
+            if conditioned:
+                raise ValueError("conditioned model validation requires acquisition_metadata in the dataset YAML")
         return build_dataloader(
             dataset,
             batch=batch_size,
@@ -256,8 +346,20 @@ class AcquisitionDetectionValidator(DetectionValidator):
     def preprocess(self, batch):
         batch = super().preprocess(batch)
         model = getattr(self, "_metadata_model", None)
-        if model is not None:
-            set_batch_metadata(model, batch.get("metadata"))
+        # A control arm carries no adapter: metadata in the batch cannot affect it, and that is the
+        # intended comparison, so this is not an error. Only a *conditioned* model must be fed.
+        if model is None or not getattr(model, "n_conditioned_adapters", 0):
+            return batch
+        if batch.get("metadata") is None:
+            raise RuntimeError(
+                "a conditioned model reached validation without acquisition metadata in the batch; "
+                "the reported metrics would describe an unconditioned model"
+            )
+        if not set_batch_metadata(model, batch.get("metadata")):
+            raise RuntimeError(
+                "acquisition metadata was supplied but no adapter in the validation model consumed "
+                "it; the model was not attached to its metadata context"
+            )
         return batch
 
 
