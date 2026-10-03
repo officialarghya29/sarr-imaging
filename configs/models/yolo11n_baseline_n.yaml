@@ -1,6 +1,7 @@
 # SAR-YOLO / baseline_n  -- GENERATED FILE, do not edit by hand.
 # Regenerate with:  python -m saryolo arch --variant baseline_n
 # scale=n  levels=p3-p4-p5  modules=none (stock YOLO11)
+# efficiency_arm=False  (True = the arm exists for the cost claim)
 # sar_loss=off
 #
 # NOTE: when this file is loaded, ultralytics derives the compound scale from the

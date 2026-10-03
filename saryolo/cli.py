@@ -896,6 +896,7 @@ def _cmd_assets(args) -> int:
         build_ablation,
         build_baseline_comparison,
         build_efficiency,
+        build_efficiency_frontier,
         build_module_ablation,
         build_multi_seed,
         build_removal_ablation,
@@ -907,6 +908,28 @@ def _cmd_assets(args) -> int:
 
     ledger = ExperimentLedger(args.ledger)
     robustness_root = Path(args.robustness)
+
+    # Profile the frontier arms live so the cost columns are measured rather than read
+    # from a file that may have gone stale. An explicit --benchmark overrides this when
+    # the profiling has already been done on a machine with the right environment.
+    benchmark: dict = {}
+    if args.benchmark:
+        benchmark = json.loads(Path(args.benchmark).read_text())
+    else:
+        from saryolo.evaluation.efficiency import profile_yaml
+        from saryolo.nn.arch import VARIANTS, variant_filename
+        from saryolo.paper.tables import EFFICIENCY_FRONTIER_ARMS
+
+        models_dir = Path(args.models)
+        for variant, _label, _exp in EFFICIENCY_FRONTIER_ARMS:
+            if variant not in VARIANTS:
+                continue
+            path = models_dir / variant_filename(VARIANTS[variant])
+            if not path.exists():
+                continue
+            row = profile_yaml(path, imgsz=args.imgsz, nc=args.nc)
+            benchmark[variant] = {"params_M": row["params_M"], "flops_G": row["flops_G"]}
+
     tables = [
         build_baseline_comparison(ledger),
         build_ablation(ledger),
@@ -915,6 +938,7 @@ def _cmd_assets(args) -> int:
         build_scale_analysis(ledger),
         build_robustness(robustness_root / "robustness.json", robustness_root / "robustness_baseline.json"),
         build_efficiency(ledger),
+        build_efficiency_frontier(ledger, benchmark),
         build_multi_seed(ledger),
     ]
     written = write_tables(tables, args.out, assert_complete=args.require_complete)
@@ -1143,6 +1167,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--ledger", default="results")
     p.add_argument("--robustness", default="results/robustness")
     p.add_argument("--out", default="paper/tables")
+    p.add_argument("--models", default="configs/models", help="Model YAML dir for live cost profiling")
+    p.add_argument("--benchmark", default=None,
+                   help="Pre-measured {variant: {params_M, flops_G}} JSON; profiles live if omitted")
+    p.add_argument("--imgsz", type=int, default=640, help="Input size for the frontier's GFLOPs")
+    p.add_argument("--nc", type=int, default=1)
     p.add_argument("--require-complete", action="store_true",
                    help="Fail if any cell is unmeasured (use when preparing a submission)")
     p.set_defaults(func=_cmd_assets)

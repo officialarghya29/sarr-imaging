@@ -1,6 +1,7 @@
 # SAR-YOLO / v2_noclutter  -- GENERATED FILE, do not edit by hand.
 # Regenerate with:  python -m saryolo arch --variant v2_noclutter
 # scale=s  levels=p2-p3-p4-p5  modules=sfe, speckle, frequency, fusion, prior, attention, context, refine, p2_head
+# efficiency_arm=False  (True = the arm exists for the cost claim)
 # sar_loss={'w_sep': 0.2, 'w_small': 0.5, 'w_smooth': 0.05, 'margin': 1.0, 'bg_frac': 0.25}
 #
 # NOTE: when this file is loaded, ultralytics derives the compound scale from the

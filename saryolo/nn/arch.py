@@ -71,6 +71,11 @@ class ModelSpec:
             learned offsets saturating the bound, so it is a hyperparameter to sweep
             rather than a constant to leave implicit.
         fusion: Fusion variant inserted after each ``Concat``; ``None`` disables.
+        efficiency: Marks an arm whose stated purpose is the *cost* claim rather than the
+            accuracy ladder. The flag is carried into the generated YAML header and is what
+            the efficiency-frontier table keys on, so an arm cannot be advertised as a
+            cheaper operating point without the generator agreeing that is what it is. It
+            changes no architecture row -- it is provenance, not wiring.
         levels: Detection levels, a subset of ``("p2", "p3", "p4", "p5")``.
         sar_loss: Optional Component-7 loss block, emitted as a top-level
             ``sar_loss`` key. Read by :class:`SARYOLODetectionModel` at criterion
@@ -91,6 +96,7 @@ class ModelSpec:
     refinement: str | None = None
     refinement_max_offset: float = 0.5
     fusion: str | None = None
+    efficiency: bool = False
     #: Acquisition-conditioned adapter: ``"<mode>:<field set>"``, e.g. ``"film:all"`` or
     #: ``"scale:continuous_only"``. A single string rather than two fields because the ablation
     #: always varies them together, and a half-specified arm is a wiring mistake waiting to
@@ -338,6 +344,7 @@ def build_yaml_text(spec: ModelSpec) -> str:
         f"# SAR-YOLO / {spec.name}  -- GENERATED FILE, do not edit by hand.\n"
         f"# Regenerate with:  python -m saryolo arch --variant {spec.name}\n"
         f"# scale={spec.scale}  levels={'-'.join(spec.levels)}  modules={mods}\n"
+        f"# efficiency_arm={spec.efficiency}  (True = the arm exists for the cost claim)\n"
         f"# sar_loss={'off' if not spec.sar_loss else spec.sar_loss}\n"
         f"#\n"
         f"# NOTE: when this file is loaded, ultralytics derives the compound scale from the\n"
@@ -654,6 +661,70 @@ for _s in ("n", "s", "m", "l"):
 VARIANTS["v2_full_p35_s"] = _v2(
     "v2_full_p35_s", levels=("p3", "p4", "p5"),
     notes="v2 full model without the P2 detection level (multi-scale ablation).",
+)
+
+#: The efficiency frontier (SARVO: "beat the current SAR detectors on cost at equal
+#: accuracy"). These arms are not a new mechanism; they are the *component subset* a
+#: removal ablation would select if the two dominant cost drivers fail to repay
+#: themselves. That framing matters, because it is the only honest one: the light arms
+#: drop exactly the two slots whose measured share of the compute is largest, so the
+#: paper reports a frontier rather than a model that grew a second set of modules.
+#:
+#: The measurement that motivates the subset, at scale ``s`` with a one-class head:
+#:
+#:   full v2           16.230 M   55.68 GFLOPs
+#:   − context         15.066 M   52.93 GFLOPs
+#:   − context − AMF   11.016 M   32.55 GFLOPs   ← the light arm's shape
+#:
+#: So context aggregation (+1.16 M / +2.75 G) and adaptive multi-scale fusion
+#: (+4.05 M / +20.38 G) together are ~42% of full v2's compute. Removing them is the
+#: single largest cost lever available without touching the backbone, and it is a lever
+#: the ablation machinery already owns -- both slots have their own removal arms
+#: (``v2_noctx``, and ``fus_*``), so the light arm cannot be a hidden change.
+#:
+#: Everything that carries a physical prior is *kept*: SFE, the clutter-aware SFM, the
+#: spectral branch, the target prior, the deformable refinement, the P2 level and the SAR
+#: loss. The cost claim must not be bought by deleting the science.
+LITE_FULL: dict[str, Any] = {
+    "enhancement": "sfe",
+    "speckle": "sfm_clutter",
+    "frequency": "sff",
+    "prior": "learned",
+    "attention": "saa",
+    "context": None,
+    "refinement": "deform",
+    "fusion": None,
+    "levels": ("p2", "p3", "p4", "p5"),
+}
+
+
+def _lite(name: str, scale: str = "s", notes: str = "", **overrides: Any) -> ModelSpec:
+    """Build a light variant: the efficiency subset with the named slots overridden."""
+    cfg = dict(LITE_FULL)
+    cfg.update(overrides)
+    return ModelSpec(name=name, scale=scale, sar_loss=dict(SAR_LOSS_FULL), efficiency=True,
+                     notes=notes, **cfg)
+
+
+#: One arm per scale, plus the conditioning and no-P2 points of the frontier.
+for _s in ("n", "s", "m"):
+    VARIANTS[f"v2_lite_{_s}"] = _lite(
+        f"v2_lite_{_s}", scale=_s,
+        notes=(f"Efficiency frontier at scale {_s}: full v2 minus context aggregation and "
+               f"adaptive multi-scale fusion (the two largest compute slots)."),
+    )
+
+VARIANTS["v2_lite_cond_s"] = _lite(
+    "v2_lite_cond_s", conditioning="film:sensor_resolution",
+    notes=("Efficiency frontier + the acquisition-conditioned adapter. The cross-sensor "
+           "claim must be affordable, so the adapter is priced on the light model rather "
+           "than only on full v2."),
+)
+
+VARIANTS["v2_lite_p35_s"] = _lite(
+    "v2_lite_p35_s", levels=("p3", "p4", "p5"),
+    notes=("Efficiency frontier without the P2 level: the cheapest point that still keeps "
+           "every physical prior. Reported so the P2 cost is visible on the frontier."),
 )
 
 #: Baseline comparison variants (EXP-001b): scales of the stock detector.

@@ -22,7 +22,7 @@ from pathlib import Path
 __all__ = ["TBD", "Table", "MODULE_ABLATION_GROUPS", "REMOVAL_ABLATION_ROWS",
            "build_baseline_comparison", "build_ablation", "build_module_ablation",
            "build_removal_ablation", "build_scale_analysis", "build_robustness", "build_efficiency",
-           "build_multi_seed", "write_tables"]
+           "build_efficiency_frontier", "build_multi_seed", "write_tables"]
 
 #: Placeholder rendered for any unmeasured value.
 TBD = "TBD"
@@ -381,6 +381,105 @@ def _latest_per_seed(records, experiment_id: str):
             continue
         latest[record.train_seed] = record  # later append wins
     return list(latest.values())
+
+
+#: The frontier arms, in the order they should be read: the reference model first, then
+#: progressively cheaper operating points. ``(variant, label, experiment id)``. The
+#: experiment ids are the committed configs, so a cost row can always be traced to a run.
+EFFICIENCY_FRONTIER_ARMS: tuple[tuple[str, str, str], ...] = (
+    ("v2_full", "SAR-YOLO v2 (reference)", "EXP-017"),
+    ("v2_full_p35_s", "v2, no P2 level", "EXP-017"),
+    ("v2_lite_s", "SARVO-Lite (s)", "EXP-501"),
+    ("v2_lite_p35_s", "SARVO-Lite (s), no P2", "EXP-502"),
+    ("v2_lite_cond_s", "SARVO-Lite + conditioning (s)", "EXP-503"),
+    ("v2_lite_n", "SARVO-Lite (n)", "EXP-504"),
+    ("v2_lite_m", "SARVO-Lite (m)", "EXP-505"),
+)
+
+
+def build_efficiency_frontier(ledger, benchmark: dict | None = None) -> Table:
+    """TABLE 8 — the efficiency frontier, with published baselines kept separate.
+
+    Two kinds of number meet in this table and are deliberately not in the same column:
+
+    * **our measured cost** (params, GFLOPs) -- profiled on this machine by
+      ``python -m saryolo bench`` and handed in through ``benchmark``. These are real
+      measurements, so they are not ``TBD`` even though no accuracy exists yet.
+    * **reported baselines** -- numbers other papers published, imported from
+      :mod:`saryolo.evaluation.reported_baselines`. They are rendered as a *separate
+      section* with their venue, because mixing a number we measured with a number we
+      read under one header is how a comparison table starts lying without a single
+      false digit being typed.
+
+    Accuracy for our arms stays ``TBD`` until a run exists. A cost claim does not need
+    accuracy to be honest about *cost*, and the caption says exactly that.
+
+    Args:
+        ledger: The experiment ledger (accuracy columns).
+        benchmark: ``{variant: {"params_M": float, "flops_G": float}}`` from the bench
+            command, or ``None`` when it has not been run -- in which case the cost
+            columns are ``TBD`` too rather than recalled from memory.
+    """
+    from saryolo.evaluation.reported_baselines import reported_rows
+
+    best = _latest_by_experiment(_ledger_rows(ledger))
+    bench = benchmark or {}
+    table = Table(
+        "efficiency_frontier",
+        "Efficiency frontier. Cost is *measured* on this machine (params and GFLOPs at "
+        "640\u00b2, one-class head); accuracy is ``TBD`` until the corresponding run exists, "
+        "because a cost claim needs no accuracy to be true about cost. The lower section "
+        "lists published SAR detectors: those are numbers their authors reported, not "
+        "reproduced here, and they are kept in a separate section for exactly that reason.",
+        ["Model", "Params (M)", "GFLOPs", "mAP50", "mAP50:95", "Source"],
+    )
+    for variant, label, exp_id in EFFICIENCY_FRONTIER_ARMS:
+        record = _match_variant(_ledger_rows(ledger), variant)
+        if record is None:
+            record = best.get(exp_id)
+        metrics = record.metrics if record else {}
+        row = bench.get(variant, {})
+        # Cost prefers the ledger's own measurement (recorded with the run); the bench
+        # profile is the pre-training fallback. Both are measured; neither is estimated.
+        params = metrics.get("params_M", row.get("params_M"))
+        flops = metrics.get("flops_G", row.get("flops_G"))
+        table.rows.append([
+            label,
+            _fmt(params, 3),
+            _fmt(flops, 2),
+            _fmt(metrics.get("mAP50")),
+            _fmt(metrics.get("mAP50_95")),
+            "measured (this repo)",
+        ])
+        table.provenance.append(f"{variant}: {getattr(record, 'run_id', 'cost only, not run')}")
+
+    # Reported section. An *absolute* captured quantity is placed in its matching column,
+    # because that is the whole point of positioning against it; the ``(published)`` marker
+    # and the venue in ``Source`` keep it from being read as our measurement. A
+    # *relative-only* quantity (a percentage reduction, an AP delta) has no column here and
+    # stays in ``Source``, where its baseline is named -- a reduction without its baseline
+    # is not a comparable number, so it must not be promoted into a cell.
+    def _absolute(r, *keys):
+        for key in keys:
+            if key in r.metrics:
+                return r.metrics[key]
+        return None
+
+    for r in reported_rows():
+        bits = ", ".join(f"{k}={v:g}" for k, v in r.metrics.items())
+        source = f"{r.venue}, {r.year} \u2014 reported: {bits}"
+        if r.caveats:
+            source += f" [{' ; '.join(r.caveats)}]"
+        table.rows.append([
+            f"{r.name} (published)",
+            _fmt(_absolute(r, "params_M"), 3),
+            _fmt(_absolute(r, "flops_G"), 2),
+            _fmt(_absolute(r, "map50", "map50_ssdd", "map50_hrsid"), 1),
+            _fmt(_absolute(r, "map50_95"), 4),
+            source,
+        ])
+        table.provenance.append(f"reported: {r.url}")
+    return table
 
 
 def build_multi_seed(ledger, experiment_id: str = "EXP-012") -> Table:

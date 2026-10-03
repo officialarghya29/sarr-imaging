@@ -6,7 +6,7 @@
 
 *Project codename **SARVO** — SAR Acquisition-Robust Visual Optimization. Same codebase, same hypothesis: object semantics separated from acquisition appearance, by protocol first and mechanism second.*
 
-![status](https://img.shields.io/badge/tests-334_passing-22c55e) ![honesty](https://img.shields.io/badge/fabricated_results-0-black) ![arch](https://img.shields.io/badge/architectures-87_wired-3b82f6) ![exps](https://img.shields.io/badge/experiments-94_configured-8b5cf6) ![license](https://img.shields.io/badge/license-MIT-94a3b8)
+![status](https://img.shields.io/badge/tests-347_passing-22c55e) ![honesty](https://img.shields.io/badge/fabricated_results-0-black) ![arch](https://img.shields.io/badge/architectures-92_wired-3b82f6) ![exps](https://img.shields.io/badge/experiments-96_configured-8b5cf6) ![license](https://img.shields.io/badge/license-MIT-94a3b8)
 
 </div>
 
@@ -22,9 +22,9 @@
 | --- | --- |
 | **Licence** | MIT for the code — datasets are never redistributed |
 | **Stack** | Python 3.10+ · Ultralytics 8.4.155 · PyTorch 2.x |
-| **Architectures** | 87 variants wired; every one builds and runs a forward pass |
-| **Experiments** | 91 configured; each reproducible from a committed YAML |
-| **Tests** | 334 passing — no dataset download and no GPU needed |
+| **Architectures** | 92 variants wired; every one builds and runs a forward pass |
+| **Experiments** | 96 configured; each reproducible from a committed YAML |
+| **Tests** | 347 passing — no dataset download and no GPU needed |
 | **Accuracy results** | none yet — not one number in this repository is fabricated |
 
 ---
@@ -429,6 +429,60 @@ Every experiment below is **code-complete and reproducible from a committed conf
 
 `TBD` is rendered by the generator, not typed by hand. Fill these by running the notebooks on a GPU — the grid above fills itself in from the ledger.
 
+### The efficiency frontier: what the model costs, and what the field costs
+
+The positioning target is a *better accuracy-per-unit-cost point than the current SAR
+detectors*. Cost is measurable here and now, so this part is real rather than aspirational;
+accuracy is `TBD` until a run exists, and the table says so in its own cells.
+
+Full v2 is the reference at **16.23 M / 55.68 GFLOPs**. Two slots dominate its compute:
+adaptive multi-scale fusion (+4.05 M / +20.38 G) and context aggregation (+1.16 M /
++2.75 G) — together **~42 % of the compute**. `SARVO-Lite` is exactly full v2 with those
+two slots removed, and it keeps every component that carries a *physical* prior (SFE, the
+clutter-aware SFM, the spectral branch, the target prior, the deformable refinement, the
+P2 level and the SAR loss). The cost saving is not bought by deleting the science:
+
+| Point | Params (M) | GFLOPs | vs full v2 | Note |
+| --- | ---: | ---: | ---: | --- |
+| SAR-YOLO v2 (reference) | 16.230 | 55.68 | — | the full model |
+| v2, no P2 level | 15.808 | 38.76 | −30 % compute | resolution is cheap to drop, small objects are not |
+| **SARVO-Lite (s)** | **11.016** | **32.55** | **−42 % compute** | every physical prior retained |
+| SARVO-Lite (s), no P2 | 10.858 | 24.24 | −56 % compute | the cheapest point that keeps the priors |
+| SARVO-Lite + conditioning (s) | 11.093 | 32.55 | −42 % compute | the cross-sensor claim costs +0.7 % params |
+| SARVO-Lite (n) | 3.043 | 11.71 | −79 % compute | the edge-deployment point |
+| SARVO-Lite (m) | 22.541 | 97.18 | scale-matched to v2 (m) | does the frontier hold at higher capacity? |
+
+The conditioning adapter costs **+0.077 M (+0.7 %)** on the light model and **no measurable
+compute**, so the acquisition-conditioning claim is affordable on the cheap model too —
+which is the version of the claim a deployment would actually use.
+
+**These are our measurements; the numbers below are not.** Every published SAR detector
+reports cost *relative to its own baseline*, so the honest thing is to cite them and say
+what was and was not captured. None of them is reproduced here, and none of them is a
+like-for-like comparison:
+
+| Published detector | What was captured | Source |
+| --- | --- | --- |
+| AC-YOLO | −30.0 % params, −15.6 % compute, +1.2 / +1.5 AP on SSDD / HRSID, vs their YOLO11 baseline | [PLOS ONE 20(7): e0327362](https://doi.org/10.1371/journal.pone.0327362), 2025 |
+| RLE-YOLO | 93.9 / 98.4 mAP50 on SSDD / HRSID; −43.9 % params, −34.5 % compute vs their YOLOv8 baseline | [IEEE JSTARS](https://ieeexplore.ieee.org/document/10924247), 2025 |
+| Edge-optimized lightweight YOLO | 87.7 mAP on SARDet-100K at **1.9 M** parameters | [Remote Sensing 17(13): 2168](https://www.mdpi.com/2072-4292/17/13/2168), 2025 |
+| SARLite | +3.4 % mAP@50:95, −17 % params, −1 GFLOP vs its baseline on SARDet-100K | [Scientific Reports 16](https://www.nature.com/articles/s41598-026-49143-5), 2026 |
+
+Two consequences for the plan. First, the sub-2 M-parameter anchor (1.9 M) means the
+efficiency claim cannot rest on being *small* — `SARVO-Lite (n)` at 3.04 M is not smaller.
+The defensible claim is the one this project is built to make: **the same detector across
+sensors at a stated cost**, which none of the above addresses. Second, the frontier is a
+*removal* result, not a new module — it is the subset a removal ablation would select if
+the fusion and context slots fail to repay their measured share of the compute. If they do
+repay it, the frontier is reported and the reference model stands; either way the paper
+reports a frontier rather than a model that grew a second set of modules.
+
+Generate the frontier table (measured cost, cited baselines, `TBD` accuracy):
+
+```bash
+python -m saryolo assets                # paper/tables/efficiency_frontier.{md,tex}
+```
+
 ---
 
 ## Part V · Data
@@ -519,8 +573,8 @@ uv pip install --python .venv/bin/python torch torchvision --index-url https://d
 uv pip install --python .venv/bin/python ultralytics pytest
 source .venv/bin/activate
 
-pytest tests/ -q                                          # 334 tests
-python -m saryolo arch --variant all --nc 1               # emit 87 model YAMLs
+pytest tests/ -q                                          # 347 tests
+python -m saryolo arch --variant all --nc 1               # emit 92 model YAMLs
 python -m saryolo synth-data --out datasets/processed/synthetic_smoke
 python -m saryolo train --exp configs/exp/_smoke_baseline.yaml
 python -m saryolo train --exp configs/exp/_smoke_full.yaml
@@ -614,6 +668,15 @@ Every arm below sits in the *same slot* with every other component held fixed, a
 | `EXP-321…326` | consistency (SEC. 4) | off (control) · speckle ×1 · speckle ×16 · low-contrast · low-SNR · **ours, speckle ×4** |
 | `EXP-331…338` | conditioning (33) | none (control) · gain · shift · film-sensor · film-resolution · film-physical-only · **ours film sensor+resolution** · spatial |
 | `EXP-401…403` | init stage (Phase 3) | random init (control) · COCO `yolo11s.pt` fine-tuned · SAR-pretrained checkpoint fine-tuned |
+| `EXP-501…505` | efficiency frontier | Lite (s) · Lite (s) no-P2 · Lite + conditioning · Lite (n) · Lite (m) |
+
+The `EXP-50x` range is the efficiency frontier: full v2 minus the two largest compute slots
+(context aggregation and adaptive multi-scale fusion), plus the scale, conditioning and
+no-P2 points. It is a *removal* result rather than a new mechanism, so it is exactly the
+subset the removal ablation would select — and `tests/test_efficiency_frontier.py` asserts
+both that the arms are strictly cheaper than their scale-matched reference and that they
+drop *only* those two slots, so the cost saving can never come from silently deleting a
+physical prior.
 
 The `EXP-26x` range answers SEC. 14 of the brief directly: the transform is the *variable*, so FFT, block-DCT and Haar wavelet are compared in one slot with everything else held fixed, rather than assuming the FFT is right. `EXP-294/295` sweep the refinement's `max_offset` bound; it is logged as an **open sweep, not a tuned constant**, because the learned offsets sit at ~94% of the bound where `tanh`'s gradient is smallest — so the bound may well be too tight.
 
@@ -691,7 +754,7 @@ saryolo/
 ├── paper/                 LaTeX + table/figure generators (cannot fabricate)
 └── cli.py                 python -m saryolo <command>
 
-configs/    datasets/ · models/ (80 generated) · exp/ (EXP-001…019 + EXP-2xx ablations)
+configs/    datasets/ · models/ (92 generated) · exp/ (EXP-001…019 + EXP-2xx ablations + EXP-50x frontier)
 scripts/    prepare_dataset · make_exp_configs · train_all_experiments
             make_readme_assets (builds this page's charts) · check_chart_layout
 notebooks/  Colab: dataset prep · train + ablate · benchmark + paper

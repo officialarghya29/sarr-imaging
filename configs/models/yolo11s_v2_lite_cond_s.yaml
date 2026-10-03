@@ -1,0 +1,235 @@
+# SAR-YOLO / v2_lite_cond_s  -- GENERATED FILE, do not edit by hand.
+# Regenerate with:  python -m saryolo arch --variant v2_lite_cond_s
+# scale=s  levels=p2-p3-p4-p5  modules=sfe, speckle, frequency, prior, attention, refine, p2_head
+# efficiency_arm=True  (True = the arm exists for the cost claim)
+# sar_loss={'w_sep': 0.2, 'w_small': 0.5, 'w_smooth': 0.05, 'margin': 1.0, 'bg_frac': 0.25}
+#
+# NOTE: when this file is loaded, ultralytics derives the compound scale from the
+# FILE NAME (guess_model_scale), overwriting the 'scale' key below. The file must
+# therefore keep its 'yolo11s_' prefix or it will silently build at scale 'n'.
+# Efficiency frontier + the acquisition-conditioned adapter. The cross-sensor claim must be affordable, so the adapter is priced on the light model rather than only on full v2.
+#
+# [from, repeats, module, args]
+nc: 1
+scale: s
+scales:
+  n: [0.5, 0.25, 1024]
+  s: [0.5, 0.5, 1024]
+  m: [0.5, 1.0, 512]
+  l: [1.0, 1.0, 512]
+  x: [1.0, 1.5, 512]
+backbone:
+- - -1
+  - 1
+  - Conv
+  - [64, 3, 2]
+- - -1
+  - 1
+  - Conv
+  - [128, 3, 2]
+- - -1
+  - 2
+  - C3k2
+  - [256, false, 0.25]
+- - -1
+  - 1
+  - SARFeatureEnhancement
+  - [ch, sfe, 3, 8]
+- - -1
+  - 1
+  - Conv
+  - [256, 3, 2]
+- - -1
+  - 2
+  - C3k2
+  - [512, false, 0.25]
+- - -1
+  - 1
+  - Conv
+  - [512, 3, 2]
+- - -1
+  - 2
+  - C3k2
+  - [512, true]
+- - -1
+  - 1
+  - Conv
+  - [1024, 3, 2]
+- - -1
+  - 2
+  - C3k2
+  - [1024, true]
+- - -1
+  - 1
+  - SPPF
+  - [1024, 5]
+- - -1
+  - 2
+  - C2PSA
+  - [1024]
+- - -1
+  - 1
+  - SpeckleAwareFeatureModule
+  - [ch, sfm_clutter, 8, 3]
+- - -1
+  - 1
+  - SpatialFrequencyRepresentation
+  - [ch, sff, 8, 8]
+head:
+- - -1
+  - 1
+  - nn.Upsample
+  - [null, 2, nearest]
+- - [14, 7]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 2
+  - C3k2
+  - [512, false]
+- - -1
+  - 1
+  - nn.Upsample
+  - [null, 2, nearest]
+- - [17, 5]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 2
+  - C3k2
+  - [256, false]
+- - -1
+  - 1
+  - nn.Upsample
+  - [null, 2, nearest]
+- - [20, 3]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 2
+  - C3k2
+  - [128, false]
+- - -1
+  - 1
+  - Conv
+  - [128, 3, 2]
+- - [23, 19]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 2
+  - C3k2
+  - [256, false]
+- - -1
+  - 1
+  - Conv
+  - [256, 3, 2]
+- - [26, 16]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 2
+  - C3k2
+  - [512, false]
+- - -1
+  - 1
+  - Conv
+  - [512, 3, 2]
+- - [29, 13]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 2
+  - C3k2
+  - [1024, true]
+- - 22
+  - 1
+  - AcquisitionConditionedAdapter
+  - - ch
+    - 22
+    - film
+    - sensor_resolution
+    - [2, 2, 2]
+- - 32
+  - 1
+  - TargetPriorModulation
+  - [ch, 32, learned, 3, 8]
+- - 33
+  - 1
+  - SARAdaptiveAttention
+  - [ch, 33, 16, 7, adaptive]
+- - 34
+  - 1
+  - TargetAwareRefinement
+  - [ch, 34, deform, 3, 0.5]
+- - 25
+  - 1
+  - AcquisitionConditionedAdapter
+  - - ch
+    - 25
+    - film
+    - sensor_resolution
+    - [2, 2, 2]
+- - 36
+  - 1
+  - TargetPriorModulation
+  - [ch, 36, learned, 3, 8]
+- - 37
+  - 1
+  - SARAdaptiveAttention
+  - [ch, 37, 16, 7, adaptive]
+- - 38
+  - 1
+  - TargetAwareRefinement
+  - [ch, 38, deform, 3, 0.5]
+- - 28
+  - 1
+  - AcquisitionConditionedAdapter
+  - - ch
+    - 28
+    - film
+    - sensor_resolution
+    - [2, 2, 2]
+- - 40
+  - 1
+  - TargetPriorModulation
+  - [ch, 40, learned, 3, 8]
+- - 41
+  - 1
+  - SARAdaptiveAttention
+  - [ch, 41, 16, 7, adaptive]
+- - 42
+  - 1
+  - TargetAwareRefinement
+  - [ch, 42, deform, 3, 0.5]
+- - 31
+  - 1
+  - AcquisitionConditionedAdapter
+  - - ch
+    - 31
+    - film
+    - sensor_resolution
+    - [2, 2, 2]
+- - 44
+  - 1
+  - TargetPriorModulation
+  - [ch, 44, learned, 3, 8]
+- - 45
+  - 1
+  - SARAdaptiveAttention
+  - [ch, 45, 16, 7, adaptive]
+- - 46
+  - 1
+  - TargetAwareRefinement
+  - [ch, 46, deform, 3, 0.5]
+- - [35, 39, 43, 47]
+  - 1
+  - Detect
+  - [nc]
+sar_loss: {w_sep: 0.2, w_small: 0.5, w_smooth: 0.05, margin: 1.0, bg_frac: 0.25}

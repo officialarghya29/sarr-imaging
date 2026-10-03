@@ -1,6 +1,7 @@
 # SAR-YOLO / att_none  -- GENERATED FILE, do not edit by hand.
 # Regenerate with:  python -m saryolo arch --variant att_none
 # scale=s  levels=p3-p4-p5  modules=sfe, speckle
+# efficiency_arm=False  (True = the arm exists for the cost claim)
 # sar_loss=off
 #
 # NOTE: when this file is loaded, ultralytics derives the compound scale from the

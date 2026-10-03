@@ -8,5 +8,6 @@
 | - spatial-frequency | TBD | TBD | TBD | TBD | TBD |
 | - context | TBD | TBD | TBD | TBD | TBD |
 | - refinement | TBD | TBD | TBD | TBD | TBD |
+| - prior spectral (Module G; ref. v2_prior_spectral) | TBD | TBD | TBD | TBD | TBD |
 
 `TBD` = not yet measured (run the corresponding experiment).

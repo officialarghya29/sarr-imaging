@@ -1,0 +1,23 @@
+\begin{table}[t]
+\centering
+% WARNING: contains unmeasured (TBD) cells -- not submission ready.
+\caption{Efficiency frontier. Cost is *measured* on this machine (params and GFLOPs at 640², one-class head); accuracy is ``TBD`` until the corresponding run exists, because a cost claim needs no accuracy to be true about cost. The lower section lists published SAR detectors: those are numbers their authors reported, not reproduced here, and they are kept in a separate section for exactly that reason.}
+\label{tab:efficiency_frontier}
+\begin{tabular}{lrrrrr}
+\toprule
+Model & Params (M) & GFLOPs & mAP50 & mAP50:95 & Source \\
+\midrule
+SAR-YOLO v2 (reference) & 16.230 & 55.68 & TBD & TBD & measured (this repo) \\
+v2, no P2 level & 15.808 & 38.76 & TBD & TBD & measured (this repo) \\
+SARVO-Lite (s) & 11.016 & 32.55 & TBD & TBD & measured (this repo) \\
+SARVO-Lite (s), no P2 & 10.858 & 24.24 & TBD & TBD & measured (this repo) \\
+SARVO-Lite + conditioning (s) & 11.093 & 32.55 & TBD & TBD & measured (this repo) \\
+SARVO-Lite (n) & 3.043 & 11.71 & TBD & TBD & measured (this repo) \\
+SARVO-Lite (m) & 22.541 & 97.18 & TBD & TBD & measured (this repo) \\
+AC-YOLO (published) & TBD & TBD & TBD & TBD & PLOS ONE 20(7): e0327362, 2025 — reported: params_reduction_pct=30, compute_reduction_pct=15.6, map_delta_ssdd_pct=1.2, map_delta_hrsid_pct=1.5 [relative-only: no absolute params/FLOPs captured ; AP delta is 'AP', not mAP50:95 -- the threshold is not stated in the abstract] \\
+Edge-optimized lightweight YOLO (published) & 1.900 & TBD & TBD & TBD & Remote Sensing 17(13): 2168, 2025 — reported: params_M=1.9, map_sardet100k=87.7 [the metric is reported as 'mAP' without the threshold; treat as mAP50 until the table in the paper is checked ; no FLOPs captured] \\
+RLE-YOLO (published) & TBD & TBD & 93.9 & TBD & IEEE JSTARS, 2025 — reported: map50_ssdd=93.9, map50_hrsid=98.4, params_reduction_pct=43.9, compute_reduction_pct=34.5 [single-class ship detection, so mAP50 is a plain AP ; YOLOv8 family, not YOLO11 -- a different baseline than ours] \\
+SARLite (published) & TBD & TBD & TBD & TBD & Scientific Reports 16, article s41598-026-49143-5, 2026 — reported: params_reduction_pct=17, compute_reduction_gflops=1, map50_95_delta_pct=3.4 [relative-only: absolute params/FLOPs and mAP not captured ; multi-class benchmark, so mAP50:95 is comparable in kind to ours] \\
+\bottomrule
+\end{tabular}
+\end{table}

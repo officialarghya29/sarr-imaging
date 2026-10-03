@@ -44,6 +44,7 @@ explicitly:
 
 | Claim | Supported only if | Control experiment |
 | --- | --- | --- |
+| **The model is cost-competitive** | `SARVO-Lite` holds accuracy at the stated lower cost | `EXP-501…505` vs the reference; reported baselines in `efficiency_frontier` |
 | Local-contrast enhancement helps | `EXP-002` beats `EXP-001` | `pre_identity`, `pre_log`, `pre_clahe`, `pre_standardize` |
 | Speckle-aware suppression helps | `EXP-003` beats `EXP-002` | `spk_none`, `spk_lee`, `spk_denoise` |
 | **The attention is *adaptive*** | `att_saa_static` underperforms `EXP-004` | `att_saa_static` |
@@ -71,7 +72,7 @@ requires, so a figure cannot be drawn before its experiment exists:
 | 11 | Qualitative: GT vs baseline vs SAR-YOLO | `saryolo.visualization.detections` |
 | 12 | Grad-CAM / feature maps | `saryolo.visualization.attention_maps` |
 | 13 | Robustness curves | `results/robustness/robustness.json` |
-| 14 | mAP vs FPS / params / FLOPs | ledger |
+| 14 | mAP vs FPS / params / FLOPs | ledger + `paper/tables/efficiency_frontier.md` |
 | 15 | Failure taxonomy | `saryolo.visualization.error_analysis` |
 
 Architecture diagrams (Figures 2–10) are intentionally *not* auto-generated:

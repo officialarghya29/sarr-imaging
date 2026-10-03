@@ -72,6 +72,27 @@ MATRIX: tuple[tuple[str, str, str, str], ...] = (
      "experiment because a loss cannot be ablated by removing parameters."),
 )
 
+#: The efficiency frontier (EXP-501..505). One runnable config per frontier arm, so a
+#: cost row in the frontier table can always be traced to a run rather than to a profile
+#: taken at a different time. ``(id, variant, display name, purpose)``.
+#:
+#: These are *not* a new mechanism. Each one is the full v2 graph with the two largest
+#: compute slots (context aggregation and adaptive multi-scale fusion) removed, plus the
+#: scale/conditioning/P2 points of the frontier -- i.e. exactly the subset a removal
+#: ablation would select if those slots fail to repay their measured share of the compute.
+FRONTIER: tuple[tuple[str, str, str, str], ...] = (
+    ("EXP-501", "v2_lite_s", "SARVO-Lite (s)",
+     "Efficiency frontier: full v2 minus context aggregation and AMF, at scale s."),
+    ("EXP-502", "v2_lite_p35_s", "SARVO-Lite (s), no P2",
+     "Efficiency frontier without the P2 level: the cheapest point that keeps every physical prior."),
+    ("EXP-503", "v2_lite_cond_s", "SARVO-Lite + conditioning (s)",
+     "Efficiency frontier with the acquisition-conditioned adapter: is the cross-sensor claim affordable?"),
+    ("EXP-504", "v2_lite_n", "SARVO-Lite (n)",
+     "Efficiency frontier at scale n: the edge-deployment point."),
+    ("EXP-505", "v2_lite_m", "SARVO-Lite (m)",
+     "Efficiency frontier at scale m: does the frontier hold when capacity is restored?"),
+)
+
 #: Experiment ids that are evaluated rather than trained.
 EVAL_ONLY = {"EXP-009", "EXP-010", "EXP-011"}
 
@@ -291,6 +312,22 @@ def main() -> int:
         }
         _write(out / f"{exp_id}_init_baseline.yaml", payload, f"Phase 3 init: {note}")
         written.append(f"{exp_id}_init_baseline.yaml")
+
+    # The efficiency frontier. Emitted from its own table rather than from MATRIX so the
+    # frontier can grow a scale without renumbering anything above it.
+    for exp_id, variant, name, purpose in FRONTIER:
+        rel_model = model_rel(variant)
+        if rel_model is None:
+            continue
+        payload = {
+            "experiment": {"id": exp_id, "name": name, "description": purpose},
+            "model": rel_model,
+            "dataset": rel_dataset,
+            "train": _train_block(args),
+            "notes": purpose,
+        }
+        _write(out / f"{exp_id}_{variant}.yaml", payload, purpose)
+        written.append(f"{exp_id}_{variant}.yaml")
 
     # Module-level ablation arms: EXP-<prefix><arm>.
     seen_ids: dict[str, str] = {}

@@ -67,7 +67,19 @@ Latest additions (this session):
 5. ~~Paper-structure skeleton (SARVO Phase 55)~~ — **built**: `reports/paper/` holds the
    section skeletons (abstract → limitations), each with its evidence source and its blocked
    status; the README gained the Part X paper-assembly section.
-6. ~~RT-DETR feasibility arm (red-team W6)~~ — **built, not measured**:
+6. ~~Efficiency frontier (SARVO: beat the field on cost)~~ — **built, cost measured**:
+   `SARVO-Lite` is full v2 minus its two dominant compute slots (adaptive multi-scale
+   fusion and context aggregation, ~42% of the compute), keeping every physical prior.
+   Measured at scale `s`: 11.016 M / 32.55 GFLOPs versus full v2's 16.230 M / 55.68
+   GFLOPs, with the conditioning adapter adding +0.7% params and no measurable compute.
+   `saryolo/evaluation/reported_baselines.py` holds the *published* comparison points
+   (AC-YOLO, RLE-YOLO, Edge-optimized lightweight YOLO, SARLite) with venue, URL and
+   explicit caveats, in a namespace that can never satisfy a measured cell; the new
+   `efficiency_frontier` paper table keeps the two kinds of number in separate sections.
+   `EXP-501…505` are the runnable configs; accuracy stays `TBD`. 13 tests in
+   `tests/test_efficiency_frontier.py` pin the arms and the honesty rules.
+
+7. ~~RT-DETR feasibility arm (red-team W6)~~ — **built, not measured**:
    `SARYOLORTDetectionModel` + generator-derived `configs/models/rtdetr/rtdetr_s_cond_film.yaml`
    (`scripts/make_rtdetr_variant.py`, `--check` guards drift). Proven end to end through the
    real vocabulary path: adapter in graph, decoder consumes conditioned features, held-out

@@ -1,0 +1,203 @@
+# SAR-YOLO / v2_lite_m  -- GENERATED FILE, do not edit by hand.
+# Regenerate with:  python -m saryolo arch --variant v2_lite_m
+# scale=m  levels=p2-p3-p4-p5  modules=sfe, speckle, frequency, prior, attention, refine, p2_head
+# efficiency_arm=True  (True = the arm exists for the cost claim)
+# sar_loss={'w_sep': 0.2, 'w_small': 0.5, 'w_smooth': 0.05, 'margin': 1.0, 'bg_frac': 0.25}
+#
+# NOTE: when this file is loaded, ultralytics derives the compound scale from the
+# FILE NAME (guess_model_scale), overwriting the 'scale' key below. The file must
+# therefore keep its 'yolo11m_' prefix or it will silently build at scale 'n'.
+# Efficiency frontier at scale m: full v2 minus context aggregation and adaptive multi-scale fusion (the two largest compute slots).
+#
+# [from, repeats, module, args]
+nc: 1
+scale: m
+scales:
+  n: [0.5, 0.25, 1024]
+  s: [0.5, 0.5, 1024]
+  m: [0.5, 1.0, 512]
+  l: [1.0, 1.0, 512]
+  x: [1.0, 1.5, 512]
+backbone:
+- - -1
+  - 1
+  - Conv
+  - [64, 3, 2]
+- - -1
+  - 1
+  - Conv
+  - [128, 3, 2]
+- - -1
+  - 2
+  - C3k2
+  - [256, false, 0.25]
+- - -1
+  - 1
+  - SARFeatureEnhancement
+  - [ch, sfe, 3, 8]
+- - -1
+  - 1
+  - Conv
+  - [256, 3, 2]
+- - -1
+  - 2
+  - C3k2
+  - [512, false, 0.25]
+- - -1
+  - 1
+  - Conv
+  - [512, 3, 2]
+- - -1
+  - 2
+  - C3k2
+  - [512, true]
+- - -1
+  - 1
+  - Conv
+  - [1024, 3, 2]
+- - -1
+  - 2
+  - C3k2
+  - [1024, true]
+- - -1
+  - 1
+  - SPPF
+  - [1024, 5]
+- - -1
+  - 2
+  - C2PSA
+  - [1024]
+- - -1
+  - 1
+  - SpeckleAwareFeatureModule
+  - [ch, sfm_clutter, 8, 3]
+- - -1
+  - 1
+  - SpatialFrequencyRepresentation
+  - [ch, sff, 8, 8]
+head:
+- - -1
+  - 1
+  - nn.Upsample
+  - [null, 2, nearest]
+- - [14, 7]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 2
+  - C3k2
+  - [512, false]
+- - -1
+  - 1
+  - nn.Upsample
+  - [null, 2, nearest]
+- - [17, 5]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 2
+  - C3k2
+  - [256, false]
+- - -1
+  - 1
+  - nn.Upsample
+  - [null, 2, nearest]
+- - [20, 3]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 2
+  - C3k2
+  - [128, false]
+- - -1
+  - 1
+  - Conv
+  - [128, 3, 2]
+- - [23, 19]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 2
+  - C3k2
+  - [256, false]
+- - -1
+  - 1
+  - Conv
+  - [256, 3, 2]
+- - [26, 16]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 2
+  - C3k2
+  - [512, false]
+- - -1
+  - 1
+  - Conv
+  - [512, 3, 2]
+- - [29, 13]
+  - 1
+  - Concat
+  - [1]
+- - -1
+  - 2
+  - C3k2
+  - [1024, true]
+- - 22
+  - 1
+  - TargetPriorModulation
+  - [ch, 22, learned, 3, 8]
+- - 32
+  - 1
+  - SARAdaptiveAttention
+  - [ch, 32, 16, 7, adaptive]
+- - 33
+  - 1
+  - TargetAwareRefinement
+  - [ch, 33, deform, 3, 0.5]
+- - 25
+  - 1
+  - TargetPriorModulation
+  - [ch, 25, learned, 3, 8]
+- - 35
+  - 1
+  - SARAdaptiveAttention
+  - [ch, 35, 16, 7, adaptive]
+- - 36
+  - 1
+  - TargetAwareRefinement
+  - [ch, 36, deform, 3, 0.5]
+- - 28
+  - 1
+  - TargetPriorModulation
+  - [ch, 28, learned, 3, 8]
+- - 38
+  - 1
+  - SARAdaptiveAttention
+  - [ch, 38, 16, 7, adaptive]
+- - 39
+  - 1
+  - TargetAwareRefinement
+  - [ch, 39, deform, 3, 0.5]
+- - 31
+  - 1
+  - TargetPriorModulation
+  - [ch, 31, learned, 3, 8]
+- - 41
+  - 1
+  - SARAdaptiveAttention
+  - [ch, 41, 16, 7, adaptive]
+- - 42
+  - 1
+  - TargetAwareRefinement
+  - [ch, 42, deform, 3, 0.5]
+- - [34, 37, 40, 43]
+  - 1
+  - Detect
+  - [nc]
+sar_loss: {w_sep: 0.2, w_small: 0.5, w_smooth: 0.05, margin: 1.0, bg_frac: 0.25}

@@ -24,6 +24,12 @@
 - Capacity-matched arm (`v2_full_p35_s`) — parameters are never a confound.
 - Metadata withholding curve: all → sensor → sensor+resolution → none.
 - Baseline reproduces stock YOLO11 bit-exactly (tested).
+- **Efficiency frontier** (`EXP-501…505`): `SARVO-Lite` removes the two dominant compute
+  slots (AMF + context, ~42% of full v2's compute) while keeping every physical prior.
+  Cost is measured now; accuracy is `TBD`. `paper/tables/efficiency_frontier.md` also
+  lists the *published* comparison points (AC-YOLO, RLE-YOLO, edge-optimized YOLO,
+  SARLite) with venue and caveats, in a separate section — a reported number never
+  satisfies a measured cell.
 
 ## 4.5 Implementation details
 - Ultralytics 8.4.155, PyTorch 2.x, imgsz 512 first, AMP, fixed seeds 0/1/2,
