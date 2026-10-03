@@ -11,7 +11,8 @@ from pathlib import Path
 
 import numpy as np
 
-__all__ = ["plot_robustness_curve", "plot_accuracy_efficiency", "plot_ablation_bars", "plot_scale_ap", "FIGURE_PLAN"]
+__all__ = ["plot_robustness_curve", "plot_accuracy_efficiency", "plot_cost_frontier",
+           "plot_ablation_bars", "plot_scale_ap", "FIGURE_PLAN"]
 
 #: The figure plan from the project brief, with the data each figure needs.
 FIGURE_PLAN: dict[str, str] = {
@@ -29,6 +30,7 @@ FIGURE_PLAN: dict[str, str] = {
     "fig12_attention_maps": "Grad-CAM / feature maps (saryolo.visualization.attention_maps)",
     "fig13_robustness": "robustness.json from both models",
     "fig14_accuracy_efficiency": "ledger efficiency + mAP for both models",
+    "fig16_cost_frontier": "measured params/GFLOPs for the frontier arms + cited published baselines",
     "fig15_failures": "failure taxonomy counts (saryolo.visualization.error_analysis)",
 }
 
@@ -123,6 +125,82 @@ def plot_accuracy_efficiency(points: dict[str, dict], out_path: str | Path, dpi:
     if not plotted:
         plt.close(fig)
         return None
+    fig.tight_layout()
+    out = Path(out_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out, dpi=dpi)
+    plt.close(fig)
+    return out
+
+
+def plot_cost_frontier(
+    measured: dict[str, dict],
+    out_path: str | Path,
+    reported: list | None = None,
+    dpi: int = 200,
+) -> Path | None:
+    """FIGURE 16 — the cost frontier: our measured arms, and where the field sits.
+
+    This is the one figure that deliberately puts our numbers and published numbers on the
+    same axes, so it is also the one most able to mislead. Three rules keep it honest:
+
+    * our arms are drawn as one series and every published point as another, with different
+      markers and a legend that names the distinction;
+    * a published point is plotted **only when the paper reported an absolute value**. A
+      relative-only entry ("30% fewer parameters") has no coordinate and is skipped rather
+      than converted into a number we would have had to invent;
+    * accuracy is the y-axis, and **nothing is plotted if no measured accuracy exists** --
+      there is no path here that draws our arms at a guessed height. Before a run, the
+      figure is not produced at all, which is the correct outcome.
+
+    Args:
+        measured: ``{label: {"params_M": float, "flops_G": float, "mAP50_95": float}}``
+            for our arms. Entries without a measured ``mAP50_95`` are skipped.
+        out_path: Where to write the figure.
+        reported: :class:`~saryolo.evaluation.reported_baselines.ReportedBaseline` entries to
+            overlay. Only absolute values are used.
+
+    Returns:
+        The written path, or ``None`` when there is nothing measurable to draw.
+    """
+    plt = _mpl()
+    our_points = [
+        (float(v["flops_G"]), float(v["mAP50_95"]), label)
+        for label, v in measured.items()
+        if v.get("mAP50_95") is not None and v.get("flops_G") is not None
+    ]
+    if not our_points:
+        # No measured accuracy yet: refuse rather than plot the cost-only frontier at a
+        # made-up height. The table carries the cost story until a run exists.
+        return None
+
+    fig, ax = plt.subplots(figsize=(7.5, 5.2))
+    xs = [p[0] for p in our_points]
+    ys = [p[1] for p in our_points]
+    ax.plot(xs, ys, color="#2c7fb8", marker="o", linewidth=1.2, label="SAR-YOLO / SARVO (measured)")
+    for x, y, label in our_points:
+        ax.annotate(label, (x, y), textcoords="offset points", xytext=(6, 4), fontsize=8)
+
+    plotted_reported = 0
+    for entry in reported or []:
+        # Only an absolute pair can be a coordinate. A relative reduction has no place on
+        # the axes, so it is skipped -- never converted into a number we did not measure.
+        if "flops_G" in entry.metrics and "map50_95" in entry.metrics:
+            ax.scatter(float(entry.metrics["flops_G"]), float(entry.metrics["map50_95"]),
+                       color="#e6550d", marker="s", s=45, label="published (as reported)" if not plotted_reported else None)
+            ax.annotate(entry.name, (float(entry.metrics["flops_G"]), float(entry.metrics["map50_95"])),
+                        textcoords="offset points", xytext=(6, -10), fontsize=8, color="#e6550d")
+            plotted_reported += 1
+
+    ax.set_xlabel("GFLOPs (lower is better)")
+    ax.set_ylabel("mAP50:95 (higher is better)")
+    ax.grid(alpha=0.3)
+    if plotted_reported:
+        # The footnote is part of the figure, not the caption, so the distinction survives
+        # being cropped out of a slide.
+        ax.text(0.0, -0.16, "published points are their authors' reported numbers, not reproduced here",
+                transform=ax.transAxes, fontsize=8, color="#e6550d")
+    ax.legend(fontsize=8, loc="lower right")
     fig.tight_layout()
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)

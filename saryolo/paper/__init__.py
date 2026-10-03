@@ -6,6 +6,7 @@ from .figures import (
     FIGURE_PLAN,
     plot_ablation_bars,
     plot_accuracy_efficiency,
+    plot_cost_frontier,
     plot_robustness_curve,
     plot_scale_ap,
 )
@@ -39,6 +40,7 @@ __all__ = [
     "write_tables",
     "plot_robustness_curve",
     "plot_accuracy_efficiency",
+    "plot_cost_frontier",
     "plot_ablation_bars",
     "plot_scale_ap",
     "FIGURE_PLAN",

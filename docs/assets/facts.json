@@ -487,6 +487,57 @@
       }
     ]
   },
+  "frontier": [
+    {
+      "variant": "v2_full",
+      "scale": "s",
+      "params_M": 16.229583,
+      "flops_G": 55.68260116,
+      "label": "SAR-YOLO v2\n(reference)"
+    },
+    {
+      "variant": "v2_full_p35_s",
+      "scale": "s",
+      "params_M": 15.808306,
+      "flops_G": 38.754919824,
+      "label": "v2, no P2"
+    },
+    {
+      "variant": "v2_lite_s",
+      "scale": "s",
+      "params_M": 11.015697,
+      "flops_G": 32.553706344,
+      "label": "SARVO-Lite\n(s)"
+    },
+    {
+      "variant": "v2_lite_p35_s",
+      "scale": "s",
+      "params_M": 10.858163,
+      "flops_G": 24.239992144,
+      "label": "Lite, no P2"
+    },
+    {
+      "variant": "v2_lite_cond_s",
+      "scale": "s",
+      "params_M": 11.093205,
+      "flops_G": 32.55385636,
+      "label": "Lite + cond."
+    },
+    {
+      "variant": "v2_lite_n",
+      "scale": "n",
+      "params_M": 3.042693,
+      "flops_G": 11.712479168,
+      "label": "SARVO-Lite\n(n)"
+    },
+    {
+      "variant": "v2_lite_m",
+      "scale": "m",
+      "params_M": 22.540925,
+      "flops_G": 97.178949136,
+      "label": "SARVO-Lite\n(m)"
+    }
+  ],
   "identity": [
     {
       "short": "SFE",
@@ -605,7 +656,7 @@
     ]
   },
   "tests": {
-    "total": 347,
+    "total": 366,
     "by_file": {
       "tests/test_arch.py": 61,
       "tests/test_augmentation.py": 15,
@@ -613,7 +664,8 @@
       "tests/test_conditioning.py": 9,
       "tests/test_conditioning_smoke.py": 6,
       "tests/test_data.py": 24,
-      "tests/test_efficiency_frontier.py": 13,
+      "tests/test_efficiency.py": 17,
+      "tests/test_efficiency_frontier.py": 15,
       "tests/test_field_mask.py": 9,
       "tests/test_groups.py": 36,
       "tests/test_hard_examples.py": 20,

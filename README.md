@@ -6,7 +6,7 @@
 
 *Project codename **SARVO** — SAR Acquisition-Robust Visual Optimization. Same codebase, same hypothesis: object semantics separated from acquisition appearance, by protocol first and mechanism second.*
 
-![status](https://img.shields.io/badge/tests-347_passing-22c55e) ![honesty](https://img.shields.io/badge/fabricated_results-0-black) ![arch](https://img.shields.io/badge/architectures-92_wired-3b82f6) ![exps](https://img.shields.io/badge/experiments-96_configured-8b5cf6) ![license](https://img.shields.io/badge/license-MIT-94a3b8)
+![status](https://img.shields.io/badge/tests-366_passing-22c55e) ![honesty](https://img.shields.io/badge/fabricated_results-0-black) ![arch](https://img.shields.io/badge/architectures-92_wired-3b82f6) ![exps](https://img.shields.io/badge/experiments-96_configured-8b5cf6) ![license](https://img.shields.io/badge/license-MIT-94a3b8)
 
 </div>
 
@@ -24,7 +24,7 @@
 | **Stack** | Python 3.10+ · Ultralytics 8.4.155 · PyTorch 2.x |
 | **Architectures** | 92 variants wired; every one builds and runs a forward pass |
 | **Experiments** | 96 configured; each reproducible from a committed YAML |
-| **Tests** | 347 passing — no dataset download and no GPU needed |
+| **Tests** | 366 passing — no dataset download and no GPU needed |
 | **Accuracy results** | none yet — not one number in this repository is fabricated |
 
 ---
@@ -435,6 +435,8 @@ The positioning target is a *better accuracy-per-unit-cost point than the curren
 detectors*. Cost is measurable here and now, so this part is real rather than aspirational;
 accuracy is `TBD` until a run exists, and the table says so in its own cells.
 
+![Measured parameter and compute cost of the efficiency frontier](docs/assets/cost_frontier.svg)
+
 Full v2 is the reference at **16.23 M / 55.68 GFLOPs**. Two slots dominate its compute:
 adaptive multi-scale fusion (+4.05 M / +20.38 G) and context aggregation (+1.16 M /
 +2.75 G) — together **~42 % of the compute**. `SARVO-Lite` is exactly full v2 with those
@@ -573,7 +575,7 @@ uv pip install --python .venv/bin/python torch torchvision --index-url https://d
 uv pip install --python .venv/bin/python ultralytics pytest
 source .venv/bin/activate
 
-pytest tests/ -q                                          # 347 tests
+pytest tests/ -q                                          # 366 tests
 python -m saryolo arch --variant all --nc 1               # emit 92 model YAMLs
 python -m saryolo synth-data --out datasets/processed/synthetic_smoke
 python -m saryolo train --exp configs/exp/_smoke_baseline.yaml

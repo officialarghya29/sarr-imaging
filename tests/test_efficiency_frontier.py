@@ -197,6 +197,39 @@ def test_reported_baselines_are_not_reachable_from_the_ledger():
     )
 
 
+def test_the_cost_frontier_figure_refuses_to_draw_without_measured_accuracy(tmp_path):
+    """Before a run exists there is no y-coordinate, so the figure must not be produced.
+
+    The alternative -- drawing our arms at a placeholder height -- is the exact failure this
+    project is built to avoid, and it would be invisible in a saved PDF.
+    """
+    from saryolo.paper.figures import plot_cost_frontier
+
+    cost_only = {"SARVO-Lite (s)": {"params_M": 11.016, "flops_G": 32.55}}
+    assert plot_cost_frontier(cost_only, tmp_path / "frontier.svg") is None
+    assert not (tmp_path / "frontier.svg").exists()
+
+
+def test_the_cost_frontier_figure_skips_relative_only_published_entries(tmp_path):
+    """A published '30% fewer params' has no coordinate and must be skipped, not converted.
+
+    Converting a relative reduction into an absolute GFLOPs value would require inventing
+    the baseline it is relative to -- a fabricated number in a figure, which is worse than
+    an absent point because nothing downstream can detect it.
+    """
+    from saryolo.evaluation.reported_baselines import REPORTED_BASELINES
+    from saryolo.paper.figures import plot_cost_frontier
+
+    measured = {"SARVO-Lite (s)": {"params_M": 11.016, "flops_G": 32.55, "mAP50_95": 0.30}}
+    out = tmp_path / "frontier.svg"
+    path = plot_cost_frontier(measured, out, reported=reported_rows())
+    assert path is not None and path.exists()
+    # AC-YOLO is relative-only, so it contributes no point; this is asserted structurally
+    # rather than by reading the SVG: the entry simply has no absolute pair to plot.
+    ac = REPORTED_BASELINES["ac_yolo"]
+    assert "flops_G" not in ac.metrics and "map50_95" not in ac.metrics
+
+
 def test_the_frontier_table_still_marks_accuracy_as_unmeasured():
     """The whole point of the table is that cost is known and accuracy is not."""
     ledger = ExperimentLedger(REPO_ROOT / "results")

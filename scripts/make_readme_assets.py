@@ -235,6 +235,19 @@ def measure_identity() -> list[dict]:
     return rows
 
 
+#: The efficiency frontier: the arms the cost claim is made about, with the reference first.
+#: ``(variant, label, scale)``. Every one is built and measured here, so the chart's x-axis
+#: is a real GFLOP count rather than a quoted one.
+COST_FRONTIER: tuple[tuple[str, str, str], ...] = (
+    ("v2_full", "SAR-YOLO v2\n(reference)", "s"),
+    ("v2_full_p35_s", "v2, no P2", "s"),
+    ("v2_lite_s", "SARVO-Lite\n(s)", "s"),
+    ("v2_lite_p35_s", "Lite, no P2", "s"),
+    ("v2_lite_cond_s", "Lite + cond.", "s"),
+    ("v2_lite_n", "SARVO-Lite\n(n)", "n"),
+    ("v2_lite_m", "SARVO-Lite\n(m)", "m"),
+)
+
 #: The ablation ladder: each step adds exactly one module (the v2 clutter row is a mode
 #: change on the speckle slot rather than an added module, which is why it is labelled
 #: "+clutter" and not "+SFM2").
@@ -403,6 +416,13 @@ def build_facts() -> dict:
             {"variant": v, "label": label, "ours": ours, "params_M": measure(v, "s")["params_M"]}
             for v, label, ours in arms
         ]
+
+    print("Measuring the efficiency frontier ...")
+    facts["frontier"] = []
+    for variant, label, scale in COST_FRONTIER:
+        m = measure(variant, scale, with_flops=True)
+        facts["frontier"].append({**m, "label": label})
+        print(f"  {variant}: {m['params_M']:.3f} M, {m['flops_G']:.2f} GFLOPs")
 
     print("Measuring identity-at-initialisation ...")
     facts["identity"] = measure_identity()
@@ -687,6 +707,54 @@ def chart_slot_ablations_v2(facts: dict) -> None:
     )
 
 
+def chart_cost_frontier(facts: dict) -> None:
+    """Horizontal bars: measured params and GFLOPs for the frontier arms.
+
+    Two panels rather than one scatter: with no measured accuracy yet, an accuracy/cost
+    scatter would need a y-coordinate that does not exist, and drawing one at a placeholder
+    height is the exact failure this repository refuses. The cost alone is a complete,
+    honest finding -- the two dominant slots are ~42% of the compute -- so it gets its own
+    figure, and the accuracy panel is added when a run exists.
+    """
+    rows = facts["frontier"]
+    labels = [r["label"].replace("\n", " ") for r in rows]
+    params = [r["params_M"] for r in rows]
+    flops = [r["flops_G"] for r in rows]
+    # The reference is magenta, every cheaper point cyan, so the eye reads the drop.
+    colors = [MAGENTA if i == 0 else CYAN for i in range(len(rows))]
+
+    fig, axes = plt.subplots(1, 2, figsize=(17.0, 7.2))
+    for ax, vals, xlabel in ((axes[0], params, "Parameters (millions)"),
+                             (axes[1], flops, "GFLOPs @ 640\u00b2")):
+        bars = ax.barh(labels, vals, color=colors, alpha=0.9, height=0.62)
+        for bar, v in zip(bars, vals, strict=True):
+            ax.text(v * 1.015, bar.get_y() + bar.get_height() / 2, f"{v:.2f}",
+                    va="center", fontsize=10, color=MUTED)
+        ax.set_xlim(0, max(vals) * 1.22)
+        ax.invert_yaxis()
+        ax.set_xlabel(xlabel)
+        ax.grid(axis="x", color=GRID, linestyle="--", linewidth=0.7, alpha=0.7)
+        ax.set_axisbelow(True)
+        for side in ("top", "right"):
+            ax.spines[side].set_visible(False)
+        for side in ("left", "bottom"):
+            ax.spines[side].set_color(GRID)
+    axes[1].set_yticklabels([])
+    ref_p, ref_f = params[0], flops[0]
+    lite = next(r for r in rows if r["variant"] == "v2_lite_s")
+    _header(
+        axes[0],
+        "What the model costs, measured",
+        f"Every bar is profiled on this machine, not quoted. SARVO-Lite removes the two\n"
+        f"dominant compute slots (adaptive fusion + context aggregation) and keeps every\n"
+        f"physical prior. Reference: {ref_p:.2f}M / {ref_f:.2f} GFLOPs.  "
+        f"SARVO-Lite (s): {lite['params_M']:.2f}M / {lite['flops_G']:.2f} GFLOPs \u2014 "
+        f"{(1 - lite['flops_G'] / ref_f) * 100:.0f}% less compute.",
+        title_size=15,
+    )
+    _save(fig, "cost_frontier.svg")
+
+
 def chart_identity(facts: dict) -> None:
     """Visualise the measured identity-at-initialisation property."""
     rows = facts["identity"]
@@ -848,6 +916,7 @@ def main() -> None:
     print("Rendering charts ...")
     chart_ladder_params(facts)
     chart_accuracy_cost(facts)
+    chart_cost_frontier(facts)
     chart_slot_ablations(facts)
     chart_slot_ablations_v2(facts)
     chart_identity(facts)
