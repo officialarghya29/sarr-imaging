@@ -656,9 +656,10 @@
     ]
   },
   "tests": {
-    "total": 366,
+    "total": 389,
     "by_file": {
       "tests/test_arch.py": 61,
+      "tests/test_audit_docs.py": 23,
       "tests/test_augmentation.py": 15,
       "tests/test_cli.py": 30,
       "tests/test_conditioning.py": 9,

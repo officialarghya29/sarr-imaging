@@ -6,7 +6,7 @@
 
 *Project codename **SARVO** — SAR Acquisition-Robust Visual Optimization. Same codebase, same hypothesis: object semantics separated from acquisition appearance, by protocol first and mechanism second.*
 
-![status](https://img.shields.io/badge/tests-366_passing-22c55e) ![honesty](https://img.shields.io/badge/fabricated_results-0-black) ![arch](https://img.shields.io/badge/architectures-92_wired-3b82f6) ![exps](https://img.shields.io/badge/experiments-96_configured-8b5cf6) ![license](https://img.shields.io/badge/license-MIT-94a3b8)
+![status](https://img.shields.io/badge/tests-389_passing-22c55e) ![honesty](https://img.shields.io/badge/fabricated_results-0-black) ![arch](https://img.shields.io/badge/architectures-92_wired-3b82f6) ![exps](https://img.shields.io/badge/experiments-96_configured-8b5cf6) ![license](https://img.shields.io/badge/license-MIT-94a3b8)
 
 </div>
 
@@ -24,7 +24,7 @@
 | **Stack** | Python 3.10+ · Ultralytics 8.4.155 · PyTorch 2.x |
 | **Architectures** | 92 variants wired; every one builds and runs a forward pass |
 | **Experiments** | 96 configured; each reproducible from a committed YAML |
-| **Tests** | 366 passing — no dataset download and no GPU needed |
+| **Tests** | 389 passing — no dataset download and no GPU needed |
 | **Accuracy results** | none yet — not one number in this repository is fabricated |
 
 ---
@@ -575,7 +575,7 @@ uv pip install --python .venv/bin/python torch torchvision --index-url https://d
 uv pip install --python .venv/bin/python ultralytics pytest
 source .venv/bin/activate
 
-pytest tests/ -q                                          # 366 tests
+pytest tests/ -q                                          # 389 tests
 python -m saryolo arch --variant all --nc 1               # emit 92 model YAMLs
 python -m saryolo synth-data --out datasets/processed/synthetic_smoke
 python -m saryolo train --exp configs/exp/_smoke_baseline.yaml
@@ -764,6 +764,10 @@ tests/      tests across arch parity, identity, gradient flow, metrics, losses, 
             cross-source grouping and folds
 docs/       DATASETS.md · METHOD.md · research_gap.md · PROGRESS.md
             RUNBOOK_SSDD.md · RUNBOOK_HRSID.md · assets/ (generated charts)
+            literature_audit.md · novelty_and_overlap.md · research_questions.md
+            baseline_comparison.md
+reports/    agent_initial_audit.md · reproduction_status.md · red_team_review.md
+            paper/ (section skeletons)
 ```
 
 Model YAMLs and experiment configs are **generated**, never hand-edited:
@@ -774,6 +778,40 @@ python scripts/make_exp_configs.py --dataset ssdd  # configs/exp/
 ```
 
 Because indices in a YOLO YAML are positional, hand-editing an ablation is the single most likely place to introduce a *silent* bug — a wrong index still parses and merely degrades accuracy. The builder computes every index symbolically and asserts the baseline against published counts.
+
+---
+
+## Part IX-bis · Research plan and audit
+
+The project keeps its own honest accounting in four planning documents, each written before
+the paper so the plan cannot be rewritten around the results:
+
+| Document | What it answers |
+| --- | --- |
+| [`reports/agent_initial_audit.md`](reports/agent_initial_audit.md) | What exists, what works, what is broken, what must be preserved |
+| [`reports/reproduction_status.md`](reports/reproduction_status.md) | What is reproducible here **now** vs blocked on a GPU |
+| [`docs/literature_audit.md`](docs/literature_audit.md) | Every competitor, with its evidence depth labelled (verified / abstract-read / listed) |
+| [`docs/novelty_and_overlap.md`](docs/novelty_and_overlap.md) | What may be claimed, what may **not**, and the control that could kill each claim |
+| [`docs/research_questions.md`](docs/research_questions.md) | Seven falsifiable questions, each with its experiment, control and status |
+| [`docs/baseline_comparison.md`](docs/baseline_comparison.md) | The three comparison families, and which comparisons are fair |
+
+The seven research questions and their current status — none is answered, and the document
+says so:
+
+| # | Question | Status |
+| --- | --- | --- |
+| RQ1 | Does the baseline degrade across acquisition sources? | `OPEN` — **BLOCKED-ON-RUN** |
+| RQ2 | Is it a representation problem or a data-volume problem? | `OPEN` — needs a trained checkpoint |
+| RQ3 | Does `cond_continuous` recover part of the cross-source gap? | `OPEN` — **BLOCKED-ON-RUN** |
+| RQ4 | Does the model work with metadata withheld? | `OPEN` — masking tested, curve unmeasured |
+| RQ5 | Is the conditioning architecture-general (RT-DETR)? | `OPEN` — training loop unfinished |
+| RQ6 | Is the efficiency claim real? | **cost measured**; accuracy-at-cost `OPEN` |
+| RQ7 | Does it hold in the low-label regime? | `OPEN` — not implemented |
+
+**The audit's own conclusion, kept verbatim in the repository:** the instrument is verified;
+the measurement has not been taken. The single highest-value next step is not another
+module — it is the first real run (`docs/RUNBOOK_SSDD.md`), followed by the missing LoRA
+comparator that the adaptation claim requires.
 
 ---
 
