@@ -11,7 +11,7 @@ below and §3 of `reports/reproduction_status.md`); they are a beginning, not th
 
 | Master phase | Status in this repo | Evidence |
 | --- | --- | --- |
-| 0. Research landscape | **Started, not closed** | `docs/research_gap.md` — verified entries + flagged full-text reads; the two closest works (SARFormer, Zhang et al. 2026) read and differentiated; novelty claims frozen until the remaining abstract reads |
+| 0. Research landscape | **Started, not closed** | `docs/research_gap.md` + `docs/related_work.md` (the consolidated Phase-2 table) — verified entries + flagged full-text reads; the two closest works (SARFormer, Zhang et al. 2026) read and differentiated; novelty claims frozen until the remaining abstract reads |
 | 1. Dataset audit | Built (tooling) | `check-data` / `stats` commands; EXP-001…003 configured; refuses oriented-label and empty-dataset traps |
 | 1b. Leakage check | Built | Per-fold leakage mode in `loso --leakage`; duplicate detection |
 | 1c. Acquisition metadata for the primary datasets | Built | Verified per-source profiles (SARDet-100K's official 10-source table; HRSID's stated resolutions/sensors) → `write_acquisition_metadata` → MetadataTable → LOSO resolution folds + conditioning arms. The cs231n mirror vendors HRSID+SSDD with on-disk counts, the fastest licensed route to the pilot datasets |
@@ -115,7 +115,20 @@ Latest additions (this session):
    `scripts/make_real_figures.py`. What this is *not*: the full release, a multi-source test, or
    anything about cross-sensor generalisation.
 
-10. ~~RT-DETR feasibility arm (red-team W6)~~ — **built, not measured**:
+10. ~~Architecture decision (master Phase 3)~~ — **written, nothing implemented**:
+   `docs/architecture_proposals.md` offers three genuinely distinct directions — a
+   radar-statistic input representation, an anisotropic weight-tied recursive scale-space
+   path, and a self-estimated acquisition state — each with its nine required fields
+   including a stated failure mode, then recommends the **first** and gives the reason that
+   is not "it is the most novel". It is that the first is the only one of the three whose
+   central claim can be measured *and falsified* on the hardware that exists: the second
+   needs resolution-keyed real data (HRSID has none) and the third needs leave-one-source-out
+   over multiple sources. `docs/related_work.md` is the companion Phase-2 comparison table.
+   The uncomfortable finding this exercise produced is recorded in both documents: the
+   current v2 is a module ladder on a YOLO11 skeleton, which is the outcome the brief
+   explicitly rules out, and no proposal has been implemented yet.
+
+11. ~~RT-DETR feasibility arm (red-team W6)~~ — **built, not measured**:
    `SARYOLORTDetectionModel` + generator-derived `configs/models/rtdetr/rtdetr_s_cond_film.yaml`
    (`scripts/make_rtdetr_variant.py`, `--check` guards drift). Proven end to end through the
    real vocabulary path: adapter in graph, decoder consumes conditioned features, held-out

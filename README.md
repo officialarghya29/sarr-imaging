@@ -6,7 +6,7 @@
 
 **One SAR detector that generalises to a sensor it has never seen — because it is told *how* the image was acquired, not *which* sensor took it.**
 
-![tests](https://img.shields.io/badge/tests-426_passing-22c55e) ![fabricated](https://img.shields.io/badge/fabricated_results-0-black) ![arch](https://img.shields.io/badge/architectures-92_wired-3b82f6) ![exps](https://img.shields.io/badge/experiments-109_configured-8b5cf6) ![cost](https://img.shields.io/badge/SARVO--Lite-32.55_GFLOPs-0891b2) ![license](https://img.shields.io/badge/license-MIT-94a3b8)
+![tests](https://img.shields.io/badge/tests-434_passing-22c55e) ![fabricated](https://img.shields.io/badge/fabricated_results-0-black) ![arch](https://img.shields.io/badge/architectures-92_wired-3b82f6) ![exps](https://img.shields.io/badge/experiments-109_configured-8b5cf6) ![cost](https://img.shields.io/badge/SARVO--Lite-32.55_GFLOPs-0891b2) ![license](https://img.shields.io/badge/license-MIT-94a3b8)
 
 </div>
 
@@ -52,7 +52,7 @@ SAR image ──► SIA ──► backbone ──► components 1/2/9 ──► 
 | **Stack** | Python 3.10+ · Ultralytics 8.4.155 · PyTorch 2.x |
 | **Architectures** | 92 variants wired; every one builds and runs a forward pass |
 | **Experiments** | 109 configured; each reproducible from a committed YAML |
-| **Tests** | 426 passing — no dataset download and no GPU needed |
+| **Tests** | 434 passing — no dataset download and no GPU needed |
 | **Measured** | architecture cost, identity-at-init, protocol correctness, metric correctness, **three real-data pilot arms** on HRSID |
 | **Not measured** | the **paper's accuracy table** — the pilot is a subset run on a CPU, not the full benchmark |
 
@@ -627,7 +627,7 @@ uv pip install --python .venv/bin/python torch torchvision --index-url https://d
 uv pip install --python .venv/bin/python ultralytics pytest
 source .venv/bin/activate
 
-pytest tests/ -q                                          # 426 tests
+pytest tests/ -q                                          # 434 tests
 python -m saryolo arch --variant all --nc 1               # emit 92 model YAMLs
 python -m saryolo synth-data --out datasets/processed/synthetic_smoke
 python -m saryolo train --exp configs/exp/_smoke_baseline.yaml
@@ -817,7 +817,7 @@ tests/      tests across arch parity, identity, gradient flow, metrics, losses, 
 docs/       DATASETS.md · METHOD.md · research_gap.md · PROGRESS.md
             RUNBOOK_SSDD.md · RUNBOOK_HRSID.md · assets/ (generated charts)
             literature_audit.md · novelty_and_overlap.md · research_questions.md
-            baseline_comparison.md
+            baseline_comparison.md · related_work.md · architecture_proposals.md
 reports/    agent_initial_audit.md · reproduction_status.md · red_team_review.md
             paper/ (section skeletons)
 ```
@@ -835,8 +835,8 @@ Because indices in a YOLO YAML are positional, hand-editing an ablation is the s
 
 ## Part IX-bis · Research plan and audit
 
-The project keeps its own honest accounting in four planning documents, each written before
-the paper so the plan cannot be rewritten around the results:
+The project keeps its own honest accounting in a set of planning documents, each written
+before the paper so the plan cannot be rewritten around the results:
 
 | Document | What it answers |
 | --- | --- |
@@ -844,8 +844,10 @@ the paper so the plan cannot be rewritten around the results:
 | [`reports/reproduction_status.md`](reports/reproduction_status.md) | What is reproducible here **now** vs blocked on a GPU |
 | [`docs/literature_audit.md`](docs/literature_audit.md) | Every competitor, with its evidence depth labelled (verified / abstract-read / listed) |
 | [`docs/novelty_and_overlap.md`](docs/novelty_and_overlap.md) | What may be claimed, what may **not**, and the control that could kill each claim |
-| [`docs/research_questions.md`](docs/research_questions.md) | Seven falsifiable questions, each with its experiment, control and status |
-| [`docs/baseline_comparison.md`](docs/baseline_comparison.md) | The three comparison families, and which comparisons are fair |
+| [`docs/research_questions.md`](docs/research_questions.md) | Seven falsifiable questions, each with its experiment, control and status || [`docs/baseline_comparison.md`](docs/baseline_comparison.md) | The three comparison families, and which comparisons are fair |
+| [`docs/related_work.md`](docs/related_work.md) | The Phase-2 comparison table: idea, setup, reported compute, and the exact overlap for each work |
+| [`docs/architecture_proposals.md`](docs/architecture_proposals.md) | The Phase-3 decision: three distinct architecture directions, one recommended, and why the other two are deferred |
+
 
 The seven research questions and their current status — none is answered, and the document
 says so:

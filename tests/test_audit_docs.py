@@ -27,6 +27,8 @@ REQUIRED_DOCS = (
     "docs/novelty_and_overlap.md",
     "docs/research_questions.md",
     "docs/baseline_comparison.md",
+    "docs/related_work.md",
+    "docs/architecture_proposals.md",
     "reports/agent_initial_audit.md",
     "reports/reproduction_status.md",
 )
@@ -38,6 +40,8 @@ CLAIM_DOCS = (
     "docs/novelty_and_overlap.md",
     "docs/research_questions.md",
     "docs/baseline_comparison.md",
+    "docs/related_work.md",
+    "docs/architecture_proposals.md",
     "reports/agent_initial_audit.md",
     "reports/reproduction_status.md",
 )
@@ -155,4 +159,62 @@ def test_the_reproduction_status_matches_the_actual_test_count():
     collected = len([ln for ln in proc.stdout.splitlines() if "::" in ln or ln.endswith(".py")])
     assert claimed == {collected}, (
         f"reproduction_status.md claims {sorted(claimed)} tests but the suite collects {collected}"
+    )
+
+
+#: The nine fields the master context requires for every architecture direction. Stated
+#: once here so a proposal cannot quietly become a two-line sketch, and so that adding a
+#: fourth direction without its failure analysis is a test failure rather than a gap nobody
+#: notices until review.
+PROPOSAL_FIELDS = (
+    "core architectural idea",
+    "main technical problem it addresses",
+    "proposed computational flow",
+    "expected advantages",
+    "potential weaknesses and failure modes",
+    "estimated implementation complexity",
+    "expected efficiency implications",
+    "how it differs from relevant existing approaches",
+    "experiments needed to decide",
+)
+
+
+def test_the_proposals_document_offers_exactly_three_directions_with_the_required_fields():
+    """Three distinct directions, each complete, each with a real failure mode.
+
+    The brief asks for three *genuinely distinct* architecture directions compared against
+    each other and one recommended. The failure this guards is a document that offers three
+    restatements of the same layer stack, or three sketches whose weaknesses are missing --
+    a proposal with no stated failure mode cannot be falsified, and an unfalsifiable
+    proposal is the one thing this repository must not spend its compute on.
+    """
+    text = (REPO_ROOT / "docs" / "architecture_proposals.md").read_text().lower()
+    headings = re.findall(r"^## \d+\.\s*proposal\b", text, flags=re.MULTILINE)
+    assert len(headings) == 3, (
+        f"the proposals document offers {len(headings)} directions, not three"
+    )
+    for field in PROPOSAL_FIELDS:
+        count = text.count(f"**{field}.")
+        assert count == 3, (
+            f"field {field!r} appears {count} times; every one of the three proposals must "
+            "state it"
+        )
+
+
+def test_the_proposals_document_recommends_one_and_defers_the_others():
+    """The deliverable is a decision, not a menu.
+
+    A comparison that recommends nothing, or that quietly keeps all three alive so that no
+    direction can be wrong, is the shape of a document written to avoid a result. The
+    recommendation must be explicit, and the two deferred directions must be deferred for a
+    stated reason.
+    """
+    text = (REPO_ROOT / "docs" / "architecture_proposals.md").read_text()
+    assert "**Recommendation:" in text, "the document makes no explicit recommendation"
+    lowered = text.lower()
+    assert "not merging the three" in lowered, (
+        "the document must say the recommendation is one coherent model, not a union"
+    )
+    assert "parked" in lowered or "deferred" in lowered, (
+        "a direction that is not recommended must be explicitly deferred rather than left open"
     )
