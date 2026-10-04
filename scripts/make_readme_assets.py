@@ -418,7 +418,7 @@ REAL_PEFT_KEYS = ("method", "rank", "lora_params", "fraction_trainable", "n_wrap
 
 
 def _real_arms_facts(ledger: ExperimentLedger) -> dict:
-    """Collect the measured real-data arms, one row per ``REAL-*`` experiment id.
+    """Collect the measured real-data arms, one row per ``REAL-*`` or ``AUG-*`` experiment id.
 
     Read from the ledger rather than from the figure or from prose, because the ledger is the
     only place a number is written by the run that produced it. A completed arm carries the
@@ -429,7 +429,11 @@ def _real_arms_facts(ledger: ExperimentLedger) -> dict:
     rows: dict[str, dict] = {}
     for record in ledger.load():
         exp_id = record.experiment_id
-        if record.status != "completed" or not exp_id.startswith("REAL-"):
+        # ``REAL-`` are the architecture-pilot arms, ``AUG-`` the SAR-augmentation arms;
+        # both are real-data runs and both appear in the README pilot table. ``MSEED-``
+        # runs are seed repeats of a ``REAL-`` arm and are deliberately excluded, so a
+        # seed repeat cannot be mistaken for a new arm.
+        if record.status != "completed" or not exp_id.startswith(("REAL-", "AUG-")):
             continue
         metrics = record.metrics or {}
         row: dict = {

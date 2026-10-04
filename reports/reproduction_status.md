@@ -12,7 +12,7 @@ Every item below was run and observed in this environment.
 
 | What | Command | Observed result |
 | --- | --- | --- |
-| Test suite | `.venv/bin/python -m pytest -q` | **469 passed** |
+| Test suite | `.venv/bin/python -m pytest -q` | **476 passed** |
 | Baseline parity with stock YOLO11 | `pytest tests/test_arch.py -k baseline` | exact published counts (n: 2,624,080; s: 9,458,752 at 80 classes) |
 | All variants build and forward | `pytest tests/test_arch.py -k every_variant` | 92 variants pass |
 | Module identity at init | `pytest tests/test_arch.py -k identity` | `max\|f(x)−x\| = 0.0e+00` for all |
@@ -86,19 +86,22 @@ five-corruption robustness sweep (`saryolo robustness`, `results/robustness/REAL
 and pilot-scale, and the front end costs ~40 % of CPU throughput; recorded as *survives both
 falsifiers it named, no paper-grade benefit demonstrated*.
 
-**SAR-appearance augmentation (`AUG-001`, `AUG-002`).** Two arms on the augmented HRSID split
-(one corruption draw per training image; clean val/test), to test whether training under the SAR
+**SAR-appearance augmentation (`AUG-001…004`).** Four arms on the augmented HRSID splits (one or
+two corruption draws per training image; clean val/test), to test whether training under the SAR
 degradation model widens the front end's lead:
 
 | Arm | Train images | mAP50 | mAP50:95 | Precision | Recall | Train (min) |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| AUG-001 · baseline, SAR-augmented | 400 | 0.6060 | 0.3571 | 0.9548 | 0.5556 | 12.71 |
-| AUG-002 · CFAR front end, SAR-augmented | 400 | 0.6049 | 0.3638 | 0.9493 | 0.5478 | 24.36 |
+| AUG-001 · baseline, SAR-augmented x1 | 400 | 0.6060 | 0.3571 | 0.9548 | 0.5556 | 12.71 |
+| AUG-002 · CFAR front end, SAR-augmented x1 | 400 | 0.6049 | 0.3638 | 0.9493 | 0.5478 | 24.36 |
+| AUG-003 · baseline, SAR-augmented x2 | 600 | 0.6278 | 0.3898 | 0.9418 | 0.5848 | 16.50 |
+| AUG-004 · CFAR front end, SAR-augmented x2 | 600 | 0.6160 | 0.3914 | 0.9224 | 0.5789 | 30.85 |
 
-Augmentation is the largest accuracy movement measured here — the baseline rises 0.3012 → 0.3571
-mAP50:95 (+18.6 % relative) — but the prototype's lead **halves** (+0.0139 → +0.0067), so the
-hypothesis is **not supported**: the corruption model gives both arms much of the robustness the
-statistic provided. See `paper/RESULTS.md` §3.
+Augmentation is the largest accuracy movement measured here, and it keeps helping as it
+strengthens — the baseline rises 0.3012 → 0.3571 → 0.3898 mAP50:95 (+29.4 % relative). But the
+prototype's lead **shrinks monotonically** as augmentation grows (+0.0139 → +0.0067 → +0.0016),
+so the hypothesis is **not supported**: the corruption model gives both arms much of the
+robustness the statistic provided. See `paper/RESULTS.md` §3.
 
 Reproduce with:
 
@@ -113,6 +116,9 @@ python -m saryolo augment --data configs/datasets/hrsid_real.yaml --views 1 \
     --out datasets/processed/hrsid_real_aug        # then copy val/test from hrsid_real
 python -m saryolo train --exp configs/exp/AUG-001_hrsid_aug_baseline.yaml
 python -m saryolo train --exp configs/exp/AUG-002_hrsid_aug_cfar.yaml
+python -m saryolo augment --data configs/datasets/hrsid_real.yaml --views 2 --out datasets/processed/hrsid_real_aug2
+python -m saryolo train --exp configs/exp/AUG-003_hrsid_aug2_baseline.yaml
+python -m saryolo train --exp configs/exp/AUG-004_hrsid_aug2_cfar.yaml
 python scripts/make_readme_assets.py     # regenerates docs/assets/facts.json + the charts
 python scripts/make_real_figures.py      # regenerates the qualitative detection panel
 ```

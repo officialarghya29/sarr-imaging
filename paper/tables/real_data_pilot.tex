@@ -1,0 +1,21 @@
+\begin{table}[t]
+\centering
+\caption{Pilot on a real HRSID subset: the official release, YOLO boxes, 200 train / 60 val / 60 test images, 40 epochs at 320 px, single seed, CPU only. Real and measured, but the release is 5,604 images -- this is not the benchmark, and a row here is not comparable with a full-release row. For REAL-003 the adapter is folded into the base weights when the checkpoint is written, so its parameter count equals the baseline's while what was optimised (a rank-8 adapter plus the head) is recorded separately in the ledger.}
+\label{tab:real_data_pilot}
+\begin{tabular}{lrrrrrrrr}
+\toprule
+Model & mAP50 & mAP50:95 & Precision & Recall & Params (M) & GFLOPs@320 & FPS & Train (min) \\
+\midrule
+YOLO11n baseline -- HRSID subset & 0.5706 & 0.3012 & 0.9240 & 0.5380 & 2.590 & 1.613 & 61.8 & 6.95 \\
+SARVO-Lite (s) -- HRSID subset & 0.5724 & 0.3287 & 0.8014 & 0.5263 & 11.016 & 8.106 & 12.4 & 36.22 \\
+YOLO11n + LoRA r=8 -- HRSID subset & 0.5781 & 0.2984 & 0.8682 & 0.5556 & 2.590 & 1.613 & 65.6 & 8.84 \\
+SARVO prototype: CFAR front end -- HRSID subset & 0.5691 & 0.3151 & 0.9104 & 0.5346 & 2.590 & 1.764 & 36.7 & 12.47 \\
+Prototype control: CFAR, fixed threshold -- HRSID subset & 0.4952 & 0.2465 & 0.7931 & 0.4737 & 2.590 & 1.728 & 44.1 & 7.31 \\
+Prototype control: matched-cost conv stem -- HRSID subset & 0.5654 & 0.3021 & 0.9244 & 0.5146 & 2.590 & 1.649 & 44.9 & 10.03 \\
+Baseline, SAR-augmented training (x1) -- HRSID subset & 0.6060 & 0.3571 & 0.9548 & 0.5556 & 2.590 & 1.613 & 62.5 & 12.71 \\
+Prototype, SAR-augmented training (x1) -- HRSID subset & 0.6049 & 0.3638 & 0.9493 & 0.5478 & 2.590 & 1.764 & 31.6 & 24.36 \\
+Baseline, SAR-augmented training (x2) -- HRSID subset & 0.6278 & 0.3898 & 0.9418 & 0.5848 & 2.590 & 1.613 & 63.7 & 16.50 \\
+Prototype, SAR-augmented training (x2) -- HRSID subset & 0.6160 & 0.3914 & 0.9224 & 0.5789 & 2.590 & 1.764 & 36.8 & 30.85 \\
+\bottomrule
+\end{tabular}
+\end{table}

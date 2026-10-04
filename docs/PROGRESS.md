@@ -179,12 +179,15 @@ Latest additions (this session):
    any LOSO number remain open — feasibility ≠ result.
 
 12. ~~SAR-appearance augmentation pilot (SEC. 5)~~ — **measured** (`AUG-001`, `AUG-002`):
-   the augmented HRSID subset (`python -m saryolo augment`, one corruption draw per training
-   image, clean val/test) trained as a baseline and as the CFAR arm. Augmentation is the
-   largest accuracy movement in the repository — the baseline jumps 0.3012 → 0.3571 mAP50:95
-   (+18.6 % relative) — but the hypothesis it was run to test (that it *widens* the front
-   end's lead) is **not supported**: the lead halves, +0.0139 → +0.0067. Recorded honestly as
-   a win for the detector and a negative for the front end; see `paper/RESULTS.md` §3.
+   the augmented HRSID subset (`python -m saryolo augment`, one or two corruption draws per training
+   image, clean val/test) trained as a baseline and as the CFAR arm, at one view
+   (`AUG-001`/`AUG-002`) and two views (`AUG-003`/`AUG-004`, 600 train images). Augmentation is
+   the largest accuracy movement in the repository and keeps helping as it strengthens — the
+   baseline goes 0.3012 → 0.3571 → 0.3898 mAP50:95 (+29.4 % relative) — but the hypothesis it
+   was run to test (that it *widens* the front end's lead) is **not supported**: the lead
+   shrinks monotonically, +0.0139 → +0.0067 → +0.0016, and mAP50 is slightly worse for the arm
+   at two views. Recorded honestly as a win for the detector and a negative for the front end;
+   see `paper/RESULTS.md` §3.
 
 What remains on the critical path needs a GPU: run `docs/RUNBOOK_SSDD.md` end to end. Every
 CPU-side prerequisite is now in place.

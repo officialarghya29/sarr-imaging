@@ -1,0 +1,28 @@
+# STRONGER SAR-AUGMENTATION PILOT (baseline arm) -- real HRSID subset.
+#
+# The two-view counterpart of AUG-001: the training split carries two SAR-augmented
+# views per image (600 train images) instead of one, everything else identical, and
+# evaluation is on the clean test split. Pairs with AUG-004 to test whether increasing
+# augmentation strength keeps improving the detector and what it does to the front
+# end's lead. Schedule identical to AUG-001.
+#
+#   python -m saryolo train --exp configs/exp/AUG-003_hrsid_aug2_baseline.yaml
+experiment:
+  id: AUG-003
+  name: HRSID-augmented x2 baseline (YOLO11n, no front end)
+  description: Baseline trained on the two-view SAR-augmented HRSID subset; pairs with AUG-004.
+model: ../models/yolo11n_baseline_n.yaml
+dataset: ../datasets/hrsid_real_aug2.yaml
+train:
+  epochs: 40
+  imgsz: 320
+  batch: 4
+  seed: 0
+  optimizer: auto
+  cos_lr: true
+  patience: 15
+  workers: 4
+  deterministic: true
+notes: >-
+  Real HRSID subset, two-view SAR-augmented train split (600 images), clean test.
+  Pilot only; the full release has 5,604 images.

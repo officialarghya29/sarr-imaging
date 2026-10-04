@@ -61,19 +61,29 @@ evaluated on the **clean** test split.
 
 | Id | Arm | Train images | mAP50 | mAP50:95 | Precision | Recall | Train (min) |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| AUG-001 | baseline, SAR-augmented | 400 | 0.6060 | 0.3571 | 0.9548 | 0.5556 | 12.71 |
-| AUG-002 | **CFAR front end, SAR-augmented** | 400 | 0.6049 | 0.3638 | 0.9493 | 0.5478 | 24.36 |
+| AUG-001 | baseline, SAR-augmented x1 | 400 | 0.6060 | 0.3571 | 0.9548 | 0.5556 | 12.71 |
+| AUG-002 | **CFAR front end, SAR-augmented x1** | 400 | 0.6049 | 0.3638 | 0.9493 | 0.5478 | 24.36 |
+| AUG-003 | baseline, SAR-augmented x2 | 600 | 0.6278 | 0.3898 | 0.9418 | 0.5848 | 16.50 |
+| AUG-004 | **CFAR front end, SAR-augmented x2** | 600 | 0.6160 | 0.3914 | 0.9224 | 0.5789 | 30.85 |
 
-**What this measures.** Augmentation is a large, real win for the detector: the baseline rises
-**0.3012 → 0.3571** mAP50:95 (**+0.0559**, +18.6 % relative) and 0.5706 → 0.6060 mAP50. This is
-the biggest accuracy movement measured in the repository.
+**What this measures.** Augmentation is a large, real win for the detector and it keeps
+helping as it strengthens: the baseline rises **0.3012 → 0.3571 → 0.3898** mAP50:95 (one and
+two augmented views), i.e. **+0.0886, +29.4 % relative**, the biggest accuracy movement in the
+repository. The CFAR arm improves too (0.3151 → 0.3638 → 0.3914) but flattens.
 
-**And the hypothesis is not supported.** Under augmentation the prototype's lead over the
-baseline **halves** — from **+0.0139** mAP50:95 without augmentation to **+0.0067** with it.
+**And the hypothesis is not supported — the opposite happens.** The prototype's lead over the
+baseline shrinks monotonically as augmentation strengthens:
+
+| Context | Baseline mAP50:95 | CFAR mAP50:95 | Gap |
+| --- | ---: | ---: | ---: |
+| no augmentation | 0.3012 | 0.3151 | **+0.0139** |
+| SAR-augmented x1 | 0.3571 | 0.3638 | **+0.0067** |
+| SAR-augmented x2 | 0.3898 | 0.3914 | **+0.0016** |
+
 The honest reading is that augmenting with the same corruption model gives both arms much of
 the robustness the analytic statistic was providing, so the front end's *relative* contribution
-shrinks even as the absolute detector improves. The augmentation is worth keeping for the
-detector; it is not evidence for the front end.
+shrinks to nothing (the mAP50 gap is even slightly negative at x2: 0.6278 vs 0.6160). The
+augmentation is worth keeping for the detector; it is a **negative** for the front-end claim.
 
 ## 4. Robustness and acquisition shifts (pilot)
 
@@ -114,7 +124,25 @@ The gain is a per-pixel map at every seed (within-image spread exceeds between-i
 it never collapses — but its magnitude is strongly seed-dependent, which is one reason the
 accuracy effect is small.
 
-## 6. Limitations (stated, not implied)
+## 6. Efficiency on real inputs (measured)
+
+The cost numbers elsewhere are single-image, measured on ``torch.randn``. Because the CFAR
+front end is *data-dependent* (``log(x + eps)`` and a local mean), a random-noise timing times
+the degenerate branch, so latency is re-measured on a real batch of HRSID val images
+(``saryolo efficiency --real``, imgsz 320, batch 8) and the profile records the input
+distribution it used (``latency_source = "real"``, min 0.012, max 0.996):
+
+| Arm | FPS (batch 8, real) | ms/image | FPS (single image, noise) |
+| --- | ---: | ---: | ---: |
+| REAL-001 · baseline | 82.3 | 12.1 | 61.8 |
+| REAL-004 · CFAR front end | 34.5 | 29.0 | 36.7 |
+| AUG-002 · CFAR, augmented | 30.4 | 32.9 | 31.6 |
+
+Batching helps the baseline more than the front end (82.3 vs 34.5 FPS), so the front end's
+real throughput penalty at this resolution is larger than the single-image figure suggested
+(2.4x rather than 1.7x). Both are CPU numbers on one machine.
+
+## 7. Limitations (stated, not implied)
 
 * One dataset (HRSID), one subset (200/60/60), one machine, **no GPU**.
 * The primary comparison is **three seeds** — a noise check, not validation.

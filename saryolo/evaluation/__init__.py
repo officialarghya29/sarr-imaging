@@ -5,6 +5,7 @@ from __future__ import annotations
 from .cross_dataset import class_compatibility, cross_dataset_eval, domain_gap_table
 from .efficiency import (
     count_parameters,
+    load_image_batch,
     measure_flops,
     measure_latency,
     model_size_mb,
@@ -47,6 +48,7 @@ __all__ = [
     "profile_model",
     "profile_yaml",
     "count_parameters",
+    "load_image_batch",
     "measure_flops",
     "measure_latency",
     "model_size_mb",

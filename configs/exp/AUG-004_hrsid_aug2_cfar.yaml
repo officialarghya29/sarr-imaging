@@ -1,0 +1,26 @@
+# STRONGER SAR-AUGMENTATION PILOT (prototype arm) -- real HRSID subset.
+#
+# The two-view counterpart of AUG-002: the ratio-space CFAR front end trained on the
+# 600-image two-view SAR-augmented split, evaluated on the clean test split. Pairs
+# with AUG-003. Schedule identical to AUG-003.
+#
+#   python -m saryolo train --exp configs/exp/AUG-004_hrsid_aug2_cfar.yaml
+experiment:
+  id: AUG-004
+  name: HRSID-augmented x2 SARVO prototype (ratio-space CFAR front end)
+  description: CFAR front end trained on the two-view SAR-augmented HRSID subset; pairs with AUG-003.
+model: ../models/yolo11n_cfar_n.yaml
+dataset: ../datasets/hrsid_real_aug2.yaml
+train:
+  epochs: 40
+  imgsz: 320
+  batch: 4
+  seed: 0
+  optimizer: auto
+  cos_lr: true
+  patience: 15
+  workers: 4
+  deterministic: true
+notes: >-
+  Real HRSID subset, two-view SAR-augmented train split (600 images), clean test.
+  Pilot only, not the paper's result.

@@ -6,7 +6,7 @@
 
 **One SAR detector that generalises to a sensor it has never seen — because it is told *how* the image was acquired, not *which* sensor took it.**
 
-![tests](https://img.shields.io/badge/tests-469_passing-22c55e) ![fabricated](https://img.shields.io/badge/fabricated_results-0-black) ![arch](https://img.shields.io/badge/architectures-98_wired-3b82f6) ![exps](https://img.shields.io/badge/experiments-120_configured-8b5cf6) ![cost](https://img.shields.io/badge/SARVO--Lite-32.55_GFLOPs-0891b2) ![license](https://img.shields.io/badge/license-MIT-94a3b8)
+![tests](https://img.shields.io/badge/tests-476_passing-22c55e) ![fabricated](https://img.shields.io/badge/fabricated_results-0-black) ![arch](https://img.shields.io/badge/architectures-98_wired-3b82f6) ![exps](https://img.shields.io/badge/experiments-122_configured-8b5cf6) ![cost](https://img.shields.io/badge/SARVO--Lite-32.55_GFLOPs-0891b2) ![license](https://img.shields.io/badge/license-MIT-94a3b8)
 
 </div>
 
@@ -51,9 +51,9 @@ SAR image ──► SIA ──► backbone ──► components 1/2/9 ──► 
 | --- | --- |
 | **Stack** | Python 3.10+ · Ultralytics 8.4.155 · PyTorch 2.x |
 | **Architectures** | 98 variants wired; every one builds and runs a forward pass |
-| **Experiments** | 120 configured; each reproducible from a committed YAML |
-| **Tests** | 469 passing — no dataset download and no GPU needed |
-| **Measured** | architecture cost, identity-at-init, protocol correctness, metric correctness, **eight real-data arms** on an HRSID subset (six single-seed + a three-seed repeat + two augmented arms) |
+| **Experiments** | 122 configured; each reproducible from a committed YAML |
+| **Tests** | 476 passing — no dataset download and no GPU needed |
+| **Measured** | architecture cost, identity-at-init, protocol correctness, metric correctness, **ten real-data arms** on an HRSID subset (six architecture arms, a three-seed repeat, and four SAR-augmentation arms) |
 | **Not measured** | the **paper's accuracy table** — the pilot is a subset run on a CPU, not the full benchmark |
 
 > **Where this stands (2026-10-04).** The instrument is complete and test-pinned. The only
@@ -78,7 +78,7 @@ SAR image ──► SIA ──► backbone ──► components 1/2/9 ──► 
 | | |
 | --- | --- |
 | **What this is** | A complete, reproducible research pipeline for SAR object detection: dataset audit → baseline → ten documented components → ablations → removal tests → robustness → efficiency → cross-dataset → paper. |
-| **What is proven** | The instrument: 469 tests, the baseline reproduces stock YOLO11 exactly, every custom module is an *exact* identity at initialisation and demonstrably not frozen, and the pipeline learns on **real** SAR imagery. |
+| **What is proven** | The instrument: 476 tests, the baseline reproduces stock YOLO11 exactly, every custom module is an *exact* identity at initialisation and demonstrably not frozen, and the pipeline learns on **real** SAR imagery. |
 | **What is *not* proven** | A benchmark result. The only accuracy numbers are a pilot on an HRSID subset (200/60/60, CPU), and the table generators refuse to print a cell that was never measured. |
 | **Why that's the point** | A detector paper is only as strong as its ablations. If the machinery that produces those ablations cannot be trusted, every number downstream is unverifiable. Build the instrument first. |
 
@@ -441,6 +441,10 @@ and measured, not the paper's result.
 | REAL-004 · SARVO prototype (RS-CFAR) | 0.569 | 0.315 | 0.910 | 0.535 | 2.590 | 1.764 | 36.700 | 12.470 |
 | REAL-005 · prototype control (fixed threshold) | 0.495 | 0.247 | 0.793 | 0.474 | 2.590 | 1.728 | 44.140 | 7.310 |
 | REAL-006 · prototype control (matched-cost conv) | 0.565 | 0.302 | 0.924 | 0.515 | 2.590 | 1.649 | 44.870 | 10.030 |
+| AUG-001 · baseline, SAR-augmented x1 | 0.606 | 0.357 | 0.955 | 0.556 | 2.590 | 1.613 | 62.490 | 12.710 |
+| AUG-002 · prototype, SAR-augmented x1 | 0.605 | 0.364 | 0.949 | 0.548 | 2.590 | 1.764 | 31.640 | 24.360 |
+| AUG-003 · baseline, SAR-augmented x2 | 0.628 | 0.390 | 0.942 | 0.585 | 2.590 | 1.613 | 63.690 | 16.500 |
+| AUG-004 · prototype, SAR-augmented x2 | 0.616 | 0.391 | 0.922 | 0.579 | 2.590 | 1.764 | 36.770 | 30.850 |
 
 Every cell above is read from `results/experiments.jsonl`, where the run that measured it wrote
 it; `docs/assets/facts.json` is generated from that ledger and the table is checked against the
@@ -483,11 +487,13 @@ Notes that belong next to the numbers rather than in a table cell:
   Two synthetic acquisition-shift axes (global brightness, and along-track-only resolution
   loss) do **not** separate the arms, so the prototype's small edge lives on the texture
   corruptions rather than on acquisition transfer. Both null results are kept, not dropped.
-* **SAR-appearance augmentation is the biggest win here — and it does not help the front end.**
-  Training on the augmented split (`AUG-001`/`AUG-002`) lifts the *baseline* from 0.301 to
-  0.357 mAP50:95 (+18.6 % relative), but the prototype's lead over it **halves**, from +0.014
-  to +0.007: the corruption model gives both arms much of the robustness the statistic supplied.
-  The augmentation is worth keeping for the detector; it is a negative for the front-end claim.
+* **SAR-appearance augmentation is the biggest win here — and it erases the front end's edge.**
+  Training on the augmented splits lifts the *baseline* from 0.301 to 0.357 (one view) and
+  **0.390** (two views) mAP50:95, i.e. **+29 % relative** — the largest movement in the
+  repository. But the prototype's lead over the baseline shrinks monotonically as
+  augmentation strengthens: **+0.0139 → +0.0067 → +0.0016**. At two views the two models are
+  effectively level, so the corruption model is supplying what the analytic statistic did. The
+  augmentation is worth keeping for the detector; it is a **negative** for the front-end claim.
   Full numbers in [`paper/RESULTS.md`](paper/RESULTS.md).
 * These are **pilot runs**, not a benchmark. Three seeds on one 200-image subset is not
   validation, and nothing here supports a claim about cross-sensor generalisation — that is
@@ -669,7 +675,7 @@ uv pip install --python .venv/bin/python torch torchvision --index-url https://d
 uv pip install --python .venv/bin/python ultralytics pytest
 source .venv/bin/activate
 
-pytest tests/ -q                                          # 469 tests
+pytest tests/ -q                                          # 476 tests
 python -m saryolo arch --variant all --nc 1               # emit 92 model YAMLs
 python -m saryolo synth-data --out datasets/processed/synthetic_smoke
 python -m saryolo train --exp configs/exp/_smoke_baseline.yaml

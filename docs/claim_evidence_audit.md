@@ -27,8 +27,8 @@ on a subset is never presented as the benchmark result.
 | 10 | The prototype beats its fixed-threshold and matched-cost controls | **preliminary** | ledger `REAL-004` vs `REAL-005`, `REAL-006` |
 | 11 | The prototype leads the baseline on mAP50:95 at three seeds | **preliminary** | `REAL-001`/`REAL-004`, `MSEED-B1/B2`, `MSEED-C1/C2`; mean +0.0179 |
 | 12 | The trained gain is a per-pixel decision, not collapsed | **final, but seed-sensitive** | `results/gain/*/gain.json`; magnitude 0.113 / 0.021 / 0.025 across seeds |
-| 13 | Training under the SAR degradation model widens the prototype's lead | **not supported** | `AUG-001`/`AUG-002`: the gap halves (+0.0139 → +0.0067 mAP50:95) |
-| 13b | SAR-appearance augmentation improves the detector | **measured, pilot** | `AUG-001` baseline mAP50:95 0.3012 → 0.3571 (+18.6 % relative) |
+| 13 | Training under the SAR degradation model widens the prototype's lead | **not supported** | `AUG-001…004`: the gap shrinks monotonically (+0.0139 → +0.0067 → +0.0016 mAP50:95) |
+| 13b | SAR-appearance augmentation improves the detector, and more helps | **measured, pilot** | `AUG-001`/`AUG-003` baseline mAP50:95 0.3012 → 0.3571 → 0.3898 (+29.4 % relative) |
 | 14 | The prototype improves robustness under an acquisition shift | **not supported** | radiometric-gain and anisotropic-resolution pilots are both null (`docs/architecture_proposals.md` §8) |
 | 15 | Cross-sensor / cross-resolution generalisation | **blocked** | needs the full release + a second source; no GPU here |
 | 16 | Any number for the full-release ladder, LOSO folds, tuned LoRA sweep | **blocked / `TBD`** | unmeasured; the ledger renders `TBD` |
@@ -48,12 +48,13 @@ blur, low resolution, low SNR; `datasets/processed/hrsid_real_aug`, draw recorde
 `AUG-002 − AUG-001` versus `REAL-004 − REAL-001` — because both arms in a context share
 the same data.
 
-**Measured outcome.** Augmentation is a large win for the detector and a *negative* result for
-the hypothesis. The baseline rises **0.3012 → 0.3571** mAP50:95 (+18.6 % relative), the largest
-movement measured in the repository; but the prototype's lead over the baseline **halves**, from
-**+0.0139** (no augmentation) to **+0.0067** (augmented). Training under the SAR degradation
-model gives both arms much of the robustness the analytic statistic provided, so the front end's
-*relative* contribution shrinks. Full numbers in `paper/RESULTS.md` §3.
+**Measured outcome.** Augmentation is a large win for the detector, and it keeps helping as it
+strengthens: the baseline rises **0.3012 → 0.3571 → 0.3898** mAP50:95 for zero, one and two
+augmented views (**+29.4 % relative**), the largest movement measured in the repository. But it
+is a *negative* for the hypothesis: the prototype's lead over the baseline **shrinks
+monotonically**, **+0.0139 → +0.0067 → +0.0016**. Training under the SAR degradation model gives
+both arms much of the robustness the analytic statistic provided, so the front end's *relative*
+contribution falls to nothing at two views. Full numbers in `paper/RESULTS.md` §3.
 
 ## 3. What is deliberately *not* claimed
 

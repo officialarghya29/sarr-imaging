@@ -1,0 +1,15 @@
+# Stronger SAR-augmented HRSID subset: the real 200/60/60 pilot split with every
+# training image plus TWO SAR-augmented views (600 train images), val and test left
+# clean. The stronger counterpart of hrsid_real_aug.yaml (one view), used to test
+# whether more augmentation keeps helping the detector.
+#
+# Built by `python -m saryolo augment --data configs/datasets/hrsid_real.yaml
+# --views 2 --out datasets/processed/hrsid_real_aug2`; the per-file draw and severity
+# are recorded in datasets/processed/hrsid_real_aug2/manifest.json.
+path: datasets/processed/hrsid_real_aug2
+train: images/train
+val: images/val
+test: images/test
+nc: 1
+names:
+  0: ship
