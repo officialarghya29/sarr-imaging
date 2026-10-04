@@ -34,6 +34,7 @@ REAL_PILOT_ARMS: tuple[tuple[str, str], ...] = (
     ("REAL-003", "YOLO11n + LoRA r=8 -- HRSID subset"),
     ("REAL-004", "SARVO prototype: CFAR front end -- HRSID subset"),
     ("REAL-005", "Prototype control: CFAR, fixed threshold -- HRSID subset"),
+    ("REAL-006", "Prototype control: matched-cost conv stem -- HRSID subset"),
 )
 
 #: Placeholder rendered for any unmeasured value.

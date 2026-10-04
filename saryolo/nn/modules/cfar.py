@@ -59,15 +59,21 @@ Modes and their controls
 as the experiment that could kill it:
 
 * ``"cfar"`` — the proposed arm. Learned, zero-initialised per-pixel gain.
+* ``"conv"`` — the **matched-cost** control. The identical gain network (same
+  layer shapes, so an *exactly* equal parameter count) fed the raw intensity
+  instead of the statistic stack: a plain learned first representation at the same
+  price. This is what separates "the radar statistic helps" from "217 extra
+  parameters and a learned transform help". Identity at init like the proposal.
 * ``"fixed"`` — the *fixed-threshold* control: the same statistic stack, but the
   gain is an analytic threshold with **no learnable parameters**. It separates
   "the statistics help" from "the learnable part helps". It is deliberately not
   an identity at initialisation (a control that equals the baseline measures
   nothing), and it therefore declares ``identity_at_init = False``.
 
-The matched-cost *plain-conv-stem* control lives in the architecture, not here:
-it is a different first row of the same graph, so it is built as a separate
-variant rather than a mode of this module.
+The two controls answer different questions and neither substitutes for the other:
+``conv`` holds the parameter budget fixed and removes the statistic; ``fixed`` holds
+the statistic fixed and removes the learning. An arm that fails either is not
+evidence for the representation.
 """
 
 from __future__ import annotations
@@ -100,12 +106,12 @@ class RatioSpaceCFARFrontEnd(nn.Module):
         eps: Numerical floor for the log and the ratio denominators.
     """
 
-    MODES = ("cfar", "fixed")
+    MODES = ("cfar", "conv", "fixed")
     version = 1
     #: Whether a freshly built module in this mode is an exact identity. ``False``
     #: for the fixed-threshold control, which exists precisely to perturb the
     #: baseline; the identity invariant is asserted only where it is claimed.
-    IDENTITY_AT_INIT = {"cfar": True, "fixed": False}
+    IDENTITY_AT_INIT = {"cfar": True, "conv": True, "fixed": False}
 
     def __init__(
         self,
@@ -132,7 +138,9 @@ class RatioSpaceCFARFrontEnd(nn.Module):
             nn.AvgPool2d(k, stride=1, padding=k // 2, count_include_pad=False) for k in self.scales
         )
         n_stats = 1 + 2 * len(self.scales)
-        if mode == "cfar":
+        if mode in ("cfar", "conv"):
+            # The same layer shapes in both modes, so the two arms cost exactly the same
+            # number of parameters and the only difference is what the network reads.
             self.gain = nn.Sequential(
                 nn.Conv2d(n_stats, hidden, 1),
                 nn.SiLU(inplace=True),
@@ -159,6 +167,14 @@ class RatioSpaceCFARFrontEnd(nn.Module):
         return torch.cat(stats, dim=1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.mode == "conv":
+            # Matched-cost control: the raw intensity, replicated to the statistic stack's
+            # width so the gain network is byte-for-byte the same shape. No log, no local
+            # statistics, no pooling -- a plain learned first representation at the same
+            # parameter price as the proposal.
+            raw = x.mean(dim=1, keepdim=True)
+            gain = torch.tanh(self.gain(raw.expand(-1, self.gain[0].in_channels, -1, -1)))
+            return x * (1.0 + gain)
         stats = self.statistics(x)
         if self.mode == "cfar":
             gain = torch.tanh(self.gain(stats))

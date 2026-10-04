@@ -1,5 +1,5 @@
 {
-  "variants": 96,
+  "variants": 98,
   "zoo": {
     "baseline_n": {
       "variant": "baseline",
@@ -738,6 +738,24 @@
       "latency_ms": 22.657,
       "model_size_MB": 5.18,
       "train_minutes": 7.31
+    },
+    "REAL-006": {
+      "model": "yolo11n_cfar_conv_n.yaml",
+      "dataset": "hrsid_real.yaml",
+      "epochs": 40,
+      "imgsz": 320,
+      "train_seed": 0,
+      "mAP50": 0.565431,
+      "mAP50_95": 0.302096,
+      "precision": 0.924436,
+      "recall": 0.51462,
+      "f1": 0.661174,
+      "params_M": 2.59,
+      "flops_G": 1.649,
+      "fps": 44.87,
+      "latency_ms": 22.286,
+      "model_size_MB": 5.19,
+      "train_minutes": 10.03
     }
   },
   "real_subset": {
@@ -752,13 +770,18 @@
     "total": 106,
     "config_files": 108,
     "with_results": [],
-    "ledger_runs": 25,
+    "ledger_runs": 35,
     "non_experiment_runs": [
+      "MSEED-B1",
+      "MSEED-B2",
+      "MSEED-C1",
+      "MSEED-C2",
       "REAL-001",
       "REAL-002",
       "REAL-003",
       "REAL-004",
       "REAL-005",
+      "REAL-006",
       "SMOKE-001",
       "SMOKE-002",
       "SMOKE-003",
@@ -766,12 +789,12 @@
     ]
   },
   "tests": {
-    "total": 447,
+    "total": 450,
     "by_file": {
       "tests/test_arch.py": 61,
       "tests/test_audit_docs.py": 31,
       "tests/test_augmentation.py": 15,
-      "tests/test_cfar_frontend.py": 13,
+      "tests/test_cfar_frontend.py": 16,
       "tests/test_cli.py": 30,
       "tests/test_conditioning.py": 9,
       "tests/test_conditioning_smoke.py": 6,

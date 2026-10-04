@@ -1,0 +1,33 @@
+# SARVO PROTOTYPE matched-cost control on the real HRSID subset (master Phase 7).
+#
+# The control the proposals document names as the other half of the falsifier: the
+# *same* gain network as REAL-004, at exact parameter parity (2,590,252 parameters in
+# both arms), fed the raw image intensity instead of the CFAR statistic stack. If
+# REAL-004 does not beat this arm, the benefit was the extra parameters and the
+# learned transform rather than the radar statistic, and the proposal is withdrawn.
+#
+# Same dataset, schedule, resolution and seed as REAL-001 and REAL-004.
+#
+#   python -m saryolo train --exp configs/exp/REAL-006_hrsid_cfar_conv.yaml
+experiment:
+  id: REAL-006
+  name: SARVO prototype matched-cost control (raw-intensity gain)
+  description: >-
+    Parameter-exact control for REAL-004: identical gain network, raw intensity input,
+    no radar statistic. Pilot only.
+model: ../models/yolo11n_cfar_conv_n.yaml
+dataset: ../datasets/hrsid_real.yaml
+train:
+  epochs: 40
+  imgsz: 320
+  batch: 4
+  seed: 0
+  optimizer: auto
+  cos_lr: true
+  patience: 15
+  workers: 4
+  deterministic: true
+notes: >-
+  Real HRSID subset, pilot scale. Exact parameter parity with REAL-004 (2,590,252
+  parameters each), so a difference between the two is the representation. The full
+  release has 5,604 images.

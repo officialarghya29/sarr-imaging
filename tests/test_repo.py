@@ -509,6 +509,7 @@ README_REAL_ROWS: dict[str, str] = {
     "REAL-003 · YOLO11n + LoRA r=8": "REAL-003",
     "REAL-004 · SARVO prototype (RS-CFAR)": "REAL-004",
     "REAL-005 · prototype control (fixed threshold)": "REAL-005",
+    "REAL-006 · prototype control (matched-cost conv)": "REAL-006",
 }
 
 #: Column name in the README pilot table -> metric key in ``facts.json``. ``epochs`` is a

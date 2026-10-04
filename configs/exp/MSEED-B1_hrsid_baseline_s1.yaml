@@ -1,0 +1,29 @@
+# MULTI-SEED repeat of REAL-001 (stock YOLO11n baseline on the HRSID subset).
+#
+# Exists to estimate the seed spread of the pilot comparison. REAL-004's mAP50:95 was
+# 0.0139 above REAL-001's at seed 0 on 60 test images; whether that is signal or noise
+# is decided by re-running the same arm at more seeds, not by arguing about it. The
+# experiment id is distinct from REAL-001 on purpose: the README pilot table quotes the
+# seed-0 rows, and silently replacing a row with a different seed would make the table
+# describe a run nobody chose.
+#
+#   python -m saryolo train --exp configs/exp/MSEED-B1_hrsid_baseline_s1.yaml
+experiment:
+  id: MSEED-B1
+  name: seed spread (YOLO11n baseline, seed 1)
+  description: Multi-seed repeat of REAL-001 at seed 1; a seed-spread measurement, not a new arm.
+model: ../models/yolo11n_baseline_n.yaml
+dataset: ../datasets/hrsid_real.yaml
+train:
+  epochs: 40
+  imgsz: 320
+  batch: 4
+  seed: 1
+  optimizer: auto
+  cos_lr: true
+  patience: 15
+  workers: 4
+  deterministic: true
+notes: >-
+  Seed spread only. Same arm, dataset and schedule as REAL-001 (seed 0); the only
+  difference is the training seed.

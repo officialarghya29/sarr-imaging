@@ -136,6 +136,37 @@ def test_the_gain_parameters_receive_gradient_at_initialisation():
     )
 
 
+def test_the_matched_cost_control_has_exact_parameter_parity_and_is_identity_at_init():
+    """The control that separates "the statistic" from "the extra parameters".
+
+    Real parameter *parity*, not approximate: the gain network has identical layer shapes
+    in both modes, so the only difference between the two arms is what it reads. If the
+    counts differed, a difference between the arms could be the capacity rather than the
+    representation -- which is exactly the confound the control exists to remove.
+    """
+    proposed = _front("cfar")
+    control = _front("conv")
+    assert sum(p.numel() for p in proposed.parameters()) == sum(
+        p.numel() for p in control.parameters()
+    ), "the matched-cost control is not parameter-matched"
+    assert control.identity_at_init is True
+    x = torch.rand(2, 3, 32, 32)
+    assert torch.equal(control.eval()(x), x)
+
+
+def test_the_two_controls_answer_different_questions():
+    """One holds the budget fixed and removes the statistic; the other does the reverse.
+
+    Neither substitutes for the other, so a mode that collapsed into the other would leave
+    the design with only half a falsifier while both tests still passed.
+    """
+    matched = _front("conv")
+    fixed = _front("fixed")
+    assert sum(p.numel() for p in matched.parameters()) > 0
+    assert sum(p.numel() for p in fixed.parameters()) == 0
+    assert matched.identity_at_init is True and fixed.identity_at_init is False
+
+
 def test_the_fixed_threshold_control_has_no_learnable_parameters_and_is_not_identity():
     """The control must isolate the statistic, so nothing in it may be learned.
 
@@ -180,9 +211,12 @@ def test_the_prototype_arm_sits_on_the_image_and_carries_nothing_else():
     )
     assert VARIANTS["cfar_fixed_s"].module_names == ["cfar"]
     assert VARIANTS["cfar_fixed_s"].cfar == "fixed"
+    assert VARIANTS["cfar_conv_s"].module_names == ["cfar"]
+    assert VARIANTS["cfar_conv_s"].cfar == "conv"
+    assert VARIANTS["cfar_n"].scale == "n" and VARIANTS["cfar_conv_n"].scale == "n"
 
 
-@pytest.mark.parametrize("variant", ["cfar_s", "cfar_fixed_s"])
+@pytest.mark.parametrize("variant", ["cfar_s", "cfar_conv_s", "cfar_fixed_s"])
 def test_the_prototype_graph_builds_forwards_and_losses_without_an_error(variant):
     """Phase 5 requires forward *and* loss on the real graph, not just the module."""
     torch.manual_seed(0)
@@ -252,3 +286,11 @@ def test_the_front_end_cost_is_measured_and_inside_the_budget_it_claims():
     assert prototype["flops_G"] > baseline["flops_G"], (
         "the front end reports no added compute; the cost is being hidden, not paid"
     )
+    # The matched-cost control must match on parameters exactly, and must be *no more*
+    # expensive in compute than the arm it controls for -- otherwise "matched cost" is a
+    # description of neither model.
+    matched = profile("cfar_conv_s")
+    assert matched["params"] == prototype["params"], (
+        "the matched-cost control and the prototype disagree on parameter count"
+    )
+    assert matched["flops_G"] <= prototype["flops_G"]

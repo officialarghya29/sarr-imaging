@@ -130,21 +130,31 @@ Latest additions (this session):
    Phase 5 followed: `saryolo/nn/modules/cfar.py` implements the recommended first
    representation (analytic multi-scale `log`-ratio + coefficient-of-variation statistics,
    zero-initialised per-pixel gain, exact identity at init), with arms `cfar_n`/`cfar_s` and
-   the fixed-threshold control `cfar_fixed_n`/`cfar_fixed_s`. `tests/test_cfar_frontend.py`
-   pins forward, the exact identity, the non-zero gain gradient (including the subtler point
-   that the first layer legitimately starts at zero gradient and must recover it), the real
-   loss, an optimiser step, and the **measured** cost: +217 parameters (+0.008 % at scale
-   `n`), the control **+0**, and +0.15 GFLOPs at 320 px — a real compute price, stated rather
-   than hidden. The honesty note that had to be written into the proposal: the repository
-   already had a CFAR-style arm (`tp_cfar`, a non-learned prior on *features*), so the
-   contribution is placement and scope, not the statistic.
-   Phase 6 then ran the falsification test on the same HRSID subset: the prototype (REAL-004)
-   beats its fixed-threshold control (REAL-005) clearly, and the control is *worse than the
-   baseline* — so the learned gain matters and the statistic alone harms. But the primary
-   comparison against the baseline is a wash on mAP50 (0.5691 vs 0.5706) with mAP50:95 up
-   0.3012 → 0.3151, which on 60 test images at one seed is inside the noise, and the front end
-   costs ~40 % of CPU throughput. Recorded as: **survives the falsifier, no demonstrated
-   benefit yet**. Phase 7 is gated on a multi-seed run and the still-unbuilt matched-cost stem.
+   the fixed-threshold control `cfar_fixed_n`/`cfar_fixed_s` and the matched-cost control
+   `cfar_conv_n`/`cfar_conv_s`. `tests/test_cfar_frontend.py` (16 tests) pins forward, the
+   exact identity, the non-zero gain gradient (including the subtler point that the first
+   layer legitimately starts at zero gradient and must recover it), the real loss, an
+   optimiser step, the mode/window validation, builder↔module mode parity, and the
+   **measured** cost: +217 parameters (+0.008 % at scale `n`), the fixed control **+0**, the
+   conv control parameter-identical by construction, and +0.15 GFLOPs at 320 px — a real
+   compute price, stated rather than hidden. The honesty note that had to be written into
+   the proposal: the repository already had a CFAR-style arm (`tp_cfar`, a non-learned prior
+   on *features*), so the contribution is placement and scope, not the statistic.
+   Phases 6–8 then ran the falsification tests on the same HRSID subset. The prototype
+   (REAL-004) beats its fixed-threshold control (REAL-005) clearly, and that control is
+   *worse than the baseline* (0.495 vs 0.571 mAP50) — so the learned gain matters and the
+   statistic alone harms. The seed-0 primary comparison against the baseline is a near-wash
+   on mAP50 (0.5691 vs 0.5706) with mAP50:95 up 0.3012 → 0.3151, inside the noise of 60 test
+   images. So two more tests were run: the **matched-cost conv control** (REAL-006,
+   parameter-identical to REAL-004) reaches mAP50:95 0.3021, *below* the prototype's 0.3151
+   and only ~0.001 above the baseline — so the gain is not the 217 parameters. And a
+   **three-seed paired repeat** (MSEED-B1/B2 vs MSEED-C1/C2) puts the prototype ahead of the
+   baseline on mAP50:95 at **all three seeds** (+0.0139, +0.0232, +0.0165; mean +0.0179) with
+   a *smaller* seed spread (0.0066 vs 0.0106). A five-corruption sweep (`saryolo robustness`)
+   is directionally consistent: under speckle and low contrast the prototype's relative
+   mAP50:95 loss is roughly half the baseline's (−10.7 % vs −15.6 %, −13.1 % vs −32.0 %). The
+   front end still costs ~40 % of CPU throughput. Recorded as: **survives both falsifiers it
+   named, on a 260-image single-machine pilot, with a small absolute effect** — not a result.
 
 11. ~~RT-DETR feasibility arm (red-team W6)~~ — **built, not measured**:
    `SARYOLORTDetectionModel` + generator-derived `configs/models/rtdetr/rtdetr_s_cond_film.yaml`

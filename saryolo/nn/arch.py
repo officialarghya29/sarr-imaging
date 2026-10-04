@@ -41,7 +41,7 @@ BASELINE_PARAMS: dict[str, int] = {"n": 2_624_080, "s": 9_458_752}
 #: literal rather than imported so that ``arch.py`` stays free of a dependency on the module
 #: package (the module package imports nothing from here, and a cycle would make the builder
 #: unimportable from a checkpoint load). A test pins the two lists together.
-CFAR_MODES: tuple[str, ...] = ("cfar", "fixed")
+CFAR_MODES: tuple[str, ...] = ("cfar", "conv", "fixed")
 
 
 @dataclass
@@ -773,10 +773,20 @@ VARIANTS["cfar_fixed_s"] = _v(
 #: scale that fits the CPU budget), so the prototype must exist there too, against the same
 #: baseline the pilot already measured -- otherwise the comparison would be across scales as
 #: well as across representations.
+VARIANTS["cfar_conv_s"] = _v(
+    "cfar_conv_s", cfar="conv",
+    notes=("SARVO prototype matched-cost control: the *same* gain network fed the raw "
+           "intensity instead of the statistic stack. Exact parameter parity with cfar_s, so "
+           "a difference between the two is the representation and not the capacity."),
+)
 VARIANTS["cfar_n"] = _v("cfar_n", scale="n", cfar="cfar", notes="cfar_s at scale n (pilot scale).")
 VARIANTS["cfar_fixed_n"] = _v(
     "cfar_fixed_n", scale="n", cfar="fixed",
     notes="cfar_fixed_s at scale n (pilot scale); the fixed-threshold control.",
+)
+VARIANTS["cfar_conv_n"] = _v(
+    "cfar_conv_n", scale="n", cfar="conv",
+    notes="cfar_conv_s at scale n (pilot scale); the matched-cost control.",
 )
 
 #: Baseline comparison variants (EXP-001b): scales of the stock detector.

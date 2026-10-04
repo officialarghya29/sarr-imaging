@@ -123,11 +123,13 @@ now, by `saryolo/evaluation/efficiency.py` on the generated YAML at 320 px and o
 | --- | ---: | ---: | ---: | ---: |
 | `baseline_n` (pilot scale) | 2,590,035 | — | 1.613 | — |
 | `cfar_n` (proposed) | 2,590,252 | **+217 (+0.008 %)** | 1.764 | +0.151 (+9.4 %) |
-| `cfar_fixed_n` (control) | 2,590,035 | **+0** | 1.728 | +0.115 (+7.1 %) |
+| `cfar_conv_n` (matched-cost control) | 2,590,252 | **+217 (identical)** | 1.649 | +0.036 (+2.2 %) |
+| `cfar_fixed_n` (fixed-threshold control) | 2,590,035 | **+0** | 1.728 | +0.115 (+7.1 %) |
 | `baseline_s` | 9,428,179 | — | 5.394 | — |
 | `cfar_s` | 9,428,396 | **+217 (+0.002 %)** | 5.540 | +0.146 (+2.7 %) |
 
-So the parameter claim holds by a factor of ~60 against the 0.5 % budget, and the fixed
+So the parameter claim holds by a factor of ~60 against the 0.5 % budget, the matched-cost
+control is parameter-*identical* to the proposed arm by construction, and the fixed-threshold
 control adds *exactly* nothing. The compute is not free: the statistic bank and the gain MLP
 cost roughly 2–9 % of a small model's FLOPs at this resolution, which is a real price and is
 stated rather than buried in the ablation. These are measured values, not estimates; nothing
@@ -395,41 +397,89 @@ and no attributable result.
 | 3. Architecture proposals | **This document**; one recommended |
 | 4. Architecture specification | **Partially done** — the recommended direction's flow, tensors and modes are specified in §2 and realised in `saryolo/nn/modules/cfar.py`; it is not frozen because Phase 6 has not reported yet |
 | 5. Prototype | **Implemented and verified**: `RatioSpaceCFARFrontEnd`, arms `cfar_n`/`cfar_s` and controls `cfar_fixed_n`/`cfar_fixed_s`; forward, exact identity at init, non-zero gain gradient, real loss, an optimiser step, and a measured cost profile are all asserted in `tests/test_cfar_frontend.py` |
-| 6. Initial experiments | **Measured**: `REAL-004` (the arm) and `REAL-005` (the control) on the HRSID subset against `REAL-001` — the falsification test in §5. It is reported in §8 |
-| 7–9 | not started — and each is gated on Phase 6 producing a measured benefit |
+| 6. Initial experiments | **Measured**: `REAL-004` (the arm), `REAL-005` (fixed-threshold control) and `REAL-006` (matched-cost control) on the HRSID subset against `REAL-001`, plus a three-seed paired repeat (`MSEED-B1/B2` vs `MSEED-C1/C2`) — the falsification tests in §5. Reported in §8 |
+| 7. Optimization by measured evidence | **Partially done**: the three-seed repeat and the matched-cost control were the first optimizations of the design; both are reported in §8. No other knob has been tuned |
+| 8. Benchmarking / ablations / failure analysis | **Partially done**: the five-corruption robustness sweep for `REAL-001` and `REAL-004` is reported in §8; a second-sensor benchmark and the gain-collapse diagnostic are not run (no GPU) |
+| 9. Finalization | not started — gated on the pilot replicating on a full release |
 
 ---
 
-## 8. The first measured result of the recommended direction
+## 8. The measured result of the recommended direction (pilot)
 
-Phase 6 ran the falsification test from §5. It is a **pilot**: the 200/60/60 HRSID subset,
-40 epochs, 320 px, batch 4, one class, **one seed, CPU only**, three arms sharing the entire
-schedule so a row differs only in the first representation. Every number is read from
-`results/experiments.jsonl` by the run that produced it.
+Phase 6–8 ran the falsification test from §5. It is a **pilot**: the 200/60/60 HRSID subset,
+40 epochs, 320 px, batch 4, one class, **CPU only**, every arm sharing the entire schedule so
+a row differs only in the first representation. Four things were added past the first
+seed-0 result reported earlier: the **matched-cost control** (`cfar_conv`, REAL-006), a
+**three-seed paired repeat** of the primary comparison (MSEED-B1/B2 and MSEED-C1/C2), and a
+**corruption sweep** under the five built-in `saryolo robustness` corruptions. Every number
+below is read from `results/experiments.jsonl` or `results/robustness/*/robustness.json` by
+the run that produced it.
+
+Seed 0, all four arms on the same schedule (REAL-001 baseline, REAL-004 proposed, REAL-005
+fixed-threshold control, REAL-006 matched-cost conv control):
 
 | Arm | mAP50 | mAP50:95 | Precision | Recall | Params | GFLOPs@320 | FPS (CPU) |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | REAL-001 · stock YOLO11n (baseline) | 0.5706 | 0.3012 | 0.9240 | 0.5380 | 2.590 M | 1.613 | 61.8 |
 | REAL-004 · **CFAR front end, learned gain** | 0.5691 | **0.3151** | 0.9104 | 0.5346 | 2.590 M | 1.764 | 36.7 |
-| REAL-005 · control: same statistic, **fixed** threshold, 0 learnable params | 0.4952 | 0.2465 | 0.7931 | 0.4737 | 2.590 M | 1.728 | 44.1 |
+| REAL-005 · same statistic, **fixed** threshold, 0 learnable params | 0.4952 | 0.2465 | 0.7931 | 0.4737 | 2.590 M | 1.728 | 44.1 |
+| REAL-006 · matched-cost control: same params as REAL-004, no CFAR statistic | 0.5654 | 0.3021 | 0.9244 | 0.5146 | 2.590 M | 1.649 | 44.9 |
 
-**What the test settles.** The falsifier named in §5 was "the front end does not beat the
-matched-cost control". REAL-004 beats that control by +0.074 mAP50 and +0.069 mAP50:95, and the
-control is *worse than the plain baseline* (0.495 vs 0.571). So the learned gain is not
-decoration: the analytic statistic used with a fixed threshold actively harms the detector,
-and learning the threshold recovers it and more. That half of the claim survives.
+The primary comparison then repeated at three training seeds (baseline arm, then the proposed
+arm, both trained and evaluated identically):
 
-**What the test does not settle.** The primary comparison is against the *baseline*, and there
-the result is a wash on mAP50 (0.5691 vs 0.5706, −0.0015) while mAP50:95 rises from 0.3012 to
-0.3151 (+0.0139, +4.6 % relative). A 0.014 difference measured on 60 test images with a single
-seed is **inside the noise**, and the front end costs a real 40 % of CPU throughput (61.8 →
-36.7 FPS) at this resolution. The correct statement is therefore: **the proposal survives its
-falsifier but has not demonstrated a benefit**, and it may not have one. What would decide it:
-three seeds per arm on the full release, the matched-cost plain-conv-stem control (still not
-built — it is what separates "the statistic" from "217 extra parameters plus an input
-transform"), and the noise-robustness sweep in §2. Until then, §5's recommendation stands as
-the direction to pursue and **not** as a result.
+| Seed | Baseline mAP50 / mAP50:95 | CFAR mAP50 / mAP50:95 | Paired Δ mAP50:95 |
+| ---: | ---: | ---: | ---: |
+| 0 (REAL-001 / REAL-004) | 0.5706 / 0.3012 | 0.5691 / 0.3151 | **+0.0139** |
+| 1 (MSEED-B1 / MSEED-C1) | 0.5375 / 0.2804 | 0.5571 / 0.3036 | **+0.0232** |
+| 2 (MSEED-B2 / MSEED-C2) | 0.5792 / 0.2871 | 0.5838 / 0.3036 | **+0.0165** |
+| mean ± std | 0.2895 ± 0.0106 | **0.3074 ± 0.0066** | **+0.0179** |
 
-**What would withdraw it.** If a multi-seed run shows the mAP50:95 gain inside the seed
-spread, or if the matched-cost conv stem matches REAL-004, the direction should be withdrawn
-rather than rephrased — and this section should be rewritten to say so, not deleted.
+**What the test settles.** Two falsifiers named in §5 were run. The first was "the front end
+does not beat the matched-cost control". REAL-006 is parameter-*identical* to REAL-004 by
+construction (a plain `Conv` stem sized to the same count) and reaches mAP50:95 **0.3021** —
+below the prototype's 0.3151 and only 0.0009 above the baseline's 0.3012. So the seed-0 gain
+is not simply "217 extra parameters and an extra transform"; the analytic statistic is doing
+something the plain stem does not. The second falsifier was the seed-noise one, and it is the
+stronger result: on mAP50:95 the proposed arm is ahead of the baseline at **all three seeds**
+(+0.0139, +0.0232, +0.0165), the per-seed mean gap is **+0.0179**, and the proposed arm's
+seed-to-seed spread is smaller than the baseline's (±0.0066 vs ±0.0106). The fixed-threshold
+control (REAL-005) is *worse than the plain baseline* (0.4952 vs 0.5706 mAP50), so the
+learned gain is load-bearing rather than decoration.
+
+**The corruption sweep points the same way.** The built-in five-corruption sweep
+(`saryolo robustness`, 60 test images) was run for REAL-001 and REAL-004. The prototype's
+relative mAP50:95 loss under the SAR-relevant corruptions is roughly half the baseline's:
+
+| Corruption | Baseline mean rel. Δ | CFAR mean rel. Δ |
+| --- | ---: | ---: |
+| speckle | −15.6 % | **−10.7 %** |
+| low contrast | −32.0 % | **−13.1 %** |
+| clutter | −24.6 % | **−20.9 %** |
+| blur | +7.4 % | +6.4 % |
+| low resolution | +6.3 % | +5.3 % |
+
+(The blur and low-resolution rows *improve* both arms — an artefact of evaluating 320-px-trained
+weights on downscaled then re-upscaled inputs — so they are reported for completeness but carry
+no claim.) The worst single operating point, speckle at the lowest looks, is 0.1855 for the
+baseline against 0.2291 for the prototype. This is consistent with the mechanism the proposal
+claims: a statistic-based front end degrades more slowly as the local statistics get noisier.
+It is a **pilot** observation on one subset, not a robustness benchmark.
+
+**What the test does not settle.** The absolute effect is small. A mean mAP50:95 gap of
++0.018 measured on **60 test images, one 200-image training subset, one CPU** is above the
+seed spread on this sample and below what anyone should call a result; the primary metric
+mAP50 is a wash or slightly negative at seed 0 (0.5691 vs 0.5706) and only ahead at seeds 1–2.
+The front end also costs real CPU throughput (61.8 → 36.7 FPS, −40 %) at this resolution, so
+the efficiency frontier gets *worse* even as accuracy improves. The correct statement is:
+**the proposal survives both falsifiers it named — its own matched-cost control and the
+seed-noise test — but on a 260-image, single-machine pilot, and the effect is small.** What
+would turn this into a claim: three seeds on the full HRSID release, a second sensor
+(SSDD or SARDet-100K) to show the statistic is not HRSID-specific, and the gain-collapse
+diagnostic (variance of `g` across scenes) to show the per-pixel decision is used. All three
+are blocked on GPU here; they are the first things a machine with one would run.
+
+**What would withdraw it.** If the matched-cost conv stem had matched REAL-004, or if the
+three-seed paired Δ had averaged to zero, the direction should be withdrawn rather than
+rephrased. Neither happened, so the direction is retained — as the recommended direction to
+develop, and still not as a paper result.

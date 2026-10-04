@@ -1,0 +1,21 @@
+# MULTI-SEED repeat of REAL-004 (SARVO prototype: ratio-space CFAR front end), seed 2.
+# See MSEED-C1: the point is to read the prototype's difference from the baseline
+# against the seed spread, which is what decides whether the direction is withdrawn
+# (docs/architecture_proposals.md §8).
+experiment:
+  id: MSEED-C2
+  name: seed spread (CFAR front end, seed 2)
+  description: Multi-seed repeat of REAL-004 at seed 2; a seed-spread measurement.
+model: ../models/yolo11n_cfar_n.yaml
+dataset: ../datasets/hrsid_real.yaml
+train:
+  epochs: 40
+  imgsz: 320
+  batch: 4
+  seed: 2
+  optimizer: auto
+  cos_lr: true
+  patience: 15
+  workers: 4
+  deterministic: true
+notes: Seed spread only. Same arm, dataset and schedule as REAL-004 (seed 0).

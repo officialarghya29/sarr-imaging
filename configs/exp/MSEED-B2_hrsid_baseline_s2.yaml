@@ -1,0 +1,19 @@
+# MULTI-SEED repeat of REAL-001 (stock YOLO11n baseline on the HRSID subset), seed 2.
+# See MSEED-B1 for why this family exists and why it is not REAL-001.
+experiment:
+  id: MSEED-B2
+  name: seed spread (YOLO11n baseline, seed 2)
+  description: Multi-seed repeat of REAL-001 at seed 2; a seed-spread measurement.
+model: ../models/yolo11n_baseline_n.yaml
+dataset: ../datasets/hrsid_real.yaml
+train:
+  epochs: 40
+  imgsz: 320
+  batch: 4
+  seed: 2
+  optimizer: auto
+  cos_lr: true
+  patience: 15
+  workers: 4
+  deterministic: true
+notes: Seed spread only. Same arm, dataset and schedule as REAL-001 (seed 0).

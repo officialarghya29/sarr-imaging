@@ -12,7 +12,7 @@ Every item below was run and observed in this environment.
 
 | What | Command | Observed result |
 | --- | --- | --- |
-| Test suite | `.venv/bin/python -m pytest -q` | **447 passed** |
+| Test suite | `.venv/bin/python -m pytest -q` | **450 passed** |
 | Baseline parity with stock YOLO11 | `pytest tests/test_arch.py -k baseline` | exact published counts (n: 2,624,080; s: 9,458,752 at 80 classes) |
 | All variants build and forward | `pytest tests/test_arch.py -k every_variant` | 92 variants pass |
 | Module identity at init | `pytest tests/test_arch.py -k identity` | `max\|f(x)−x\| = 0.0e+00` for all |
@@ -55,7 +55,7 @@ a test, so a number cannot be typed in by hand and survive.
 test** images. The full release is 5,604 images. This is a pilot on a fraction of it.
 
 **Schedule.** 40 epochs, 320 px, batch 4, seed 0, `deterministic`, one class, CPU only
-(no GPU on this machine). The three arms share all of it, so a row differs from its neighbours
+(no GPU on this machine). The arms share all of it, so a row differs from its neighbours
 only in what is trained.
 
 | Arm | What is trained | mAP50 | mAP50:95 | Precision | Recall | Params (M) | GFLOPs@320 | FPS | Train (min) |
@@ -65,6 +65,26 @@ only in what is trained.
 | REAL-003 | YOLO11n + rank-8 LoRA adapter (0.27 M adapter params, 10.1 % of the model trainable) | 0.5781 | 0.2984 | 0.8682 | 0.5556 | 2.590 | 1.613 | 65.57 | 8.84 |
 | REAL-004 | SARVO prototype: ratio-space CFAR front end (learned per-pixel gain) | 0.5691 | 0.3151 | 0.9104 | 0.5346 | 2.590 | 1.764 | 36.70 | 12.47 |
 | REAL-005 | Prototype control: same statistic, fixed threshold, 0 learnable params | 0.4952 | 0.2465 | 0.7931 | 0.4737 | 2.590 | 1.728 | 44.14 | 7.31 |
+| REAL-006 | Prototype control: matched-cost conv stem, params identical to REAL-004 | 0.5654 | 0.3021 | 0.9244 | 0.5146 | 2.590 | 1.649 | 44.87 | 10.03 |
+
+**The proposal's own falsification test, extended past the first seed.** The arm (`REAL-004`)
+was then repeated at seeds 1 and 2 alongside the baseline (`MSEED-B1`/`MSEED-C1`, `MSEED-B2`/`MSEED-C2`,
+same schedule, `train_seed` only changing). mAP50:95, paired:
+
+| Seed | Baseline | CFAR front end | Paired Δ |
+| ---: | ---: | ---: | ---: |
+| 0 | 0.3012 | 0.3151 | +0.0139 |
+| 1 | 0.2804 | 0.3036 | +0.0232 |
+| 2 | 0.2871 | 0.3036 | +0.0165 |
+| mean ± std | 0.2895 ± 0.0106 | 0.3074 ± 0.0066 | **+0.0179** |
+
+The front end leads the baseline on mAP50:95 at **all three seeds**, and the matched-cost conv
+control (`REAL-006`) sits below it (0.3021), so the gain is not the 217 extra parameters. A
+five-corruption robustness sweep (`saryolo robustness`, `results/robustness/REAL-001` and
+`REAL-004`) is directionally consistent: mean relative mAP50:95 loss under speckle −15.6 %
+(baseline) vs −10.7 % (prototype), under low contrast −32.0 % vs −13.1 %. The effect is small
+and pilot-scale, and the front end costs ~40 % of CPU throughput; recorded as *survives both
+falsifiers it named, no paper-grade benefit demonstrated*.
 
 Reproduce with:
 
@@ -72,13 +92,17 @@ Reproduce with:
 python -m saryolo train --exp configs/exp/REAL-001_hrsid_baseline.yaml
 python -m saryolo train --exp configs/exp/REAL-002_hrsid_v2_lite.yaml
 python -m saryolo train --exp configs/exp/REAL-003_hrsid_lora_r8.yaml
+python -m saryolo train --exp configs/exp/REAL-004_hrsid_cfar.yaml
+python -m saryolo train --exp configs/exp/REAL-005_hrsid_cfar_fixed.yaml
+python -m saryolo train --exp configs/exp/REAL-006_hrsid_cfar_conv.yaml
 python scripts/make_readme_assets.py     # regenerates docs/assets/facts.json + the charts
 python scripts/make_real_figures.py      # regenerates the qualitative detection panel
 ```
 
 **What the pilot does not support.** Nothing here is a cross-sensor, cross-resolution or
-leave-one-source-out result: HRSID is one source, and the subset is small. Single seed. The
-ladder ablations (SFE, SFM, SAA, AMF, P2, conditioning) are still `TBD` and still need a GPU.
+leave-one-source-out result: HRSID is one source, and the subset is small. The primary
+comparison is three seeds on one 200-image subset, which is a noise check and not validation.
+The ladder ablations (SFE, SFM, SAA, AMF, P2, conditioning) are still `TBD` and still need a GPU.
 
 **What the LoRA arm measured, and where the adapter is.** The arm trains a low-rank update to
 the wrapped convolutions plus the detection head; the wrapped base weights are frozen. The
