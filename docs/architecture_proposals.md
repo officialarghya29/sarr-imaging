@@ -74,8 +74,11 @@ closed form.
    reciprocal of the equivalent number of looks — a real radar quantity).
 4. A small MLP over the stacked statistics emits a per-pixel gain `g`; the last layer is
    zero-initialised, so `g ≡ 0` at step 0 and the front end is the identity.
-5. Output `x' = x_log ⊙ (1 + tanh(g))` (or the base log image when `g = 0`), which then
-   enters *the existing backbone unchanged* — no other row of the graph moves.
+5. Output `x' = x ⊙ (1 + tanh(g))`, which then enters *the existing backbone unchanged* —
+   no other row of the graph moves. The modulation is applied to the **raw** image, not to
+   `x_log`: inverting the log to return to image space would make the identity approximate
+   instead of exact, and the backbone was designed to read an intensity image. With the
+   zero-initialised gain, `g ≡ 0` and the front end returns `x` bit-for-bit.
 
 Cost is `O(k)` depthwise box filters plus one MLP over `3k` channels: no full-resolution
 dense convolution is added, and the statistic bank is separable and cheap.
@@ -112,11 +115,23 @@ registered like the others; one `ModelSpec` field; a handful of generated YAML r
 does not touch the trainer, the loss, or the data path, because it consumes the same
 3-channel tensor the current stem consumes.
 
-**Expected efficiency implications.** Parameters: one MLP over `3k` channels, order
-`10^4`, i.e. well under the 0.5 % budget on any arm and provably `+0` at init before the
-MLP gains are counted. Compute: the box-filter bank is depthwise and separable, so the
-added GFLOPs are dominated by the MLP at the two shallowest stages; expected well under
-1 GFLOP at 640², to be measured, not asserted.
+**Expected efficiency implications.** The expectation was one MLP
+over `3k` channels, order `10^4` parameters, well under the 0.5 % budget. It is measured
+now, by `saryolo/evaluation/efficiency.py` on the generated YAML at 320 px and one class:
+
+| Arm | Params | Δ params | GFLOPs @320 | Δ GFLOPs |
+| --- | ---: | ---: | ---: | ---: |
+| `baseline_n` (pilot scale) | 2,590,035 | — | 1.613 | — |
+| `cfar_n` (proposed) | 2,590,252 | **+217 (+0.008 %)** | 1.764 | +0.151 (+9.4 %) |
+| `cfar_fixed_n` (control) | 2,590,035 | **+0** | 1.728 | +0.115 (+7.1 %) |
+| `baseline_s` | 9,428,179 | — | 5.394 | — |
+| `cfar_s` | 9,428,396 | **+217 (+0.002 %)** | 5.540 | +0.146 (+2.7 %) |
+
+So the parameter claim holds by a factor of ~60 against the 0.5 % budget, and the fixed
+control adds *exactly* nothing. The compute is not free: the statistic bank and the gain MLP
+cost roughly 2–9 % of a small model's FLOPs at this resolution, which is a real price and is
+stated rather than buried in the ablation. These are measured values, not estimates; nothing
+here says whether the price is worth paying — that is what the experiment decides.
 
 **How it differs from relevant existing approaches.** Against learned-CFAR detectors in the
 radar literature: those are usually a CFAR stage *around* an existing detector or a
@@ -129,6 +144,16 @@ audit): those change *features* to align domains; this changes what the first co
 and Component 2 (SFM): those are deep, learned, identity-at-init blocks operating on
 features; this is analytic, shallow, input-side, and it is a *representation*, not a module
 inserted on top of one.
+
+**An overlap that has to be stated rather than avoided.** The repository *already* contains
+a CFAR-style arm: `TargetPriorModulation` has a `"cfar"` mode (`VARIANTS["tp_cfar"]`), a
+classical non-learned prior applied to *features at each detection level*. Its existence is
+the strongest argument against over-claiming here, and it is why the distinction has to be
+about placement and scope rather than about the statistic: the prior slot asks "is this
+feature above its local background" per level and per channel; this proposal asks "what is
+the detector's first representation" once, on the image, with a learned per-pixel gain.
+The two are separately ablatable (`tp_cfar` versus `cfar_n`), and a paper that reported
+only the second without citing the first would be hiding its own prior work.
 
 **Experiments needed to decide.** (1) An arm with the front end and an otherwise identical
 graph, versus the baseline, on the existing 200/60/60 HRSID subset — the environment can
@@ -368,6 +393,43 @@ and no attributable result.
 | 1. Repository and resource audit | Done — `reports/agent_initial_audit.md` (refreshed 2026-10-04) |
 | 2. Focused research review | Done — `docs/literature_audit.md`, `docs/related_work.md`, `docs/novelty_and_overlap.md` |
 | 3. Architecture proposals | **This document**; one recommended |
-| 4. Architecture specification | `BLOCKED-ON-RUN` — follows only after the recommendation is accepted |
-| 5. Prototype | not started; the recommendation's first arm is a prototype, not a paper result |
-| 6–9 | not started — and each is gated on Phase 5 producing a measured benefit |
+| 4. Architecture specification | **Partially done** — the recommended direction's flow, tensors and modes are specified in §2 and realised in `saryolo/nn/modules/cfar.py`; it is not frozen because Phase 6 has not reported yet |
+| 5. Prototype | **Implemented and verified**: `RatioSpaceCFARFrontEnd`, arms `cfar_n`/`cfar_s` and controls `cfar_fixed_n`/`cfar_fixed_s`; forward, exact identity at init, non-zero gain gradient, real loss, an optimiser step, and a measured cost profile are all asserted in `tests/test_cfar_frontend.py` |
+| 6. Initial experiments | **Measured**: `REAL-004` (the arm) and `REAL-005` (the control) on the HRSID subset against `REAL-001` — the falsification test in §5. It is reported in §8 |
+| 7–9 | not started — and each is gated on Phase 6 producing a measured benefit |
+
+---
+
+## 8. The first measured result of the recommended direction
+
+Phase 6 ran the falsification test from §5. It is a **pilot**: the 200/60/60 HRSID subset,
+40 epochs, 320 px, batch 4, one class, **one seed, CPU only**, three arms sharing the entire
+schedule so a row differs only in the first representation. Every number is read from
+`results/experiments.jsonl` by the run that produced it.
+
+| Arm | mAP50 | mAP50:95 | Precision | Recall | Params | GFLOPs@320 | FPS (CPU) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| REAL-001 · stock YOLO11n (baseline) | 0.5706 | 0.3012 | 0.9240 | 0.5380 | 2.590 M | 1.613 | 61.8 |
+| REAL-004 · **CFAR front end, learned gain** | 0.5691 | **0.3151** | 0.9104 | 0.5346 | 2.590 M | 1.764 | 36.7 |
+| REAL-005 · control: same statistic, **fixed** threshold, 0 learnable params | 0.4952 | 0.2465 | 0.7931 | 0.4737 | 2.590 M | 1.728 | 44.1 |
+
+**What the test settles.** The falsifier named in §5 was "the front end does not beat the
+matched-cost control". REAL-004 beats that control by +0.074 mAP50 and +0.069 mAP50:95, and the
+control is *worse than the plain baseline* (0.495 vs 0.571). So the learned gain is not
+decoration: the analytic statistic used with a fixed threshold actively harms the detector,
+and learning the threshold recovers it and more. That half of the claim survives.
+
+**What the test does not settle.** The primary comparison is against the *baseline*, and there
+the result is a wash on mAP50 (0.5691 vs 0.5706, −0.0015) while mAP50:95 rises from 0.3012 to
+0.3151 (+0.0139, +4.6 % relative). A 0.014 difference measured on 60 test images with a single
+seed is **inside the noise**, and the front end costs a real 40 % of CPU throughput (61.8 →
+36.7 FPS) at this resolution. The correct statement is therefore: **the proposal survives its
+falsifier but has not demonstrated a benefit**, and it may not have one. What would decide it:
+three seeds per arm on the full release, the matched-cost plain-conv-stem control (still not
+built — it is what separates "the statistic" from "217 extra parameters plus an input
+transform"), and the noise-robustness sweep in §2. Until then, §5's recommendation stands as
+the direction to pursue and **not** as a result.
+
+**What would withdraw it.** If a multi-seed run shows the mAP50:95 gain inside the seed
+spread, or if the matched-cost conv stem matches REAL-004, the direction should be withdrawn
+rather than rephrased — and this section should be rewritten to say so, not deleted.

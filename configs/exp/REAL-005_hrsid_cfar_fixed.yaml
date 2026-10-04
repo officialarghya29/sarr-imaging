@@ -1,0 +1,34 @@
+# SARVO PROTOTYPE CONTROL on the real HRSID subset (master Phase 5/6).
+#
+# The same statistic stack as REAL-004 with an *analytic* threshold and **zero**
+# learnable parameters. It exists to separate "the statistic helps" from "the learned
+# gain helps": if REAL-004 does not beat this arm, the benefit was the extra
+# parameters rather than the representation, and the proposal is withdrawn rather than
+# rephrased (docs/architecture_proposals.md §5).
+#
+# This arm is deliberately not an identity at initialisation. A control that equals
+# the baseline would measure nothing.
+#
+#   python -m saryolo train --exp configs/exp/REAL-005_hrsid_cfar_fixed.yaml
+experiment:
+  id: REAL-005
+  name: SARVO prototype control (fixed-threshold CFAR on HRSID subset)
+  description: >-
+    Fixed-threshold control for REAL-004: identical statistic stack, no learnable
+    parameters. Pilot only.
+model: ../models/yolo11n_cfar_fixed_n.yaml
+dataset: ../datasets/hrsid_real.yaml
+train:
+  epochs: 40
+  imgsz: 320
+  batch: 4
+  seed: 0
+  optimizer: auto
+  cos_lr: true
+  patience: 15
+  workers: 4
+  deterministic: true
+notes: >-
+  Real HRSID subset, pilot scale. The matched-cost plain-conv-stem control named in
+  docs/architecture_proposals.md §2 is NOT this arm and is not yet built; this one
+  isolates the learned gain from the statistic.

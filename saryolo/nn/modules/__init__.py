@@ -9,7 +9,10 @@ Two invariants are shared by every module and are enforced by tests:
 1. **Exact identity at initialisation** — the residual gate starts at 0, so a
    freshly built SAR-YOLO is numerically identical to its YOLO baseline. Every
    reported gain is therefore attributable to what training learned, not to extra
-   capacity that perturbs the function at step 0.
+   capacity that perturbs the function at step 0. The one deliberate exception is
+   the *fixed-threshold* mode of :class:`RatioSpaceCFARFrontEnd`, which is a
+   control arm and declares ``identity_at_init = False``: a control that equals
+   the baseline would measure nothing.
 2. **Every parameter receives gradient at init** — identity comes from the gate
    *alone*. The residual branch is deliberately kept non-degenerate, because a
    zero-initialised branch on top of a zero-initialised gate has
@@ -29,6 +32,7 @@ from .attention import (
     SEAttention,
     build_attention,
 )
+from .cfar import RatioSpaceCFARFrontEnd
 from .conditioning import (
     FIELD_SETS,
     AcquisitionConditionedAdapter,
@@ -55,6 +59,8 @@ __all__ = [
     "ContextAggregation",
     "TargetAwareRefinement",
     "SARInputAdapter",
+    # SARVO prototype: the proposed first representation (master Phase 5)
+    "RatioSpaceCFARFrontEnd",
     # Acquisition conditioning (cross-sensor generalisation)
     "AcquisitionConditionedAdapter",
     "AcquisitionEncoder",
@@ -82,6 +88,7 @@ CUSTOM_MODULES = {
     "ContextAggregation": ContextAggregation,
     "TargetAwareRefinement": TargetAwareRefinement,
     "SARInputAdapter": SARInputAdapter,
+    "RatioSpaceCFARFrontEnd": RatioSpaceCFARFrontEnd,
     "AcquisitionConditionedAdapter": AcquisitionConditionedAdapter,
     "IdentityAttention": IdentityAttention,
     "SEAttention": SEAttention,

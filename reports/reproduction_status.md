@@ -12,7 +12,7 @@ Every item below was run and observed in this environment.
 
 | What | Command | Observed result |
 | --- | --- | --- |
-| Test suite | `.venv/bin/python -m pytest -q` | **434 passed** |
+| Test suite | `.venv/bin/python -m pytest -q` | **447 passed** |
 | Baseline parity with stock YOLO11 | `pytest tests/test_arch.py -k baseline` | exact published counts (n: 2,624,080; s: 9,458,752 at 80 classes) |
 | All variants build and forward | `pytest tests/test_arch.py -k every_variant` | 92 variants pass |
 | Module identity at init | `pytest tests/test_arch.py -k identity` | `max\|f(x)−x\| = 0.0e+00` for all |
@@ -63,6 +63,8 @@ only in what is trained.
 | REAL-001 | stock YOLO11n, every parameter | 0.5706 | 0.3012 | 0.9240 | 0.5380 | 2.590 | 1.613 | 61.80 | 6.95 |
 | REAL-002 | SARVO-Lite (s) — full v2 minus the two heaviest compute slots | 0.5724 | 0.3287 | 0.8014 | 0.5263 | 11.016 | 8.106 | 12.39 | 36.22 |
 | REAL-003 | YOLO11n + rank-8 LoRA adapter (0.27 M adapter params, 10.1 % of the model trainable) | 0.5781 | 0.2984 | 0.8682 | 0.5556 | 2.590 | 1.613 | 65.57 | 8.84 |
+| REAL-004 | SARVO prototype: ratio-space CFAR front end (learned per-pixel gain) | 0.5691 | 0.3151 | 0.9104 | 0.5346 | 2.590 | 1.764 | 36.70 | 12.47 |
+| REAL-005 | Prototype control: same statistic, fixed threshold, 0 learnable params | 0.4952 | 0.2465 | 0.7931 | 0.4737 | 2.590 | 1.728 | 44.14 | 7.31 |
 
 Reproduce with:
 

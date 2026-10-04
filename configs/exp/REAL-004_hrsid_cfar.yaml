@@ -1,0 +1,32 @@
+# SARVO PROTOTYPE ARM on the real HRSID subset (master Phase 5/6).
+#
+# The recommended direction from docs/architecture_proposals.md §2: an analytic
+# multi-scale CFAR statistic as the detector's first representation, with a
+# zero-initialised per-pixel gain. Identical dataset, schedule, resolution and seed
+# as REAL-001 (the stock YOLO11n baseline at the same scale), so the only difference
+# between the two ledger rows is the first representation -- which is what makes the
+# comparison attributable rather than a comparison of two different models.
+#
+#   python -m saryolo train --exp configs/exp/REAL-004_hrsid_cfar.yaml
+experiment:
+  id: REAL-004
+  name: SARVO prototype (ratio-space CFAR front end on HRSID subset)
+  description: >-
+    The recommended architecture direction, measured against REAL-001 on the same
+    subset and schedule. Pilot only.
+model: ../models/yolo11n_cfar_n.yaml
+dataset: ../datasets/hrsid_real.yaml
+train:
+  epochs: 40
+  imgsz: 320
+  batch: 4
+  seed: 0
+  optimizer: auto
+  cos_lr: true
+  patience: 15
+  workers: 4
+  deterministic: true
+notes: >-
+  Real HRSID subset, pilot scale. Paired with REAL-001 (the same graph without the
+  front end) and REAL-005 (the fixed-threshold control), so the three rows differ
+  only in the first representation. The full release has 5,604 images.

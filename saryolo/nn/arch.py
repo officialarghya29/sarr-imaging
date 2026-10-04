@@ -37,6 +37,12 @@ SCALES: dict[str, list[float]] = {
 #: Published parameter counts for stock YOLO11, used as a regression guard in tests.
 BASELINE_PARAMS: dict[str, int] = {"n": 2_624_080, "s": 9_458_752}
 
+#: Modes of the SARVO prototype front end (``saryolo/nn/modules/cfar.py``). Duplicated as a
+#: literal rather than imported so that ``arch.py`` stays free of a dependency on the module
+#: package (the module package imports nothing from here, and a cycle would make the builder
+#: unimportable from a checkpoint load). A test pins the two lists together.
+CFAR_MODES: tuple[str, ...] = ("cfar", "fixed")
+
 
 @dataclass
 class ModelSpec:
@@ -86,6 +92,13 @@ class ModelSpec:
     name: str
     scale: str = "s"
     nc: int = 1
+    #: SARVO prototype first representation (master Phase 5): the mode of
+    #: :class:`saryolo.nn.modules.cfar.RatioSpaceCFARFrontEnd`, emitted as the **first**
+    #: backbone row so it reads the image rather than a feature map. ``None`` disables.
+    #: Distinct from ``adapter`` (SIA), which is also input-side but produces a new
+    #: representation from learned filters; this one computes an analytic radar
+    #: statistic and learns only how much of it to use.
+    cfar: str | None = None
     adapter: str | None = None
     enhancement: str | None = None
     speckle: str | None = None
@@ -113,6 +126,8 @@ class ModelSpec:
     notes: str = ""
 
     def __post_init__(self) -> None:
+        if self.cfar is not None and self.cfar not in CFAR_MODES:
+            raise ValueError(f"cfar must be one of {CFAR_MODES}, got {self.cfar!r}")
         if self.scale not in SCALES:
             raise ValueError(f"scale must be one of {sorted(SCALES)}, got {self.scale!r}")
         if "p2" in self.levels and self.levels != ("p2", "p3", "p4", "p5"):
@@ -128,6 +143,8 @@ class ModelSpec:
     def module_names(self) -> list[str]:
         """Enabled module slugs, in the order they appear along the forward graph."""
         mods = []
+        if self.cfar:
+            mods.append("cfar")
         if self.adapter:
             mods.append("adapter")
         if self.enhancement:
@@ -205,6 +222,14 @@ def build_yaml_dict(spec: ModelSpec) -> dict[str, Any]:
     b = _Builder()
 
     # ------------------------------------------------------------------ backbone
+    # SARVO prototype (RS-CFAR): the radar statistic as the first representation. Emitted
+    # before everything else because it is the module that decides what the first
+    # convolution reads; emitting it later would make it a feature module, which is the
+    # slot the existing SFM/SFE components already occupy and the reason this design was
+    # placed input-side in the first place (docs/architecture_proposals.md §2).
+    if spec.cfar:
+        b.add("backbone", -1, 1, "RatioSpaceCFARFrontEnd", ["ch", spec.cfar])
+
     # Module A (SIA), the only row that consumes the image itself. Everything downstream
     # sees its output, so this is the one place where "SAR-aware input representation" is
     # not a description of features but of the tensor the first convolution reads.
@@ -725,6 +750,33 @@ VARIANTS["v2_lite_p35_s"] = _lite(
     "v2_lite_p35_s", levels=("p3", "p4", "p5"),
     notes=("Efficiency frontier without the P2 level: the cheapest point that still keeps "
            "every physical prior. Reported so the P2 cost is visible on the frontier."),
+)
+
+#: SARVO prototype arms (master Phase 5, `docs/architecture_proposals.md` §2). These are
+#: *not* component-ladder arms: no SFE, no SFM, no conditioning, no extra detection level.
+#: They differ from the stock detector in exactly one place -- the representation the first
+#: convolution reads -- so the comparison against `baseline_s` is attributable to the
+#: statistic, and not to any of the modules the ladder would otherwise carry.
+VARIANTS["cfar_s"] = _v(
+    "cfar_s", cfar="cfar",
+    notes=("SARVO prototype: analytic multi-scale CFAR statistic as the first representation, "
+           "with a zero-initialised per-pixel gain (identity at init)."),
+)
+VARIANTS["cfar_fixed_s"] = _v(
+    "cfar_fixed_s", cfar="fixed",
+    notes=("SARVO prototype control: the same statistic stack with an *analytic* threshold and "
+           "no learnable parameters. Separates 'the statistics help' from 'the learned gain "
+           "helps'. Deliberately not identity at init -- a control that equals the baseline "
+           "measures nothing."),
+)
+#: Scale ``n`` of the same two arms. The real-data pilot runs at scale ``n`` (it is the only
+#: scale that fits the CPU budget), so the prototype must exist there too, against the same
+#: baseline the pilot already measured -- otherwise the comparison would be across scales as
+#: well as across representations.
+VARIANTS["cfar_n"] = _v("cfar_n", scale="n", cfar="cfar", notes="cfar_s at scale n (pilot scale).")
+VARIANTS["cfar_fixed_n"] = _v(
+    "cfar_fixed_n", scale="n", cfar="fixed",
+    notes="cfar_fixed_s at scale n (pilot scale); the fixed-threshold control.",
 )
 
 #: Baseline comparison variants (EXP-001b): scales of the stock detector.

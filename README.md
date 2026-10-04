@@ -6,7 +6,7 @@
 
 **One SAR detector that generalises to a sensor it has never seen — because it is told *how* the image was acquired, not *which* sensor took it.**
 
-![tests](https://img.shields.io/badge/tests-434_passing-22c55e) ![fabricated](https://img.shields.io/badge/fabricated_results-0-black) ![arch](https://img.shields.io/badge/architectures-92_wired-3b82f6) ![exps](https://img.shields.io/badge/experiments-109_configured-8b5cf6) ![cost](https://img.shields.io/badge/SARVO--Lite-32.55_GFLOPs-0891b2) ![license](https://img.shields.io/badge/license-MIT-94a3b8)
+![tests](https://img.shields.io/badge/tests-447_passing-22c55e) ![fabricated](https://img.shields.io/badge/fabricated_results-0-black) ![arch](https://img.shields.io/badge/architectures-96_wired-3b82f6) ![exps](https://img.shields.io/badge/experiments-113_configured-8b5cf6) ![cost](https://img.shields.io/badge/SARVO--Lite-32.55_GFLOPs-0891b2) ![license](https://img.shields.io/badge/license-MIT-94a3b8)
 
 </div>
 
@@ -50,9 +50,9 @@ SAR image ──► SIA ──► backbone ──► components 1/2/9 ──► 
 | Status | |
 | --- | --- |
 | **Stack** | Python 3.10+ · Ultralytics 8.4.155 · PyTorch 2.x |
-| **Architectures** | 92 variants wired; every one builds and runs a forward pass |
-| **Experiments** | 109 configured; each reproducible from a committed YAML |
-| **Tests** | 434 passing — no dataset download and no GPU needed |
+| **Architectures** | 96 variants wired; every one builds and runs a forward pass |
+| **Experiments** | 113 configured; each reproducible from a committed YAML |
+| **Tests** | 447 passing — no dataset download and no GPU needed |
 | **Measured** | architecture cost, identity-at-init, protocol correctness, metric correctness, **three real-data pilot arms** on HRSID |
 | **Not measured** | the **paper's accuracy table** — the pilot is a subset run on a CPU, not the full benchmark |
 
@@ -430,6 +430,8 @@ and measured, not the paper's result.
 | REAL-001 · YOLO11n baseline | 0.571 | 0.301 | 0.924 | 0.538 | 2.590 | 1.613 | 61.800 | 6.950 |
 | REAL-002 · SARVO-Lite (s) | 0.572 | 0.329 | 0.801 | 0.526 | 11.016 | 8.106 | 12.390 | 36.220 |
 | REAL-003 · YOLO11n + LoRA r=8 | 0.578 | 0.298 | 0.868 | 0.556 | 2.590 | 1.613 | 65.570 | 8.840 |
+| REAL-004 · SARVO prototype (RS-CFAR) | 0.569 | 0.315 | 0.910 | 0.535 | 2.590 | 1.764 | 36.700 | 12.470 |
+| REAL-005 · prototype control (fixed threshold) | 0.495 | 0.247 | 0.793 | 0.474 | 2.590 | 1.728 | 44.140 | 7.310 |
 
 Every cell above is read from `results/experiments.jsonl`, where the run that measured it wrote
 it; `docs/assets/facts.json` is generated from that ledger and the table is checked against the
@@ -448,6 +450,17 @@ Notes that belong next to the numbers rather than in a table cell:
   compute slots removed, so it carries the physics (SFE, clutter-aware SFM, spectral branch,
   target prior, deformable refinement, P2 level, SAR loss) and costs ~4x the baseline's compute
   at this resolution on a CPU.
+* **REAL-004 and REAL-005 are the architecture proposal's own falsification test**, run on the
+  same subset as REAL-001. REAL-004 is the recommended direction (`docs/architecture_proposals.md`
+  §2) at the same scale and schedule as the baseline; REAL-005 is the *fixed-threshold*
+  control — the identical analytic statistic with **zero** learnable parameters. The control
+  loses badly to both the baseline and the prototype (0.495 vs 0.571 and 0.569 mAP50), so the
+  learned gain is doing real work and the statistic alone is not enough. What the prototype
+  does **not** yet show is a gain over the plain baseline: mAP50 is level (0.569 vs 0.571)
+  while mAP50:95 rises 0.301 → 0.315, and a +0.014 difference on 60 test images at one seed is
+  inside the noise. The front end also costs real throughput on CPU (62 → 37 FPS). The honest
+  reading is that the proposal **survives its falsifier but has not demonstrated a benefit**;
+  that needs multiple seeds and the full release.
 * These are **single-seed pilot runs**. One seed is not validation, and nothing here supports a
   claim about cross-sensor generalisation — that is RQ1, and it needs the full dataset.
 
@@ -627,7 +640,7 @@ uv pip install --python .venv/bin/python torch torchvision --index-url https://d
 uv pip install --python .venv/bin/python ultralytics pytest
 source .venv/bin/activate
 
-pytest tests/ -q                                          # 434 tests
+pytest tests/ -q                                          # 447 tests
 python -m saryolo arch --variant all --nc 1               # emit 92 model YAMLs
 python -m saryolo synth-data --out datasets/processed/synthetic_smoke
 python -m saryolo train --exp configs/exp/_smoke_baseline.yaml

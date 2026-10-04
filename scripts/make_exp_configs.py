@@ -128,6 +128,20 @@ DATA_FRACTIONS: tuple[tuple[str, float, str], ...] = (
     ("EXP-705", 0.50, "50% of training data"),
 )
 
+#: SARVO prototype arms (master Phase 5, `docs/architecture_proposals.md` §2). The first is
+#: the recommended direction; the second is the fixed-threshold control that separates the
+#: statistic from the learned gain. Emitted at the *baseline* model, so the only difference
+#: from EXP-001 is the first representation. ``(id, variant, display name, purpose)``.
+PROTOTYPE: tuple[tuple[str, str, str, str], ...] = (
+    ("EXP-801", "cfar_s", "Ratio-space CFAR front end",
+     "SARVO prototype: the analytic multi-scale CFAR statistic as the detector's first "
+     "representation, with a zero-initialised per-pixel gain. Compared against EXP-001 at the "
+     "same scale, seed and schedule, so any difference is the representation."),
+    ("EXP-802", "cfar_fixed_s", "CFAR statistic, fixed threshold (control)",
+     "Control for EXP-801: the same statistic stack with an analytic threshold and zero "
+     "learnable parameters. Separates 'the statistics help' from 'the learned gain helps'."),
+)
+
 #: Experiment ids that are evaluated rather than trained.
 EVAL_ONLY = {"EXP-009", "EXP-010", "EXP-011"}
 
@@ -384,6 +398,23 @@ def main() -> int:
         )
         _write(out / f"{exp_id}_peft_{slug}.yaml", payload, purpose)
         written.append(f"{exp_id}_peft_{slug}.yaml")
+
+    # SARVO prototype arms (master Phase 5). Emitted from the PROTOTYPE table so the arm and
+    # its control cannot drift apart, and so the recommended direction is one entry rather
+    # than a hand-written config next to tests that assume it exists.
+    for exp_id, variant, name, purpose in PROTOTYPE:
+        rel_model = model_rel(variant)
+        if rel_model is None:
+            continue
+        payload = {
+            "experiment": {"id": exp_id, "name": name, "description": purpose},
+            "model": rel_model,
+            "dataset": rel_dataset,
+            "train": _train_block(args),
+            "notes": purpose,
+        }
+        _write(out / f"{exp_id}_{variant}.yaml", payload, purpose)
+        written.append(f"{exp_id}_{variant}.yaml")
 
     # Data-efficiency sweep (Direction E). The fraction is written into the config as an
     # explicit ``data_fraction`` key rather than being baked into a separate dataset directory,

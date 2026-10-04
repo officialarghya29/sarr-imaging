@@ -442,7 +442,13 @@ def _real_arms_facts(ledger: ExperimentLedger) -> dict:
         for key in REAL_METRIC_KEYS:
             value = metrics.get(key)
             if value is not None:
-                row[key] = round(float(value), 4)
+                # Six decimals, not four: the README prints three, and the guard that compares
+                # the two rounds at the README's precision with a 5e-4 tolerance. A value that
+                # lands exactly on x.xxx5 (REAL-005's mAP50:95 is 0.246502) is ambiguous at
+                # four decimals and would fail that boundary through no fault of either side,
+                # so the facts keep enough precision for the comparison to be about the
+                # measurement rather than about the rounding.
+                row[key] = round(float(value), 6)
         for key in REAL_PEFT_KEYS:
             if key in (record.extra or {}):
                 row[key] = record.extra[key]
@@ -984,6 +990,20 @@ def chart_coverage(facts: dict) -> None:
     _save(fig, "coverage.svg")
 
 
+def _short_model(model: str) -> str:
+    """``yolo11n_cfar_n.yaml`` -> ``cfar_n``: the arm, not the scale prefix.
+
+    The scale is already implied by the parameter count printed on the next line, and the
+    full stem is what pushed the tick labels into each other once the pilot grew past three
+    arms.
+    """
+    stem = str(model).removesuffix(".yaml")
+    for prefix in ("yolo11n_", "yolo11s_", "yolo11m_", "yolo11l_", "yolo11x_"):
+        if stem.startswith(prefix):
+            return stem[len(prefix):]
+    return stem
+
+
 def chart_real_arms(facts: dict) -> None:
     """The measured real-data arms: what they score, and what each one costs.
 
@@ -1022,25 +1042,29 @@ def chart_real_arms(facts: dict) -> None:
                 ax.text(bar.get_x() + bar.get_width() / 2, float(value) + 0.012, f"{float(value):.3f}",
                         ha="center", fontsize=10, color=TEXT, fontweight="bold")
 
+    # Tick labels are stacked one fact per line rather than wrapped across the axis. The
+    # layout check compares rendered text boxes, and a five-arm row of three long lines
+    # collides by ~30 % at this figure width; four short lines do not. The cost is kept in
+    # the figure because it is the other half of every claim here -- a score without its
+    # price is the number a reader is most likely to quote alone.
     labels = []
     for eid in arms:
         row = arms[eid]
+        label = [eid, _short_model(row["model"])]
         cost = []
         if "params_M" in row:
-            cost.append(f"{row['params_M']:.2f} M params")
+            cost.append(f"{row['params_M']:.2f} M")
         if "flops_G" in row:
-            cost.append(f"{row['flops_G']:.2f} GFLOPs@{row.get('imgsz', 640)}")
+            cost.append(f"{row['flops_G']:.2f} G@{row.get('imgsz', 640)}")
+        if cost:
+            label.append(" · ".join(cost))
         if "fps" in row:
-            cost.append(f"{row['fps']:.0f} FPS (CPU)")
-        extra = ""
+            label.append(f"{row['fps']:.0f} FPS (CPU)")
         if row.get("method") == "lora":
-            extra = (
-                f"\nLoRA r={row.get('rank')} - {row.get('lora_params', 0) / 1000:.0f} k adapter "
-                f"params, {100 * float(row.get('fraction_trainable', 0)):.1f} % trainable"
-            )
-        labels.append(f"{eid}\n{row['model'].replace('.yaml', '')}\n{' · '.join(cost)}{extra}")
+            label.append(f"LoRA r={row.get('rank')} · {row.get('lora_params', 0) / 1000:.0f} k")
+        labels.append("\n".join(label))
     ax.set_xticks(list(xs))
-    ax.set_xticklabels(labels, fontsize=9.0, linespacing=1.5)
+    ax.set_xticklabels(labels, fontsize=8.2, linespacing=1.6)
 
     splits = facts.get("real_subset", {}).get("splits", {})
     subset = ", ".join(f"{k} {v}" for k, v in splits.items()) or "split sizes unknown"

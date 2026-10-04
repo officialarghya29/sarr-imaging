@@ -115,7 +115,7 @@ Latest additions (this session):
    `scripts/make_real_figures.py`. What this is *not*: the full release, a multi-source test, or
    anything about cross-sensor generalisation.
 
-10. ~~Architecture decision (master Phase 3)~~ — **written, nothing implemented**:
+10. ~~Architecture decision and prototype (master Phases 3 + 5)~~ — **decided and implemented**:
    `docs/architecture_proposals.md` offers three genuinely distinct directions — a
    radar-statistic input representation, an anisotropic weight-tied recursive scale-space
    path, and a self-estimated acquisition state — each with its nine required fields
@@ -126,7 +126,25 @@ Latest additions (this session):
    over multiple sources. `docs/related_work.md` is the companion Phase-2 comparison table.
    The uncomfortable finding this exercise produced is recorded in both documents: the
    current v2 is a module ladder on a YOLO11 skeleton, which is the outcome the brief
-   explicitly rules out, and no proposal has been implemented yet.
+   explicitly rules out.
+   Phase 5 followed: `saryolo/nn/modules/cfar.py` implements the recommended first
+   representation (analytic multi-scale `log`-ratio + coefficient-of-variation statistics,
+   zero-initialised per-pixel gain, exact identity at init), with arms `cfar_n`/`cfar_s` and
+   the fixed-threshold control `cfar_fixed_n`/`cfar_fixed_s`. `tests/test_cfar_frontend.py`
+   pins forward, the exact identity, the non-zero gain gradient (including the subtler point
+   that the first layer legitimately starts at zero gradient and must recover it), the real
+   loss, an optimiser step, and the **measured** cost: +217 parameters (+0.008 % at scale
+   `n`), the control **+0**, and +0.15 GFLOPs at 320 px — a real compute price, stated rather
+   than hidden. The honesty note that had to be written into the proposal: the repository
+   already had a CFAR-style arm (`tp_cfar`, a non-learned prior on *features*), so the
+   contribution is placement and scope, not the statistic.
+   Phase 6 then ran the falsification test on the same HRSID subset: the prototype (REAL-004)
+   beats its fixed-threshold control (REAL-005) clearly, and the control is *worse than the
+   baseline* — so the learned gain matters and the statistic alone harms. But the primary
+   comparison against the baseline is a wash on mAP50 (0.5691 vs 0.5706) with mAP50:95 up
+   0.3012 → 0.3151, which on 60 test images at one seed is inside the noise, and the front end
+   costs ~40 % of CPU throughput. Recorded as: **survives the falsifier, no demonstrated
+   benefit yet**. Phase 7 is gated on a multi-seed run and the still-unbuilt matched-cost stem.
 
 11. ~~RT-DETR feasibility arm (red-team W6)~~ — **built, not measured**:
    `SARYOLORTDetectionModel` + generator-derived `configs/models/rtdetr/rtdetr_s_cond_film.yaml`
