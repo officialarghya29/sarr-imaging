@@ -250,7 +250,104 @@ subsumed is unmeasured); and this is **one augmentation ladder, one dataset, one
 pattern is a substitution mechanism plus a monotone three-point trend, and both should be
 re-derived on the full release before the substitution is claimed at paper grade.
 
-## 8. Limitations (stated, not implied)
+## 8. The core mechanism (SSAC) — pilot
+
+SARVO's core idea is **Scatter-Selective Adaptive Computation**: allocate expensive
+feature processing per region according to image evidence. This section reports the first
+controlled test of it. The mechanism, its specification and the three candidate integration
+points are in `docs/ssac_design.md`; the literature review that constrained the claim is in
+`docs/ssac_assessment.md`. **Every number here is a pilot** — the 200/60/60 HRSID subset, 40
+epochs, 320 px, batch 4, seed 0, CPU only, one class.
+
+### 8.1 The comparison, and the control that decides it
+
+The master workflow names the *fixed-computation variant of the model without the adaptive
+mechanism* as the key control. `SSAC-002` is exactly that, and it is **parameter-identical**
+to the proposal by construction — the same block shapes, with the allocation made spatially
+constant. So a difference between `SSAC-001` and `SSAC-002` is the adaptive allocation and
+not capacity. `SSAC-003` is Experiment 2: the same allocation fed the raw feature instead of
+the multi-scale SAR statistic.
+
+| Id | Arm | mAP50 | mAP50:95 | Precision | Recall | Params | GFLOPs@320 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| REAL-001 | YOLO11n baseline | 0.5706 | 0.3012 | 0.9240 | 0.5380 | 2,590,035 | 1.613 |
+| SSAC-001 | proposal: SAR-statistic allocation | 0.5626 | **0.3089** | 0.8628 | 0.5380 | 3,396,329 | 1.998 |
+| SSAC-002 | matched fixed-computation control | 0.5655 | 0.3026 | 0.9186 | 0.5280 | 3,396,329 | 1.998 |
+| SSAC-003 | assessment alternative: raw-feature scorer | 0.5653 | 0.2863 | 0.8932 | 0.5382 | 3,403,257 | 2.003 |
+
+**What the test settles.** The proposal beats its parameter-identical control by **+0.0063**
+mAP50:95 and the baseline by +0.0077. The control itself is essentially the baseline
+(0.3026 vs 0.3012): the refinement block, applied uniformly, buys nothing. So the adaptivity
+is doing something the capacity is not — the first falsifier is cleared. The second is
+cleared more strongly: the raw-feature assessment alternative scores **0.2863**, *below the
+baseline* and 0.0226 under the proposal, so the SAR statistic is load-bearing and the
+mechanism is not merely a generic dynamic network. (mAP50 and precision go the other way —
+the proposal trades a little precision for localisation-weighted AP; that is reported, not
+spun.)
+
+### 8.2 Small-object preservation (Experiment 4)
+
+The mechanism's motivation is that weak returns must not be traded away for compute. The
+scale-wise AP from the repository's own COCO evaluator, on the same 60 test images (171 GT
+boxes: 100 small, 71 medium, 0 large):
+
+| Arm | AP_small | AP_medium |
+| --- | ---: | ---: |
+| SSAC-001 proposal | **0.0737** | **0.5262** |
+| SSAC-002 matched control | 0.0647 | 0.5096 |
+
+The proposal is ahead at both sizes, so there is **no small-object penalty** — the third
+withdrawal condition does not fire. This is consistent with the design: the cheap path runs
+for every region and the allocation only *adds* expensive processing, so the failure mode is
+wasted compute, never an erased target.
+
+### 8.3 The allocation is spatial, and concentrated where small objects live
+
+Read from the trained checkpoints by running each block's `gain_map` on 16 real val chips:
+
+| Block | level | mean g | within-image std | between-image std | fraction > 0.5 |
+| --- | --- | ---: | ---: | ---: | ---: |
+| SSAC-001 · block 0 | P3 (C=64) | 0.483 | **0.0269** | 0.0067 | **0.044** |
+| SSAC-001 · block 1 | P4 (C=128) | 0.670 | 0.0383 | 0.0242 | 1.000 |
+| SSAC-001 · block 2 | P5 (C=256) | 0.762 | 0.0438 | 0.0950 | 1.000 |
+| SSAC-002 · blocks 0–2 | — | 0.478 / 0.697 / 0.760 | **0.0** (constant) | 0.0068 / 0.0752 / 0.0972 | — |
+
+The proposal's within-image spread exceeds its between-image spread at every level, so the
+allocation is a genuine *per-region* decision and never collapses to one scalar per scene;
+the control's within-image spread is exactly zero, which is the property the control exists to
+remove. At P3 only **4.4 %** of locations exceed 0.5 — the allocation is concentrated at the
+level that carries small objects, which is where §8.2's small-object gain appears. At P4/P5
+the model raised the allocation nearly uniformly (fraction 1.0), so **those levels save no
+compute at all**; that is a negative for the efficiency story and is stated as one.
+
+### 8.4 Computational overhead (Experiment 5) — and why no efficiency claim is made
+
+The implementation is **dense**: the expensive path runs everywhere and the allocation changes
+values, not the arithmetic executed. So the measured cost *rises*:
+
+| Arm | Params | Δ | GFLOPs@320 | Δ | FPS (CPU) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| REAL-001 baseline | 2,590,035 | — | 1.613 | — | 61.8 |
+| SSAC-001 / SSAC-002 | 3,396,329 | +31.1 % | 1.998 | +23.9 % | 46.1 / 47.6 |
+
+A sparse variant that actually skips the unselected regions is specified in
+`docs/ssac_design.md` §4, but it is **not built**, and on this CPU-only machine the
+latency-aware-dynamics literature (and this repository's own CFAR measurement: 3.0× latency
+for +9 % FLOPs) both predict it would not convert into a wall-clock saving. **No efficiency
+claim is made for SSAC in either direction.** The accuracy comparison above is the only claim
+this pilot supports, and it is a pilot.
+
+### 8.5 Claim labels
+
+| Claim | Label | Evidence |
+| --- | --- | --- |
+| The adaptive allocation beats a parameter-identical fixed-computation control | **preliminary** — one seed, 60 test images | `SSAC-001` vs `SSAC-002` |
+| The SAR statistic is a better assessment signal than the raw feature | **preliminary** — same pilot | `SSAC-001` vs `SSAC-003` |
+| The mechanism does not harm small-object performance | **preliminary** | AP_small 0.0737 vs 0.0647 |
+| SSAC is computationally efficient | **not supported** | dense implementation costs +24 % FLOPs; sparse variant unbuilt |
+| SSAC is a novel mechanism | **not claimed** | the principle is SACT/SplatNet/region-selection; see `docs/ssac_assessment.md` |
+
+## 9. Limitations (stated, not implied)
 
 * One dataset (HRSID), one subset (200/60/60), one machine, **no GPU**.
 * The primary comparison is **three seeds** — a noise check, not validation.
