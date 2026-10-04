@@ -22,7 +22,10 @@ from saryolo.evaluation.reported_baselines import REPORTED_BASELINES, reported_r
 from saryolo.nn.arch import VARIANTS, build_yaml_dict
 from saryolo.paper.tables import (
     EFFICIENCY_FRONTIER_ARMS,
+    PILOT_DATASETS,
     TBD,
+    _is_subset_pilot,
+    _match_variant,
     build_efficiency_frontier,
 )
 from saryolo.tracking.ledger import ExperimentLedger
@@ -238,3 +241,31 @@ def test_the_frontier_table_still_marks_accuracy_as_unmeasured():
     assert our_rows, "no measured rows"
     for row in our_rows:
         assert row[3] == TBD and row[4] == TBD, f"{row[0]}: accuracy must stay TBD until run"
+
+
+def test_a_subset_pilot_cannot_fill_a_benchmark_cell():
+    """A pilot's mAP must never land in a benchmark table, even though the run is real.
+
+    This is the trap that a completed pilot creates: the arm *has* a measured mAP, on the
+    same model file the frontier names, so a variant match finds it and the frontier would
+    print a 260-image, 320 px, single-seed number beside published full-benchmark results.
+    The number would be real, plausible and incomparable -- the worst combination. The
+    pilot is therefore excluded by dataset, and the exclusion is asserted rather than
+    assumed, using the run that actually exists in the ledger.
+    """
+    from saryolo.tracking.ledger import ExperimentLedger as _Ledger
+
+    records = [r for r in _Ledger(REPO_ROOT / "results").completed() if _is_subset_pilot(r)]
+    if not records:
+        pytest.skip("no subset pilot has been run yet; nothing to exclude")
+    for record in records:
+        assert Path(str(record.dataset)).stem in PILOT_DATASETS
+    # The frontier names yolo11s_v2_lite_s, which is exactly the pilot's model file. The
+    # pilot must not be returned as its benchmark record.
+    assert _match_variant(records, "v2_lite_s") is None, (
+        "a subset pilot was matched to a benchmark variant"
+    )
+    assert _match_variant(records, "v2_lite_s", allow_pilot=True) is not None, (
+        "the pilot is unreachable even with allow_pilot=True, so the exclusion is not the "
+        "thing keeping it out and this test would pass vacuously"
+    )

@@ -1,0 +1,31 @@
+# REAL-DATA PILOT (not a smoke test, not a full research experiment).
+#
+# Trains the stock YOLO11n baseline on a REAL HRSID subset (ship, horizontal
+# boxes) assembled from the official release, to produce the first genuine
+# measured detection number in this repository.
+#
+# Why a subset: this machine has no GPU. A subset run is the smallest thing that
+# can prove the pipeline learns on real SAR data. The number it produces is a
+# *pilot* number -- it is real and measured, but it is NOT the paper's result,
+# which requires the full 5,604-image release and a proper schedule.
+#
+#   python -m saryolo train --exp configs/exp/REAL-001_hrsid_baseline.yaml
+experiment:
+  id: REAL-001
+  name: real-data pilot (YOLO11n baseline on HRSID subset)
+  description: First genuine run on real SAR imagery; establishes that the pipeline learns.
+model: ../models/yolo11n_baseline_n.yaml
+dataset: ../datasets/hrsid_real.yaml
+train:
+  epochs: 40
+  imgsz: 320
+  batch: 4
+  seed: 0
+  optimizer: auto
+  cos_lr: true
+  patience: 15
+  workers: 4
+  deterministic: true
+notes: >-
+  Real HRSID subset (official release, YOLO boxes). Pilot only: the full release
+  has 5,604 images and this subset is a fraction of it.

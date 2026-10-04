@@ -331,6 +331,25 @@ def test_readme_generated_charts_exist():
     assert (REPO_ROOT / "docs" / "assets" / "facts.json").exists()
 
 
+def test_every_chart_has_a_png_companion():
+    """Each chart needs a raster twin, and it must be committed alongside the SVG.
+
+    The README embeds SVG (crisp at any width), but a slide deck, a PDF draft and a chat
+    preview all need a raster, and re-exporting one by hand is exactly how a figure drifts
+    away from the code that produced it. Both formats come from one ``savefig`` pair in
+    ``scripts/make_readme_assets.py``, so a missing PNG means someone rendered a chart by
+    an ad-hoc route -- which is the drift this check exists to catch.
+    """
+    svgs = {p.stem for p in (REPO_ROOT / "docs" / "assets").glob("*.svg")}
+    pngs = {p.stem for p in (REPO_ROOT / "docs" / "assets").glob("*.png")}
+    assert svgs, "no charts found"
+    missing = sorted(svgs - pngs)
+    assert not missing, (
+        f"charts with no committed PNG companion: {missing}. Regenerate with "
+        "`python scripts/make_readme_assets.py`, which writes both formats."
+    )
+
+
 def test_readme_charts_have_no_text_collisions():
     """Charts must be readable, not merely valid.
 
@@ -476,6 +495,93 @@ def _readme_cost_table() -> dict[str, tuple[float, float]]:
         except ValueError:  # header separator row, or a placeholder such as an em dash
             continue
     return rows
+
+
+#: README real-data row label -> experiment id, and the column order of that table.
+#: The pilot table is the only place in this repository where an *accuracy* number is
+#: quoted, and ``results/`` is not committed -- so the README's provenance for those numbers
+#: is ``docs/assets/facts.json``, which the asset generator reads out of the ledger. A
+#: hand-typed digit, an arm that was never run, or a table row for a run that failed must
+#: fail here rather than be found by a reviewer.
+README_REAL_ROWS: dict[str, str] = {
+    "REAL-001 · YOLO11n baseline": "REAL-001",
+    "REAL-002 · SARVO-Lite (s)": "REAL-002",
+    "REAL-003 · YOLO11n + LoRA r=8": "REAL-003",
+}
+
+#: Column name in the README pilot table -> metric key in ``facts.json``. ``epochs`` is a
+#: run setting rather than a metric and is compared separately.
+README_REAL_COLUMNS: dict[str, str] = {
+    "mAP50": "mAP50",
+    "mAP50:95": "mAP50_95",
+    "Precision": "precision",
+    "Recall": "recall",
+    "Params (M)": "params_M",
+    "GFLOPs@320": "flops_G",
+    "FPS (CPU)": "fps",
+    "Train (min)": "train_minutes",
+}
+
+
+def _readme_real_table() -> dict[str, dict[str, float]]:
+    """Parse the pilot table: label, then one float per declared column, in order."""
+    header: list[str] | None = None
+    rows: dict[str, dict[str, float]] = {}
+    for line in (REPO_ROOT / "README.md").read_text().splitlines():
+        if not line.startswith("|"):
+            if rows:
+                break  # the table ended
+            header = None
+            continue
+        cells = [c.strip().replace("*", "") for c in line.strip().strip("|").split("|")]
+        if cells and cells[0] == "Arm" and "mAP50" in cells:
+            header = cells[1:]
+            continue
+        if header is None or not cells:
+            continue
+        if set(cells[0]) <= set("-: "):  # the markdown separator row
+            continue
+        if cells[0] not in README_REAL_ROWS:
+            break
+        values = cells[1:]
+        assert len(values) == len(header), (
+            f"{cells[0]}: the row has {len(values)} values for {len(header)} columns"
+        )
+        rows[cells[0]] = dict(zip(header, (float(v) for v in values), strict=True))
+    return rows
+
+
+def test_readme_real_data_table_matches_the_measured_arms():
+    """The pilot table must agree with the ledger, cell for cell.
+
+    Accuracy is the one class of number in this repository that cannot be checked by
+    re-measuring an architecture, so it is checked against the ledger instead. This test also
+    fails when a row exists for an arm with no completed run, which is the failure mode a
+    "no fabricated results" claim depends on: an empty or invented cell would otherwise sit
+    in the first table a reviewer reads.
+    """
+    facts = json.loads((REPO_ROOT / "docs" / "assets" / "facts.json").read_text())
+    arms = facts.get("real", {})
+    readme = _readme_real_table()
+    assert len(readme) == len(README_REAL_ROWS), (
+        f"README pilot rows not found: {sorted(set(README_REAL_ROWS) - set(readme))}"
+    )
+    for label, exp_id in sorted(README_REAL_ROWS.items()):
+        assert exp_id in arms, (
+            f"{label}: {exp_id} has no completed run in the ledger, so the README quotes a "
+            f"number that was never measured"
+        )
+        measured = arms[exp_id]
+        for column, key in README_REAL_COLUMNS.items():
+            shown = readme[label][column]
+            assert key in measured, f"{exp_id}: {key} was not measured but the README shows {shown}"
+            # The README prints three decimals for metrics and costs; compare at that
+            # precision so the test neither demands more digits than the table shows nor
+            # tolerates a real drift.
+            expected = float(measured[key])
+            assert abs(shown - expected) < 5e-4 or abs(shown - round(expected, 3)) < 1e-9, (
+                f"{label} · {column}: README says {shown}, ledger says {expected}"
+            )
 
 
 def test_readme_cost_table_matches_the_measured_models():

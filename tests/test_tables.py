@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from saryolo.paper.tables import TBD, Table, build_multi_seed
+from saryolo.paper.tables import REAL_PILOT_ARMS, TBD, Table, build_multi_seed, build_real_data_pilot
 from saryolo.tracking.ledger import ExperimentRecord
 
 
@@ -35,6 +35,52 @@ class _Ledger:
 def _rows(table: Table) -> list[list[str]]:
     assert table.rows, "expected at least one row"
     return table.rows
+
+
+# ------------------------------------------------------------- the real-data pilot
+
+
+def _pilot_record(exp_id: str, map5095: float | None, *, params_M: float | None = None) -> ExperimentRecord:
+    record = ExperimentRecord(experiment_id=exp_id, model="yolo11n_baseline_n.yaml", dataset="hrsid_real.yaml")
+    if map5095 is not None:
+        record.status = "completed"
+        record.metrics = {"mAP50": map5095 * 2, "mAP50_95": map5095, "precision": 0.924,
+                          "recall": 0.538, "params_M": params_M or 2.59, "flops_G": 1.613,
+                          "fps": 61.8, "train_minutes": 6.95}
+    return record
+
+
+def test_the_real_data_pilot_table_renders_measured_values_and_tbd_otherwise():
+    """The pilot is the only table with accuracy in it; it must not invent the rest.
+
+    Two properties, and they pull in opposite directions. A measured arm has to render as its
+    measured value (an accuracy number that exists must be visible, or the pilot is hidden in a
+    table whose whole purpose is to show it), and an arm that has not run has to render ``TBD``
+    rather than a zero or a plausible-looking value. The second is what keeps the table honest
+    when a fresh clone -- which has no ``results/`` directory at all -- regenerates it.
+    """
+    ledger = _Ledger([
+        _pilot_record("REAL-001", 0.3012),
+        _pilot_record("REAL-003", None),
+        _pilot_record("EXP-001", 0.99),  # a ladder arm must not leak into the pilot table
+    ])
+    table = build_real_data_pilot(ledger)
+    rows = {row[0]: row for row in _rows(table)}
+    assert len(rows) == len(REAL_PILOT_ARMS), "the table must have one row per declared arm"
+    reference = next(row for label, row in rows.items() if label.startswith("YOLO11n baseline"))
+    assert reference[1] == "0.6024" and reference[2] == "0.3012", reference
+    assert reference[5] == "2.590", "the parameter count must travel with the accuracy"
+    unrun = next(row for label, row in rows.items() if "LoRA" in label)
+    assert unrun[1] == TBD and unrun[2] == TBD, unrun
+    assert not table.complete, "a table with an unrun arm must report itself incomplete"
+    assert "HRSID subset" in table.caption, "the caption must name the subset, not just the dataset"
+    assert "5,604" in table.caption, "the caption must state the size of the full release"
+
+
+def test_the_pilot_table_is_complete_when_every_arm_has_run():
+    """Three measured arms must make the table complete, so the submission gate can pass it."""
+    ledger = _Ledger([_pilot_record(exp_id, 0.2 + i / 100) for i, (exp_id, _) in enumerate(REAL_PILOT_ARMS)])
+    assert build_real_data_pilot(ledger).complete
 
 
 # --------------------------------------------------------------------------- TBD

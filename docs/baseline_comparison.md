@@ -57,21 +57,29 @@ random-init wearing a pretrained label.
 
 ---
 
-## 4. Family C — parameter-efficient adaptation (**not yet implemented**)
+## 4. Family C — parameter-efficient adaptation (**built; one arm measured**)
 
-The master context requires this comparison and it does **not** exist in the repository.
+This comparison now exists. What does **not** exist is the tuned sweep: one rank, one scale,
+one pilot subset.
 
-| Method | Status | What it would need |
+| Method | Status | Notes |
 | --- | --- | --- |
-| Full fine-tuning | ✅ (the default) | — |
-| Frozen backbone + trainable head | ❌ | a config-level freeze switch |
-| **LoRA** | ❌ **missing** | a LoRA adapter on the backbone's conv/attention blocks, a config switch, and a fair-comparison harness |
-| Adapters (ours) | ✅ Component 33 | — |
+| Full fine-tuning | ✅ (the default) | every parameter of the graph |
+| Frozen backbone + trainable head | ✅ | `freeze_base` in an arm's `peft` block; recorded in the ledger, because a frozen backbone with a trainable head is a linear probe and not LoRA |
+| **LoRA** | ✅ **built and measured** | `saryolo/training/peft.py` + `EXP-601…605` (reference, ranks 4/8/16, frozen base); `REAL-003` is the measured pilot |
+| Adapters (ours) | ✅ Component 33 | |
 
-**Why this matters.** Without a LoRA arm, SARVO's "efficient adaptation" claim has no
-parameter-efficient comparator, and the master context (Direction B, Stage 10) is not
-satisfied. This is the highest-value *buildable-without-a-GPU* gap in the repository —
-see `reports/agent_initial_audit.md` §6, action 2.
+The LoRA arm is built the way a reviewer will test it: rank-`r` updates to the wrapped
+convolutions, `B` zero-initialised so the adapted model is bit-identical to the base at step
+zero, base weights frozen, adapter parameters counted separately from the rest of the
+trainable set, and the adapter folded into the base weights when the checkpoint is written so
+the saved file is an ordinary detector. `tests/test_peft.py` trains one arm end to end on the
+synthetic smoke data and asserts both properties from the checkpoint file itself.
+
+**Why this matters for the claim.** Without a LoRA arm, SARVO's "efficient adaptation" claim
+had no parameter-efficient comparator. It now has one on a real subset, so what remains open is
+not the comparator's existence but its *tuning*: a rank/scale sweep, and the same comparison on
+the full release and on the generalisation folds.
 
 **Fair-comparison checklist for the LoRA arm (Stage 10):** shared backbone and detector;
 identical training/validation data; matched init; matched input resolution and
@@ -104,8 +112,9 @@ inference cost measured, not inferred from parameter count.
 | SARVO-Lite vs full v2 (ours) | ✅ measured | ❌ `TBD` |
 | SARVO vs AC-YOLO / RLE-YOLO / SARLite | ⚠️ reported-only, cited, caveated | ❌ not comparable without a run |
 | SARVO vs RGB-pretrained init | — | ❌ `TBD` (`EXP-401…403`) |
-| SARVO vs LoRA | ❌ not implemented | ❌ `TBD` |
+| SARVO vs LoRA | ✅ measured (adapter cost, trainable budget) | ⚠️ pilot only (`REAL-001` vs `REAL-003`, HRSID subset) |
 
 **Summary.** Every *cost* comparison that can be made without a GPU has been made and is
-measured. Every *accuracy* comparison is unmeasured, and the LoRA comparator does not yet
-exist.
+measured. Accuracy is measured **only** in the HRSID pilot of `reports/reproduction_status.md`
+§3 — three arms on a subset, one seed — and the ladder, the generalisation folds and the tuned
+LoRA sweep are unmeasured.

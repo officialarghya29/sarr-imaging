@@ -3,7 +3,9 @@
 Mapped on 2026-09-23 against the current master objective (acquisition-conditioned
 invariant detection, CVPR 2027, deadline 2026-11-16). The split that matters is
 **built** vs **measured**: infrastructure is verifiable without a GPU, results are
-not — every accuracy cell in every table is `TBD` until a real training run happens.
+not — every accuracy cell in every *ladder* table is `TBD` until a real training run
+happens. Three real-data pilot arms have now been measured on a subset of HRSID (item 8
+below and §3 of `reports/reproduction_status.md`); they are a beginning, not the benchmark.
 
 ## Phase map
 
@@ -26,6 +28,7 @@ not — every accuracy cell in every table is `TBD` until a real training run ha
 | 7b. Missing-metadata degradation (master workflow) | **Built, not measured** | `metadata_fields` in a data config (or `loso --metadata-fields`) withholds acquisition fields at encode time; a withheld field is encoded exactly like a never-recorded one (value, availability and categorical id all masked — `tests/test_field_mask.py`). The restriction is propagated into every generated fold config so all folds share one protocol. Answers the deployment question "does the detector collapse without metadata?" once a GPU run exists |
 | 8. Invariant branch + decoupling loss (ACID-SAR §15–19) | **Missing** | Deliberately: the spec says build it only after the failure and the representation diagnosis exist |
 | 9–12. Multi-seed, RT-DETR transfer, ablations | Not started | Correctly ordered after the above |
+| Pilot (real data, CPU) | **Measured, 3 arms** | The official HRSID release assembled into a 200/60/60 subset; stock YOLO11n baseline, the efficiency-frontier model, and a rank-8 LoRA adapter under one schedule. Pilot numbers only — the release is 5,604 images |
 
 ## Experiment matrix
 
@@ -79,7 +82,40 @@ Latest additions (this session):
    `EXP-501…505` are the runnable configs; accuracy stays `TBD`. 13 tests in
    `tests/test_efficiency_frontier.py` pin the arms and the honesty rules.
 
-7. ~~RT-DETR feasibility arm (red-team W6)~~ — **built, not measured**:
+7. ~~Parameter-efficient adaptation baseline (Direction B / Stage 10)~~ — **built and
+   measured**: `saryolo/training/peft.py` (rank-`r` updates to the wrapped convolutions,
+   `B` zero-initialised so the wrapped layer is bit-identical to the base at step 0, base
+   weights frozen, merge/absorb for inference) wired into the runner through the trainer that
+   actually trains. Two failures were found by measurement rather than by reasoning: an adapter
+   applied to the *facade* is discarded when Ultralytics rebuilds the model from its config
+   (the ledger then described a parameter-efficient arm that was a full fine-tune — caught
+   because its mAP was bit-identical to the baseline's), and an adapter left in the checkpoint
+   as a wrapper cannot be loaded at all, because the loader fuses convolutions with the
+   following BatchNorm (`'LoRALayer' object has no attribute 'weight'`). Both are fixed and
+   pinned by `tests/test_peft.py`, including an arm trained end to end on the synthetic smoke
+   data that asserts, from the checkpoint file, that the adapter influenced it and that the
+   file loads as an ordinary detector. EXP-601…605 are the runnable arms (reference + ranks
+   4/8/16 + frozen-base).
+
+8. ~~Data-efficiency sweep (Direction E)~~ — **built**; `configs/exp/EXP-701…705` declare a
+   training fraction of 1/5/10/25/50 %. It began as a private `data_fraction` override handled
+   by this repository's trainer, which could not run the *baseline* arm at all: a stock model
+   YAML resolves to the plain `YOLO` facade, so Ultralytics' trainer received an argument it
+   does not know and refused it. It is now the library's own `fraction`, which sorts the file
+   list, takes a prefix (so the arms are nested) and applies to the training split only — the
+   nesting is pinned by test, since a library change would silently turn the sweep into a
+   comparison of independent draws.
+
+9. ~~Real-data pilot on HRSID~~ — **measured** (`REAL-001…003`): a subset of the official
+   release (200/60/60), 40 epochs at 320 px, CPU only, one class, three arms sharing the
+   schedule — stock YOLO11n, SARVO-Lite (s), and LoRA r=8. The subset was assembled by
+   `scripts/fetch_hrsid_subset.py` (resumable, retrying, and explicit about the mirror's
+   `valid` vs this repository's `val` split name). Every number is in the ledger, the README
+   table is guarded against `docs/assets/facts.json`, and the qualitative panel comes from
+   `scripts/make_real_figures.py`. What this is *not*: the full release, a multi-source test, or
+   anything about cross-sensor generalisation.
+
+10. ~~RT-DETR feasibility arm (red-team W6)~~ — **built, not measured**:
    `SARYOLORTDetectionModel` + generator-derived `configs/models/rtdetr/rtdetr_s_cond_film.yaml`
    (`scripts/make_rtdetr_variant.py`, `--check` guards drift). Proven end to end through the
    real vocabulary path: adapter in graph, decoder consumes conditioned features, held-out

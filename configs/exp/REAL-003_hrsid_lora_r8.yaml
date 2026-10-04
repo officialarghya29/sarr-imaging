@@ -1,0 +1,35 @@
+# REAL-DATA ARM: the LoRA parameter-efficient adaptation baseline on the real HRSID subset.
+#
+# The model graph is the *stock baseline*, identical to REAL-001, so the only difference is
+# that the base weights are frozen and rank-8 low-rank updates are trained instead. That is
+# the fair comparison the master context asks for: an adaptation method against a full
+# fine-tune of the same graph, on the same data.
+#
+#   python -m saryolo train --exp configs/exp/REAL-003_hrsid_lora_r8.yaml
+experiment:
+  id: REAL-003
+  name: real-data arm (LoRA r=8 on HRSID subset)
+  description: Parameter-efficient adaptation baseline on the same real subset as REAL-001.
+model: ../models/yolo11n_baseline_n.yaml
+dataset: ../datasets/hrsid_real.yaml
+train:
+  epochs: 40
+  imgsz: 320
+  batch: 4
+  seed: 0
+  optimizer: auto
+  cos_lr: true
+  patience: 15
+  workers: 4
+  deterministic: true
+peft:
+  method: lora
+  rank: 8
+  alpha: 16.0
+notes: >-
+  Real HRSID subset. Paired with REAL-001 (full fine-tune of the same graph), so the two rows
+  differ only in what is optimised: rank-8 adapters plus the detection head, against every
+  parameter. The wrapped convolutions are frozen; the head and the normalisation layers are
+  not, because an adapter with a frozen head is a linear probe and measures something else.
+  The adapter is folded into the base weights when the checkpoint is written, so the file on
+  disk is an ordinary detector and loads with stock Ultralytics.

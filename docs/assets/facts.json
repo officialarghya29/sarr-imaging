@@ -643,12 +643,84 @@
     }
   },
   "dataset_count": 5,
+  "real": {
+    "REAL-001": {
+      "model": "yolo11n_baseline_n.yaml",
+      "dataset": "hrsid_real.yaml",
+      "epochs": 40,
+      "imgsz": 320,
+      "train_seed": 0,
+      "mAP50": 0.5706,
+      "mAP50_95": 0.3012,
+      "precision": 0.924,
+      "recall": 0.538,
+      "f1": 0.6801,
+      "params_M": 2.59,
+      "flops_G": 1.613,
+      "fps": 61.8,
+      "latency_ms": 16.18,
+      "model_size_MB": 5.18,
+      "train_minutes": 6.95
+    },
+    "REAL-002": {
+      "model": "yolo11s_v2_lite_s.yaml",
+      "dataset": "hrsid_real.yaml",
+      "epochs": 40,
+      "imgsz": 320,
+      "train_seed": 0,
+      "mAP50": 0.5724,
+      "mAP50_95": 0.3287,
+      "precision": 0.8014,
+      "recall": 0.5263,
+      "f1": 0.6354,
+      "params_M": 11.016,
+      "flops_G": 8.106,
+      "fps": 12.39,
+      "latency_ms": 80.731,
+      "model_size_MB": 21.48,
+      "train_minutes": 36.22
+    },
+    "REAL-003": {
+      "model": "yolo11n_baseline_n.yaml",
+      "dataset": "hrsid_real.yaml",
+      "epochs": 40,
+      "imgsz": 320,
+      "train_seed": 0,
+      "mAP50": 0.5781,
+      "mAP50_95": 0.2984,
+      "precision": 0.8682,
+      "recall": 0.5556,
+      "f1": 0.6776,
+      "params_M": 2.59,
+      "flops_G": 1.613,
+      "fps": 65.57,
+      "latency_ms": 15.251,
+      "model_size_MB": 5.18,
+      "train_minutes": 8.84,
+      "method": "lora",
+      "rank": 8,
+      "lora_params": 273896,
+      "fraction_trainable": 0.101005,
+      "n_wrapped_layers": 87
+    }
+  },
+  "real_subset": {
+    "config": "configs/datasets/hrsid_real.yaml",
+    "splits": {
+      "train": 200,
+      "val": 60,
+      "test": 60
+    }
+  },
   "experiments": {
-    "total": 94,
-    "config_files": 96,
+    "total": 104,
+    "config_files": 106,
     "with_results": [],
-    "ledger_runs": 14,
+    "ledger_runs": 21,
     "non_experiment_runs": [
+      "REAL-001",
+      "REAL-002",
+      "REAL-003",
       "SMOKE-001",
       "SMOKE-002",
       "SMOKE-003",
@@ -656,7 +728,7 @@
     ]
   },
   "tests": {
-    "total": 389,
+    "total": 426,
     "by_file": {
       "tests/test_arch.py": 61,
       "tests/test_audit_docs.py": 23,
@@ -666,17 +738,18 @@
       "tests/test_conditioning_smoke.py": 6,
       "tests/test_data.py": 24,
       "tests/test_efficiency.py": 17,
-      "tests/test_efficiency_frontier.py": 15,
+      "tests/test_efficiency_frontier.py": 16,
       "tests/test_field_mask.py": 9,
       "tests/test_groups.py": 36,
       "tests/test_hard_examples.py": 20,
       "tests/test_init.py": 9,
       "tests/test_losses.py": 24,
       "tests/test_metrics.py": 15,
+      "tests/test_peft.py": 32,
       "tests/test_probes.py": 23,
-      "tests/test_repo.py": 27,
+      "tests/test_repo.py": 29,
       "tests/test_rtdetr_arm.py": 6,
-      "tests/test_tables.py": 12,
+      "tests/test_tables.py": 14,
       "tests/test_visualization.py": 8
     }
   }

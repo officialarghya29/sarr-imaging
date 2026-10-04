@@ -1,0 +1,9 @@
+# Real HRSID subset (ship, horizontal boxes) assembled from the official release.
+# Generated for the real-data pilot run; regenerate with scripts/ if re-downloading.
+path: datasets/processed/hrsid_real
+train: images/train
+val: images/val
+test: images/test
+nc: 1
+names:
+  0: ship

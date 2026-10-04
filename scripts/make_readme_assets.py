@@ -140,8 +140,15 @@ def _save(fig, name: str) -> Path:
     # non-determinism. Together with svg.hashsalt this makes an unchanged chart
     # byte-identical across runs, so a diff here always means a real change.
     fig.savefig(path, format="svg", bbox_inches="tight", pad_inches=0.3, metadata={"Date": None})
+    # A PNG companion for the same figure. SVG is crisper on GitHub and is what the
+    # README embeds; the PNG exists because a raster is what a slide deck, a PDF draft
+    # or a chat preview needs, and re-rendering it by hand is how a figure drifts from
+    # the code that produced it. Same figure object, same numbers, one more format.
+    png = path.with_suffix(".png")
+    fig.savefig(png, format="png", bbox_inches="tight", pad_inches=0.3, dpi=170,
+                metadata={"Software": None})
     plt.close(fig)
-    print(f"  wrote {path.relative_to(ROOT)}")
+    print(f"  wrote {path.relative_to(ROOT)} (+png)")
     return path
 
 
@@ -396,6 +403,79 @@ SLOT_SETS_V2: dict[str, tuple[str, list[tuple[str, str, bool]]]] = {
 }
 
 
+#: Metric keys carried into ``facts.json`` for a real-data arm. A key that was not measured
+#: is absent rather than zero, so a table built from these facts shows ``TBD`` instead of a
+#: number the run never produced.
+REAL_METRIC_KEYS = (
+    "mAP50", "mAP50_95", "precision", "recall", "f1",
+    "params_M", "flops_G", "fps", "latency_ms", "model_size_MB", "train_minutes",
+)
+
+#: Adapter keys recorded when a real-data arm was parameter-efficient rather than a full
+#: fine-tune. They are what makes a LoRA number comparable to a baseline number: the
+#: trainable budget is the whole point of the arm.
+REAL_PEFT_KEYS = ("method", "rank", "lora_params", "fraction_trainable", "n_wrapped_layers")
+
+
+def _real_arms_facts(ledger: ExperimentLedger) -> dict:
+    """Collect the measured real-data arms, one row per ``REAL-*`` experiment id.
+
+    Read from the ledger rather than from the figure or from prose, because the ledger is the
+    only place a number is written by the run that produced it. A completed arm carries the
+    metrics it measured and the adapter summary if it had one; a ``REAL-*`` id with no
+    completed run simply does not appear, and the README table that quotes these rows is
+    checked against this dictionary, so an unrun arm cannot be described as measured.
+    """
+    rows: dict[str, dict] = {}
+    for record in ledger.load():
+        exp_id = record.experiment_id
+        if record.status != "completed" or not exp_id.startswith("REAL-"):
+            continue
+        metrics = record.metrics or {}
+        row: dict = {
+            "model": record.model,
+            "dataset": record.dataset,
+            "epochs": record.epochs,
+            "imgsz": record.imgsz,
+            "train_seed": record.train_seed,
+        }
+        for key in REAL_METRIC_KEYS:
+            value = metrics.get(key)
+            if value is not None:
+                row[key] = round(float(value), 4)
+        for key in REAL_PEFT_KEYS:
+            if key in (record.extra or {}):
+                row[key] = record.extra[key]
+        rows[exp_id] = row
+    return dict(sorted(rows.items()))
+
+
+def _dataset_split_counts(data_yaml: str | Path) -> dict:
+    """Images per split of a processed dataset, counted on disk.
+
+    Read from the filesystem rather than from the YAML, because the YAML names directories
+    while the number a reader needs is how many images are actually in them -- and a subset
+    that was assembled by a fetch script is exactly where the two can disagree.
+    """
+    from saryolo.data.yolo import load_data_config
+
+    root, cfg = load_data_config(data_yaml)
+    counts = {}
+    for split in ("train", "val", "test"):
+        entry = cfg.get(split)
+        if not entry:
+            continue
+        directory = root / entry
+        directory = directory if directory.is_dir() else (directory.parent if directory.is_file() else directory)
+        if not directory.is_dir():
+            continue
+        counts[split] = sum(
+            1 for p in directory.iterdir()
+            if p.is_file() and p.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
+        )
+    return counts
+
+
 def build_facts() -> dict:
     """Measure the model zoo and collect repository facts."""
     facts: dict = {"variants": len(VARIANTS)}
@@ -444,6 +524,15 @@ def build_facts() -> dict:
     known = set(exp_ids)
     ledger = ExperimentLedger(ROOT / "results")
     completed = {r.experiment_id for r in ledger.completed()}
+    facts["real"] = _real_arms_facts(ledger)
+    print(f"  {len(facts['real'])} measured real-data arm(s): {sorted(facts['real'])}")
+    if facts["real"]:
+        subset_yaml = ROOT / "configs" / "datasets" / "hrsid_real.yaml"
+        facts["real_subset"] = {
+            "config": str(subset_yaml.relative_to(ROOT)),
+            "splits": _dataset_split_counts(subset_yaml),
+        }
+        print(f"  real subset splits: {facts['real_subset']['splits']}")
     facts["experiments"] = {
         "total": len(known),
         "config_files": len(exp_ids),
@@ -871,17 +960,107 @@ def chart_coverage(facts: dict) -> None:
             ax.text(x0 + 1.65, y, "measured" if status else "wired, awaiting GPU",
                     fontsize=9.5, color=GREEN if status else AMBER, va="center")
     # The count is interpolated, not typed: the caption previously claimed "all 12 experiments"
-    # while the grid below it drew seventy rows.
+    # while the grid below it drew seventy rows. The last sentence is generated too, because
+    # whether any number exists yet is a fact about the ledger, not a sentence to maintain.
+    measured = facts["experiments"]["with_results"]
+    if measured:
+        exists = (
+            f"{len(measured)} of them now has a measured result ({', '.join(measured)}); the "
+            "rest stay `TBD`\nuntil a run exists, because the table generators refuse to emit "
+            "a row without a measured value."
+        )
+    else:
+        exists = (
+            "None of the accuracy numbers exist yet: this repository contains no fabricated "
+            "results,\nand the table generators refuse to emit a row without a measured value."
+        )
     ax.text(0, per_col + 0.7,
             f"All {len(ids)} experiments are code-complete and reproducible from a committed "
-            "config. None of the accuracy numbers\nexist yet: this repository contains no "
-            "fabricated results, and the table generators refuse to emit a row without\n"
-            "a measured value. Run notebook 02 on a GPU and this grid fills itself in.",
+            f"config. {exists}",
             fontsize=10, color=CYAN, va="bottom")
     ax.set_xlim(0, 2 * col_w - 0.2)
     ax.set_ylim(-0.5, per_col + 2.6)
     ax.axis("off")
     _save(fig, "coverage.svg")
+
+
+def chart_real_arms(facts: dict) -> None:
+    """The measured real-data arms: what they score, and what each one costs.
+
+    Every value comes from ``facts["real"]``, which is read from the experiment ledger -- the
+    only place a number is written by the run that produced it. An arm that has not been run,
+    or a metric that was not measured, is drawn as an explicit ``TBD`` bar rather than left
+    out: omitting it would make the figure look complete while the table beside it says the
+    row does not exist.
+    """
+    arms = facts.get("real", {})
+    fig, ax = plt.subplots(figsize=(15.0, 8.2))
+    metrics = (("mAP50", CYAN), ("mAP50_95", VIOLET))
+    width = 0.36
+
+    if not arms:
+        ax.text(0.5, 0.5, "No real-data arm has run yet\n(every cell here is TBD, by design)",
+                ha="center", va="center", fontsize=15, color=AMBER, transform=ax.transAxes)
+        ax.axis("off")
+        _save(fig, "real_arms.svg")
+        return
+
+    xs = range(len(arms))
+    for offset, (key, color) in zip((-width / 2, width / 2), metrics, strict=True):
+        values = [arms[eid].get(key) for eid in arms]
+        drawn = [0.0 if v is None else float(v) for v in values]
+        bars = ax.bar([x + offset for x in xs], drawn, width=width, color=color, alpha=0.92,
+                      label=key, edgecolor=BG, linewidth=0.8)
+        for bar, value in zip(bars, values, strict=True):
+            if value is None:
+                bar.set_hatch("///")
+                bar.set_color(GRID)
+                bar.set_height(0.03)
+                ax.text(bar.get_x() + bar.get_width() / 2, 0.05, "TBD", ha="center",
+                        fontsize=9.5, color=AMBER, fontweight="bold")
+            else:
+                ax.text(bar.get_x() + bar.get_width() / 2, float(value) + 0.012, f"{float(value):.3f}",
+                        ha="center", fontsize=10, color=TEXT, fontweight="bold")
+
+    labels = []
+    for eid in arms:
+        row = arms[eid]
+        cost = []
+        if "params_M" in row:
+            cost.append(f"{row['params_M']:.2f} M params")
+        if "flops_G" in row:
+            cost.append(f"{row['flops_G']:.2f} GFLOPs@{row.get('imgsz', 640)}")
+        if "fps" in row:
+            cost.append(f"{row['fps']:.0f} FPS (CPU)")
+        extra = ""
+        if row.get("method") == "lora":
+            extra = (
+                f"\nLoRA r={row.get('rank')} - {row.get('lora_params', 0) / 1000:.0f} k adapter "
+                f"params, {100 * float(row.get('fraction_trainable', 0)):.1f} % trainable"
+            )
+        labels.append(f"{eid}\n{row['model'].replace('.yaml', '')}\n{' · '.join(cost)}{extra}")
+    ax.set_xticks(list(xs))
+    ax.set_xticklabels(labels, fontsize=9.0, linespacing=1.5)
+
+    splits = facts.get("real_subset", {}).get("splits", {})
+    subset = ", ".join(f"{k} {v}" for k, v in splits.items()) or "split sizes unknown"
+    ax.set_ylabel("AP (COCO, single class: ship)")
+    ax.set_ylim(0, max(0.05, 1.14 * max(
+        (float(v) for row in arms.values() for k, v in row.items() if k in ("mAP50", "mAP50_95")),
+        default=0.1,
+    )))
+    ax.legend(frameon=False, loc="upper right", fontsize=10.5)
+    _style(
+        ax,
+        title=f"Real SAR data: {len(arms)} measured arms on a real HRSID subset",
+        subtitle=(
+            f"Official HRSID release, YOLO boxes, {subset} images. Same 40-epoch, 320 px, seed-0 "
+            "schedule for every arm, CPU-only,\nso the rows differ only in what is trained. These "
+            "are pilot numbers on a subset of the 5,604-image release -- not the paper's result."
+        ),
+        grid_axis="y",
+    )
+    _save(fig, "real_arms.svg")
 
 
 def chart_tests(facts: dict) -> None:
@@ -922,6 +1101,7 @@ def main() -> None:
     chart_identity(facts)
     chart_datasets(facts)
     chart_coverage(facts)
+    chart_real_arms(facts)
     chart_tests(facts)
     print("\nDone. Assets in docs/assets/")
 

@@ -20,9 +20,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 __all__ = ["TBD", "Table", "MODULE_ABLATION_GROUPS", "REMOVAL_ABLATION_ROWS",
-           "build_baseline_comparison", "build_ablation", "build_module_ablation",
+           "REAL_PILOT_ARMS", "build_baseline_comparison", "build_ablation", "build_module_ablation",
            "build_removal_ablation", "build_scale_analysis", "build_robustness", "build_efficiency",
-           "build_efficiency_frontier", "build_multi_seed", "write_tables"]
+           "build_efficiency_frontier", "build_multi_seed", "build_real_data_pilot", "write_tables"]
+
+#: The measured real-data pilot arms, in reading order: the full fine-tune, the efficiency
+#: frontier model, then the parameter-efficient arm. Labels name the dataset subset in every
+#: row, because a pilot row must never be mistaken for a benchmark row when the table is
+#: pasted into a draft next to the ladder.
+REAL_PILOT_ARMS: tuple[tuple[str, str], ...] = (
+    ("REAL-001", "YOLO11n baseline -- HRSID subset"),
+    ("REAL-002", "SARVO-Lite (s) -- HRSID subset"),
+    ("REAL-003", "YOLO11n + LoRA r=8 -- HRSID subset"),
+)
 
 #: Placeholder rendered for any unmeasured value.
 TBD = "TBD"
@@ -93,7 +103,21 @@ def _ledger_rows(ledger):
     return ledger.completed()
 
 
-def _match_variant(records, variant: str):
+#: Datasets that are *subsets* of a benchmark rather than the benchmark itself. A run on
+#: one of these is a pilot: real and measured, but measured on a fraction of the release,
+#: so it must never fill a benchmark cell. The subset pilot has its own table
+#: (:func:`build_real_data_pilot`), with the subset and the schedule in its caption.
+#: Spelled out as an explicit list rather than inferred from a filename so that adding a
+#: pilot subset is a deliberate edit and not an accident of naming.
+PILOT_DATASETS: tuple[str, ...] = ("hrsid_real",)
+
+
+def _is_subset_pilot(record) -> bool:
+    """True when a run was measured on a subset pilot rather than a benchmark release."""
+    return Path(str(record.dataset)).stem in PILOT_DATASETS
+
+
+def _match_variant(records, variant: str, allow_pilot: bool = False):
     """The completed record whose model file is exactly ``variant``, or ``None``.
 
     Matched on the model file *stem* at a ``_`` boundary rather than by substring
@@ -101,9 +125,15 @@ def _match_variant(records, variant: str):
     ``"v2_full_l"`` and ``"v2_full_p35_s"``, so a containment test could quietly report a
     different model's score in the ablation table -- and a wrong number in a table is worse
     than a missing one, because nothing downstream can tell it is wrong.
+
+    Subset pilots are skipped unless ``allow_pilot`` is set: a benchmark table must not
+    quote an accuracy measured on 260 images as if it were the benchmark's, which is the
+    failure this flag exists to prevent. A pilot's home is :func:`build_real_data_pilot`.
     """
     for record in records:
         if record.status != "completed":
+            continue
+        if not allow_pilot and _is_subset_pilot(record):
             continue
         stem = Path(str(record.model)).stem
         if stem == variant or stem.endswith(f"_{variant}"):
@@ -395,6 +425,49 @@ EFFICIENCY_FRONTIER_ARMS: tuple[tuple[str, str, str], ...] = (
     ("v2_lite_n", "SARVO-Lite (n)", "EXP-504"),
     ("v2_lite_m", "SARVO-Lite (m)", "EXP-505"),
 )
+
+
+def build_real_data_pilot(ledger) -> Table:
+    """TABLE 9 -- what was actually measured on real SAR data, as distinct from the plan.
+
+    This table exists because the rest of this module describes the *benchmark*: every accuracy
+    cell in the ladder is ``TBD`` until a GPU run on the full release exists. A subset pilot is
+    not that, and putting it in the same table as a benchmark row would let a 260-image, single
+    seed, CPU run read as a comparable result. So it gets its own table with the subset, the
+    schedule and the resolution in the caption.
+
+    The columns are the same shape as the baseline table on purpose: when the full run exists,
+    the two can be read side by side and the difference in the caption is visible rather than
+    hidden in a footnote.
+    """
+    best = _latest_by_experiment(_ledger_rows(ledger))
+    table = Table(
+        "real_data_pilot",
+        "Pilot on a real HRSID subset: the official release, YOLO boxes, 200 train / 60 val / 60 "
+        "test images, 40 epochs at 320 px, single seed, CPU only. Real and measured, but the "
+        "release is 5,604 images -- this is not the benchmark, and a row here is not comparable "
+        "with a full-release row. For REAL-003 the adapter is folded into the base weights when "
+        "the checkpoint is written, so its parameter count equals the baseline's while what was "
+        "optimised (a rank-8 adapter plus the head) is recorded separately in the ledger.",
+        ["Model", "mAP50", "mAP50:95", "Precision", "Recall", "Params (M)", "GFLOPs@320",
+         "FPS", "Train (min)"],
+    )
+    for exp_id, label in REAL_PILOT_ARMS:
+        record = best.get(exp_id)
+        metrics = record.metrics if record else {}
+        table.rows.append([
+            label,
+            _fmt(metrics.get("mAP50")),
+            _fmt(metrics.get("mAP50_95")),
+            _fmt(metrics.get("precision")),
+            _fmt(metrics.get("recall")),
+            _fmt(metrics.get("params_M"), 3),
+            _fmt(metrics.get("flops_G"), 3),
+            _fmt(metrics.get("fps"), 1),
+            _fmt(metrics.get("train_minutes"), 2),
+        ])
+        table.provenance.append(f"{exp_id}: {getattr(record, 'run_id', 'not run')}")
+    return table
 
 
 def build_efficiency_frontier(ledger, benchmark: dict | None = None) -> Table:

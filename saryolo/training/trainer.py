@@ -11,11 +11,35 @@ from ultralytics.data.dataset import YOLODataset
 from ultralytics.models.yolo.detect import DetectionTrainer, DetectionValidator
 from ultralytics.models.yolo.detect.predict import DetectionPredictor
 from ultralytics.models.yolo.model import YOLO
-from ultralytics.utils import RANK
+from ultralytics.utils import DEFAULT_CFG, RANK
 
 from saryolo.nn.model import SARYOLODetectionModel, set_batch_metadata
 
-__all__ = ["SARYOLOTrainer", "SARYOLO", "load_model", "resolve_model_class", "apply_init"]
+__all__ = [
+    "SARYOLOTrainer",
+    "SARYOLO",
+    "load_model",
+    "resolve_model_class",
+    "apply_init",
+    "inject_run_adapter",
+]
+
+
+def inject_run_adapter(model, payload: dict | None) -> dict:
+    """Wrap ``model`` in the run's parameter-efficient adapter, or leave it alone.
+
+    Kept as a module-level function so the injection rule can be unit-tested against the same
+    model scope the trainer uses, without standing up a trainer with a dataset. ``payload`` is
+    the validated ``peft`` mapping the runner forwards (``None`` for a full fine-tune).
+    """
+    if payload is None:
+        return {}
+    if not isinstance(payload, dict):
+        raise ValueError(f"the 'peft' block must be a mapping, got {type(payload).__name__}")
+    from .peft import LoRAConfig, inject_lora
+
+    config = LoRAConfig.from_mapping({k: v for k, v in payload.items() if k != "method"})
+    return inject_lora(model, config)
 
 
 def apply_init(model, weights: str) -> dict:
@@ -397,11 +421,26 @@ class AcquisitionDetectionValidator(DetectionValidator):
 class SARYOLOTrainer(DetectionTrainer):
     """DetectionTrainer with sourced metadata conditioning when configured."""
 
-    def __init__(self, cfg="default.yaml", overrides: dict[str, Any] | None = None, _callbacks=None):
+    def __init__(self, cfg=DEFAULT_CFG, overrides: dict[str, Any] | None = None, _callbacks=None):
+        # ``cfg`` must default to the resolved Ultralytics config object, not a filename.
+        # Ultralytics constructs a trainer as ``Trainer(overrides=args)`` with no ``cfg``, so a
+        # string default is looked up as a *path* by ``get_cfg`` -> ``YAML.load`` and the run
+        # dies with ``FileNotFoundError: 'default.yaml'`` before training starts. The bug was
+        # invisible for every baseline arm because a stock YAML resolves to the plain
+        # ``YOLO`` facade and therefore to Ultralytics' own trainer; it only appears on an arm
+        # with a custom module, which is every SAR-YOLO model. Pinned by
+        # ``tests/test_peft.py::test_the_trainer_constructs_without_an_explicit_cfg``.
         self._metadata_table = None
         self._metadata_vocabularies = None
         self._metadata_vocabularies_serialized = None
+        self._peft_summary: dict[str, Any] = {}
         overrides = dict(overrides or {})
+        # `peft` is a run-level control that is not an Ultralytics training argument, so it is
+        # popped before Ultralytics validates the overrides -- its `check_dict_alignment` raises
+        # a SyntaxError for any key it does not know -- and applied to the model that is actually
+        # trained in `get_model`. The Direction-E data fraction needs no such handling: it is
+        # Ultralytics' own `fraction` argument, so it passes through validation untouched.
+        self._peft_payload = overrides.pop("peft", None)
         overrides.update(metadata_augmentation_overrides(overrides.get("data")))
         super().__init__(cfg, overrides, _callbacks)
 
@@ -428,7 +467,72 @@ class SARYOLOTrainer(DetectionTrainer):
         model = self.set_model_names_for_load(model)
         if weights:
             model.load(weights)
+        self._peft_summary = self._apply_peft(model)
         return model
+
+    def _apply_peft(self, model) -> dict[str, Any]:
+        """Wrap the *trainer's* model in the run's adapter, returning the recorded summary.
+
+        The adapter has to be injected here and not in the runner, and the reason is a real
+        failure that was measured rather than a stylistic preference. ``YOLO.train()`` builds
+        a **new** model from the config with the trainer's ``get_model`` whenever the facade
+        carries no checkpoint (``weights=self.model if self.ckpt else None``), so an adapter
+        injected into a YAML-built facade in the runner is thrown away before the first step.
+        The run then trains an ordinary full fine-tune, but the ledger summary produced by the
+        runner still says ``method: lora`` with a trainable fraction of 10% -- a number that
+        describes the arm's *intent* rather than what was optimised. That is worse than a crash:
+        it is a plausible-looking parameter-efficient result for a model that was never adapted.
+        Measured on the first real LoRA arm: 87 wrapped layers recorded, and zero ``lora_``
+        tensors in the saved checkpoint.
+
+        Injecting inside ``get_model`` also puts the new parameters in place *before* the
+        optimiser is built, which is what makes them trainable at all.
+        """
+        return inject_run_adapter(model, self._peft_payload)
+
+    @property
+    def peft_summary(self) -> dict[str, Any]:
+        """What the adapter did to the trained model, or ``{}`` for a full fine-tune."""
+        return dict(self._peft_summary)
+
+    def save_model(self):
+        """Save the checkpoint with any adapter folded into the base weights.
+
+        An adapted checkpoint has to be an ordinary graph, and this override is the smallest
+        place to guarantee it. Ultralytics serialises the EMA, and every path that loads a
+        checkpoint back fuses each convolution with the BatchNorm that follows it, which raises
+        ``'LoRALayer' object has no attribute 'weight'`` on a wrapper. Left alone, that breaks
+        the end-of-training validation Ultralytics runs on ``best.pt`` itself, every later load
+        of the checkpoint, and the efficiency profiling in the runner -- so a LoRA arm could
+        train successfully and still produce no usable artifact.
+
+        Both the live model and the EMA are covered, because both are serialised: the
+        checkpoint stores the EMA as the model, so merging only the live model would write an
+        adapted-wrapped EMA to disk. The merge is a context manager, so the adapters are put
+        back afterwards and training continues on the same parameters.
+        """
+        if not self._peft_summary:
+            return super().save_model()
+        from contextlib import ExitStack
+
+        from ultralytics.utils.torch_utils import unwrap_model
+
+        from .peft import adapter_merged
+
+        targets = [unwrap_model(self.model)]
+        ema_model = getattr(getattr(self, "ema", None), "ema", None)
+        if ema_model is not None:
+            targets.append(ema_model)
+        with ExitStack() as stack:
+            merged = sum(stack.enter_context(adapter_merged(target)) for target in targets)
+            if not merged:
+                # Refuse rather than save quietly: a checkpoint written from an adapted run that
+                # contains no adapter is exactly the artifact the ledger would then misdescribe.
+                raise RuntimeError(
+                    "this run trained a parameter-efficient adapter but the model has none to "
+                    "merge; the checkpoint would not describe the run"
+                )
+            return super().save_model()
 
     def build_dataset(self, img_path: str, mode: str = "train", batch: int | None = None):
         dataset = super().build_dataset(img_path, mode=mode, batch=batch)
@@ -485,17 +589,25 @@ class SARYOLOTrainer(DetectionTrainer):
         return setter(model) if callable(setter) else model
 
 
-def resolve_model_class(model_path: str):
-    """Pick the appropriate facade for stock/custom YAMLs and checkpoints."""
+def resolve_model_class(model_path: str, prefer_custom: bool = False):
+    """Pick the appropriate facade for stock/custom YAMLs and checkpoints.
+
+    A stock YAML maps to the plain ``YOLO`` facade, which is deliberate: a baseline arm must
+    run on unmodified Ultralytics code so its number cannot be attributed to this repository.
+    ``prefer_custom`` overrides that for a run that *needs* the custom trainer -- a
+    parameter-efficient arm, whose adapter is injected by ``SARYOLOTrainer.get_model``. Without
+    the override such an arm would fall through to Ultralytics' trainer, which knows nothing
+    about the ``peft`` block, and would silently train a full fine-tune under a LoRA label.
+    """
     path = Path(model_path)
-    if path.suffix in (".yaml", ".yml") and not is_saryolo_yaml(model_path):
+    if path.suffix in (".yaml", ".yml") and not is_saryolo_yaml(model_path) and not prefer_custom:
         return YOLO
     return SARYOLO
 
 
-def load_model(model_path: str, verbose: bool = False):
+def load_model(model_path: str, verbose: bool = False, prefer_custom: bool = False):
     """Load a stock or SAR-YOLO model, selecting its facade from the model path."""
-    return resolve_model_class(model_path)(model_path, verbose=verbose)
+    return resolve_model_class(model_path, prefer_custom=prefer_custom)(model_path, verbose=verbose)
 
 
 def clone_overrides(overrides: dict) -> dict:

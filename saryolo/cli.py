@@ -899,6 +899,7 @@ def _cmd_assets(args) -> int:
         build_efficiency_frontier,
         build_module_ablation,
         build_multi_seed,
+        build_real_data_pilot,
         build_removal_ablation,
         build_robustness,
         build_scale_analysis,
@@ -940,6 +941,9 @@ def _cmd_assets(args) -> int:
         build_efficiency(ledger),
         build_efficiency_frontier(ledger, benchmark),
         build_multi_seed(ledger),
+        # What was measured on real data, in its own table: the rest of this set describes the
+        # benchmark and is TBD, and a subset pilot must not be readable as a benchmark row.
+        build_real_data_pilot(ledger),
     ]
     written = write_tables(tables, args.out, assert_complete=args.require_complete)
     for table in tables:

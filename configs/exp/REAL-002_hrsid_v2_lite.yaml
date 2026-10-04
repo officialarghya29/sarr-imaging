@@ -1,0 +1,26 @@
+# REAL-DATA ARM: the efficiency-frontier model (SARVO-Lite) on the real HRSID subset.
+#
+# Same dataset, same schedule, same seed as REAL-001, so the only difference between the
+# two rows is the model. That is what makes the pair a comparison rather than two runs.
+#
+#   python -m saryolo train --exp configs/exp/REAL-002_hrsid_v2_lite.yaml
+experiment:
+  id: REAL-002
+  name: real-data arm (SARVO-Lite s on HRSID subset)
+  description: Efficiency-frontier model on the same real subset as REAL-001.
+model: ../models/yolo11s_v2_lite_s.yaml
+dataset: ../datasets/hrsid_real.yaml
+train:
+  epochs: 40
+  imgsz: 320
+  batch: 4
+  seed: 0
+  optimizer: auto
+  cos_lr: true
+  patience: 15
+  workers: 4
+  deterministic: true
+notes: >-
+  Real HRSID subset. Paired with REAL-001 (baseline) and REAL-003 (LoRA) on the
+  same data and schedule; the full release has 5,604 images and this subset is a
+  fraction of it, so these are pilot numbers.

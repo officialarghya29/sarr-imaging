@@ -93,6 +93,41 @@ FRONTIER: tuple[tuple[str, str, str, str], ...] = (
      "Efficiency frontier at scale m: does the frontier hold when capacity is restored?"),
 )
 
+#: Parameter-efficient adaptation (master Direction B / Stage 10). The LoRA arms exist so the
+#: proposed adapter is compared against the *standard* cheap-adaptation method rather than
+#: against a full fine-tune. Every arm shares one model graph and one dataset with its
+#: reference, so the only difference is the ``peft`` block -- which is what makes the
+#: comparison a comparison of adaptation methods.
+#:
+#: ``(id, variant, display name, peft block, purpose)``. ``peft`` is ``None`` for the
+#: reference arm (a full fine-tune of the same graph).
+PEFT: tuple[tuple[str, str, str, dict | None, str], ...] = (
+    ("EXP-601", "baseline", "Full fine-tune (reference)", None,
+     "Adaptation reference: the whole detector is trained. Every LoRA arm below is compared against this."),
+    ("EXP-602", "baseline", "LoRA r=4", {"method": "lora", "rank": 4, "alpha": 8.0},
+     "Parameter-efficient adaptation: rank-4 low-rank updates on every convolution, base frozen."),
+    ("EXP-603", "baseline", "LoRA r=8", {"method": "lora", "rank": 8, "alpha": 16.0},
+     "Parameter-efficient adaptation at the conventional rank; the arm most papers report."),
+    ("EXP-604", "baseline", "LoRA r=16", {"method": "lora", "rank": 16, "alpha": 32.0},
+     "Does the low-rank budget bind? A larger rank tests whether r=8 was capacity-limited."),
+    ("EXP-605", "baseline", "LoRA r=8, backbone frozen",
+     {"method": "lora", "rank": 8, "alpha": 16.0, "freeze_base": True},
+     "Strict adapter-only optimisation (a low-rank linear probe). Not comparable with the arms "
+     "above: it freezes the head too, so it measures a different budget."),
+)
+
+#: Data-efficiency sweep (master Direction E). The fractions are the labelled *training* data
+#: used, subsampled with one shared seed so every arm and every fraction sees the same images
+#: -- otherwise a difference between fractions would be confounded with a difference between
+#: draws. ``(id, fraction, display name)``.
+DATA_FRACTIONS: tuple[tuple[str, float, str], ...] = (
+    ("EXP-701", 0.01, "1% of training data"),
+    ("EXP-702", 0.05, "5% of training data"),
+    ("EXP-703", 0.10, "10% of training data"),
+    ("EXP-704", 0.25, "25% of training data"),
+    ("EXP-705", 0.50, "50% of training data"),
+)
+
 #: Experiment ids that are evaluated rather than trained.
 EVAL_ONLY = {"EXP-009", "EXP-010", "EXP-011"}
 
@@ -328,6 +363,52 @@ def main() -> int:
         }
         _write(out / f"{exp_id}_{variant}.yaml", payload, purpose)
         written.append(f"{exp_id}_{variant}.yaml")
+
+    # Parameter-efficient adaptation (Direction B / Stage 10). Emitted from the PEFT table so
+    # a new rank is one row rather than a hand-written config that drifts from the others.
+    for exp_id, variant, name, peft, purpose in PEFT:
+        rel_model = model_rel(variant)
+        if rel_model is None:
+            continue
+        payload = {
+            "experiment": {"id": exp_id, "name": name, "description": purpose},
+            "model": rel_model,
+            "dataset": rel_dataset,
+            "train": _train_block(args),
+            "notes": purpose,
+        }
+        if peft is not None:
+            payload["peft"] = dict(peft)
+        slug = "full" if peft is None else f"lora_r{peft.get('rank', 'x')}" + (
+            "_frozen" if peft.get("freeze_base") else ""
+        )
+        _write(out / f"{exp_id}_peft_{slug}.yaml", payload, purpose)
+        written.append(f"{exp_id}_peft_{slug}.yaml")
+
+    # Data-efficiency sweep (Direction E). The fraction is written into the config as an
+    # explicit ``data_fraction`` key rather than being baked into a separate dataset directory,
+    # so every arm reads the same split and the subset is drawn at train time. The runner turns
+    # it into Ultralytics' own ``fraction`` argument, which sorts the file list and takes a
+    # prefix -- nested at every fraction, so a difference between two arms is the fraction
+    # rather than a different sample.
+    for exp_id, fraction, name in DATA_FRACTIONS:
+        rel_model = model_rel("v2_full" if args.scale == "s" else f"v2_full_{args.scale}")
+        if rel_model is None:
+            continue
+        purpose = (
+            f"Data-efficiency sweep: {name}, drawn as a prefix of the sorted training split so "
+            f"the fractions are nested and comparable."
+        )
+        payload = {
+            "experiment": {"id": exp_id, "name": name, "description": purpose},
+            "model": rel_model,
+            "dataset": rel_dataset,
+            "train": _train_block(args),
+            "data_fraction": fraction,
+            "notes": purpose,
+        }
+        _write(out / f"{exp_id}_datafrac_{int(round(fraction * 100)):02d}.yaml", payload, purpose)
+        written.append(f"{exp_id}_datafrac_{int(round(fraction * 100)):02d}.yaml")
 
     # Module-level ablation arms: EXP-<prefix><arm>.
     seen_ids: dict[str, str] = {}

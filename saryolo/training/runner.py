@@ -14,9 +14,99 @@ from pathlib import Path
 from saryolo.tracking.ledger import ExperimentLedger, ExperimentRecord
 
 from .config import ExperimentConfig, load_experiment
+from .peft import LoRAConfig
 from .trainer import apply_init, load_model
 
-__all__ = ["run_experiment", "read_results_csv", "extract_val_metrics", "find_best_weights"]
+__all__ = [
+    "run_experiment",
+    "read_results_csv",
+    "extract_val_metrics",
+    "find_best_weights",
+    "validate_peft",
+    "training_overrides",
+]
+
+
+def validate_peft(payload) -> dict | None:
+    """Validate a run's ``peft`` block, returning the mapping the trainer should receive.
+
+    ``None`` (no ``peft`` key) means a full fine-tune, which is the default and needs no
+    summary -- reporting ``{"method": "none"}`` for every ordinary run would add noise to
+    the ledger without adding a fact. Any other value is checked here rather than at train
+    time, so a typo in the block costs one command instead of a wasted run, and the validated
+    block is then passed to ``SARYOLOTrainer`` through the training overrides.
+
+    Why the adapter is not injected here
+    ------------------------------------
+    It used to be, and the first real LoRA arm proved it wrong. ``YOLO.train()`` rebuilds the
+    model from its config inside the trainer whenever the facade has no checkpoint, so an
+    adapter injected into the loaded facade is discarded before the first optimiser step --
+    while the summary built here was still written to the ledger, recording a parameter-
+    efficient arm that was in fact a full fine-tune. The injection therefore lives in
+    ``SARYOLOTrainer.get_model``, where it is applied to the model that is actually trained and
+    before the optimiser is built; the runner only validates the block and forwards it.
+    """
+    if payload is None:
+        return None
+    if not isinstance(payload, dict):
+        raise ValueError(f"the 'peft' block must be a mapping, got {type(payload).__name__}")
+    method = str(payload.get("method", "lora")).lower()
+    if method not in ("lora", "none"):
+        raise ValueError(
+            f"unsupported peft method {method!r}; supported: 'lora', 'none'. "
+            f"Add the method to saryolo/training/peft.py rather than spelling it differently here."
+        )
+    if method == "none":
+        return None
+    LoRAConfig.from_mapping({k: v for k, v in payload.items() if k != "method"})
+    return dict(payload)
+
+
+def training_overrides(cfg: ExperimentConfig, extra_overrides: dict | None = None,
+                       device: str | None = None) -> dict:
+    """Assemble the Ultralytics training arguments for one run.
+
+    A named function rather than inline code because two of its entries are translations rather
+    than pass-through, and each kind of mistake here is silent:
+
+    * ``data_fraction`` -> the library's own ``fraction`` (never the private key: see the
+      comment at the translation for the measured failure that produced this rule);
+    * ``peft`` -> forwarded for the trainer to apply, validated first so a bad block costs one
+      command instead of a run.
+
+    Kept importable and side-effect free so tests can assert the mapping without training.
+    """
+    overrides = dict(cfg.train)
+    overrides.update(extra_overrides or {})
+    if device:
+        overrides["device"] = device
+    if cfg.data_fraction < 1.0:
+        # Direction E (data efficiency). The sweep is a property of the *run*, not of the
+        # dataset, so it is stated in the config -- and it becomes Ultralytics' own `fraction`.
+        #
+        # It was first implemented as a private `data_fraction` override handled by this
+        # repository's trainer, on the stated belief that "ultralytics shuffles the image list
+        # with its own seed", so the subset had to be drawn here to be reproducible. That belief
+        # was wrong, and the consequence was measured: for a *stock* model YAML the run resolves
+        # to the plain `YOLO` facade, this repository's trainer never sees the override, and
+        # Ultralytics refuses it with "'data_fraction' is not a valid YOLO argument" -- so every
+        # baseline arm of the sweep, the arm the sweep is measured against, could not run at
+        # all. ``BaseDataset.get_img_files`` sorts the file list and takes a prefix, which is
+        # deterministic and nested at every fraction, and ``get_split_fraction`` applies it to
+        # ``train`` only unless the caller passes a per-split list. Those are exactly the
+        # properties the private override existed to provide, so it was redundant as well as
+        # broken; the native argument works for both facades and is the behaviour a reader
+        # already has. The nesting is pinned by
+        # ``tests/test_peft.py::test_the_native_fraction_is_nested_and_deterministic``, because a
+        # library upgrade that changed the selection order would silently turn the sweep into a
+        # comparison of independent draws.
+        overrides["fraction"] = cfg.data_fraction
+    # The adapter arm is validated up front -- a bad block costs one command instead of a run --
+    # and then forwarded through the trainer, which is where it is applied: see `validate_peft`.
+    peft_payload = validate_peft(cfg.extra.get("peft"))
+    if peft_payload is not None:
+        overrides["peft"] = peft_payload
+    return overrides
 
 
 def _set_seed(seed: int) -> None:
@@ -124,10 +214,8 @@ def run_experiment(
     ledger = ExperimentLedger(ledger_root)
     _set_seed(cfg.seed)
 
-    overrides = dict(cfg.train)
-    overrides.update(extra_overrides or {})
-    if device:
-        overrides["device"] = device
+    overrides = training_overrides(cfg, extra_overrides, device)
+    peft_payload = overrides.get("peft")
     # Absolute paths keep ultralytics from nesting runs under `runs/detect/<project>`.
     project = Path(project).resolve()
 
@@ -161,7 +249,10 @@ def run_experiment(
         # pipelines. For an acquisition-conditioned dataset only, mixing transforms are
         # removed because a composite image cannot truthfully carry one acquisition label.
         overrides.update(metadata_augmentation_overrides(data_yaml))
-        model = load_model(str(cfg.model_path))
+        # A parameter-efficient arm must use the custom trainer even when its graph is a stock
+        # YAML (that is exactly what makes it a fair comparison: same graph as the full
+        # fine-tune, different thing optimised), because the adapter is injected there.
+        model = load_model(str(cfg.model_path), prefer_custom=peft_payload is not None)
         # Phase 3: the init stage is stated in the config (default `none`, i.e. a fresh
         # build from the model YAML) and recorded, so a fine-tuned number can never be
         # quoted as if it were trained from scratch -- or the reverse. Both config
@@ -175,7 +266,7 @@ def run_experiment(
             # calls get_model(weights=self.model if self.ckpt else None), so a YAML-built
             # facade's inner model would be silently rebuilt and any transfer lost. A
             # checkpoint-built facade takes the standard .pt fine-tuning path instead.
-            model = load_model(init_summary["init_checkpoint"])
+            model = load_model(init_summary["init_checkpoint"], prefer_custom=peft_payload is not None)
         model.train(
             data=str(data_yaml),
             project=str(project),
@@ -185,6 +276,18 @@ def run_experiment(
         )
         train_minutes = (time.time() - started) / 60.0
         save_dir = Path(getattr(model.trainer, "save_dir", project) or project)
+        # The adapter summary is read back off the trainer, because the trainer is what applied
+        # it. Reading it from anywhere else would let the two disagree, and the disagreement
+        # this prevents was measured: a LoRA arm whose ledger claimed 87 wrapped layers while
+        # the trained model contained no `lora_` tensor at all.
+        if peft_payload is not None:
+            peft_summary = getattr(getattr(model, "trainer", None), "peft_summary", None) or {}
+            if not peft_summary:
+                raise RuntimeError(
+                    "this run requested a parameter-efficient method but the trainer reported no "
+                    "adapter; the trained model is not the model the config describes"
+                )
+            record.extra.update(peft_summary)
         record.save_dir = str(save_dir)
         record.extra["train_minutes"] = round(train_minutes, 2)
 

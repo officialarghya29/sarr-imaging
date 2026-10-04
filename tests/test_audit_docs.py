@@ -106,12 +106,21 @@ def test_the_audit_records_the_repository_existence_check():
     assert "EXISTS" in text, "the audit does not record the existence-check result"
 
 
-def test_the_baseline_doc_names_the_missing_lora_comparator():
-    """The master context requires a LoRA comparison; the gap must be stated, not omitted."""
-    text = (REPO_ROOT / "docs/baseline_comparison.md").read_text()
+def test_the_baseline_doc_tracks_the_lora_comparator_honestly():
+    """The master context requires a LoRA comparison; the document must state where it stands.
+
+    This guard began as "the comparator is missing, and the omission must be stated". It is no
+    longer missing: the adapter, its arms and one measured pilot run exist, so the same wording
+    would now be a *false* gap statement -- the mirror image of the failure the guard was written
+    to prevent, which is a document whose status section has drifted from the repository. What is
+    still open is the tuned sweep and the full-scale comparison, and the document has to say so.
+    """
+    text = (REPO_ROOT / "docs" / "baseline_comparison.md").read_text()
     assert "LoRA" in text
-    assert "not implemented" in text.lower() or "missing" in text.lower(), (
-        "the baseline document must state that the LoRA comparator does not exist yet"
+    assert "peft.py" in text, "the document does not point at the implementation"
+    assert "pilot" in text.lower(), "the measured arm is a pilot, not the full comparison"
+    assert re.search(r"(not exist|missing|open|TBD|unmeasured)", text, re.IGNORECASE), (
+        "the baseline document must name what is still open about the LoRA comparison"
     )
 
 

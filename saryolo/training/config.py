@@ -71,6 +71,33 @@ class ExperimentConfig:
     def imgsz(self) -> int:
         return int(self.train.get("imgsz", 640))
 
+    @property
+    def data_fraction(self) -> float:
+        """Fraction of the training split to use, or ``1.0`` for the whole split.
+
+        Part of the data-efficiency study (master Direction E). Validated on read rather
+        than at use: a fraction of ``0.0`` would train on nothing and a fraction above 1
+        would silently be clamped by the sampler, so both are refused here where the error
+        message can name the config file.
+
+        The runner translates this into Ultralytics' own ``fraction`` argument, which sorts the
+        file list and takes a prefix (so the arms are nested) and applies to the training split
+        only. The key stays named ``data_fraction`` because the configs are the interface a
+        reader sees and the name says what the study varies; the argument it becomes is stated
+        in ``saryolo/training/runner.py``, where the translation happens.
+        """
+        value = self.extra.get("data_fraction", 1.0)
+        try:
+            fraction = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"data_fraction must be a number in (0, 1], got {value!r}") from exc
+        if not 0.0 < fraction <= 1.0:
+            raise ValueError(
+                f"data_fraction must be in (0, 1], got {fraction}. A fraction of 0 trains on "
+                f"nothing, and anything above 1 is not a fraction of the data."
+            )
+        return fraction
+
     def to_dict(self) -> dict:
         return {
             "experiment_id": self.experiment_id,
@@ -80,6 +107,7 @@ class ExperimentConfig:
             "train": self.train,
             "description": self.description,
             "notes": self.notes,
+            "data_fraction": self.data_fraction,
         }
 
 

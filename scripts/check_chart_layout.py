@@ -51,6 +51,7 @@ CHARTS = (
     M.chart_identity,
     M.chart_datasets,
     M.chart_coverage,
+    M.chart_real_arms,
     M.chart_tests,
 )
 
