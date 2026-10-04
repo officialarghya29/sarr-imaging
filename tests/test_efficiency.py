@@ -138,20 +138,30 @@ def test_every_flop_count_names_the_counter_that_produced_it():
     recorded, or a reader comparing a baseline row against a front-end row is silently
     comparing two instruments.
     """
+    # Which counter is *available* is environment-dependent, so the contract pinned here is
+    # that a row is always labelled and always positive -- not that a particular install
+    # happens to route to a particular instrument. On one machine `get_flops` measures the
+    # baseline (1.613 G) and returns 0 for the CFAR arms; in another install it returns 0 for
+    # everything. Both must yield a labelled, positive row.
     baseline = measure_flops(_build("baseline_n"), imgsz=320)
-    assert baseline["flops_G_counter"] == "ultralytics"
-    # The custom first layer defeats the Ultralytics counter, so this row must be labelled
-    # as the fallback -- and must still be a positive number.
+    assert baseline["flops_G_counter"] in ("ultralytics", "thop")
     cfar = measure_flops(_build("cfar_n"), imgsz=320)
-    assert cfar["flops_G_counter"] == "thop"
-    assert cfar["flops_G"] > 0
-    # The two counters must agree on a model both can measure, so the mixed table is fair.
+    assert cfar["flops_G_counter"] in ("ultralytics", "thop")
+    assert cfar["flops_G"] is not None and cfar["flops_G"] > 0
+    # The two counters must agree on a model both can measure, so a mixed table is fair.
     # With the override, the *same* baseline model is forced through thop and compared.
     forced_thop = measure_flops(_build("baseline_n"), imgsz=320, counter="thop")
     assert forced_thop["flops_G_counter"] == "thop"
     assert abs(baseline["flops_G"] - forced_thop["flops_G"]) < 0.05, (
         f"the two counters disagree on the same model: {baseline['flops_G']} vs {forced_thop['flops_G']}"
     )
+    # The dangerous outcome is a fabricated zero, not a wrong instrument. Ultralytics'
+    # `get_flops` reports 0.0 when it cannot trace a graph -- which renders as a measurement --
+    # so a forced counter that cannot run must either produce a number or say why, never 0.0.
+    forced = measure_flops(_build("cfar_n"), imgsz=320, counter="ultralytics")
+    assert forced["flops_G"] != 0.0, "a zero FLOP count would read as a measured value"
+    if forced["flops_G"] is None:
+        assert forced["flops_error"], "a missing FLOP count must come with its reason"
     with pytest.raises(ValueError, match="counter must be"):
         measure_flops(_build("baseline_n"), imgsz=320, counter="nvml")
 

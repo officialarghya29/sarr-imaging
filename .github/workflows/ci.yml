@@ -25,10 +25,21 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
+      - name: Configure the repository owner's git identity
+        # The suite asserts that every commit is authored *and* committed under the repository
+        # owner's identity, so that attribution can never drift from the authorship fields.
+        # A fresh runner has no `user.name`/`user.email`, and the guard deliberately fails
+        # loudly rather than skipping in that case -- so CI configures the owner here instead
+        # of weakening the check to pass in an environment nobody ships from.
+        run: |
+          git config --global user.name "Arghya Bose"
+          git config --global user.email "officialarghya29@gmail.com"
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install -e .
 
       - name: Lint
         run: ruff check .

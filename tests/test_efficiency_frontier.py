@@ -37,18 +37,29 @@ REMOVED_SLOTS = ("context", "fusion")
 
 
 def _measure(variant: str):
-    """Construct one variant and measure its real params/GFLOPs."""
+    """Construct one variant and measure its real params/GFLOPs.
+
+    FLOPs go through :func:`saryolo.evaluation.efficiency.measure_flops`, not Ultralytics'
+    ``get_flops`` directly. That matters for portability: ``get_flops`` returns **0.0**
+    rather than raising when it cannot trace a graph, which it does on this repository's
+    custom first layers and, in some installs (notably CI), on every model in the zoo. A test
+    that asked it directly measured 0.0 against 0.0 and reported that a light arm was not
+    cheaper than its reference -- a failure of the *counter*, not of the architecture. The
+    repository profiler falls back to thop and records which counter ran.
+    """
     from ultralytics.nn.tasks import DetectionModel
-    from ultralytics.utils.torch_utils import get_flops
+
+    from saryolo.evaluation.efficiency import measure_flops
 
     spec = dataclasses.replace(VARIANTS[variant])
     model = DetectionModel(build_yaml_dict(spec), ch=3, nc=1, verbose=False)
     model.eval()
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        flops = float(get_flops(model, imgsz=640))
+        row = measure_flops(model, imgsz=640)
+    assert row["flops_G"], f"{variant}: no counter could measure this model: {row.get('flops_error')}"
     params = sum(p.numel() for p in model.parameters()) / 1e6
-    return {"params_M": params, "flops_G": flops}
+    return {"params_M": params, "flops_G": float(row["flops_G"])}
 
 
 @pytest.mark.parametrize("variant", [v for v, _l, _e in EFFICIENCY_FRONTIER_ARMS if v.startswith("v2_lite")])

@@ -173,7 +173,8 @@ def measure(variant: str, scale: str = "s", with_flops: bool = False, imgsz: int
         return _MEASURED[key]
 
     from ultralytics.nn.tasks import DetectionModel
-    from ultralytics.utils.torch_utils import get_flops
+
+    from saryolo.evaluation.efficiency import measure_flops
 
     # A *copy* at the requested scale, never the shared spec. ``VARIANTS`` holds the declared
     # zoo, and mutating one entry rewrites it for every later reader in the process: after a
@@ -186,9 +187,25 @@ def measure(variant: str, scale: str = "s", with_flops: bool = False, imgsz: int
     model.eval()
     out = {"variant": variant, "scale": scale, "params_M": sum(p.numel() for p in model.parameters()) / 1e6}
     if with_flops:
+        # Ultralytics' ``get_flops`` first, for its full-precision value, but never trusted
+        # blindly: it returns **0.0** rather than raising when it cannot trace a graph (it does
+        # on this repository's custom first layers, and in some installs on every model), and a
+        # cost table filled with 0.0 GFLOPs renders as a measurement. On a zero -- and only on
+        # a zero -- fall back to the repository profiler, which routes through thop. The
+        # fallback result is 3-decimal, so it is not substituted when the primary counter
+        # worked: doing that unconditionally re-rounded 35.2146 G to 3 dp and then to the
+        # table's 2 dp, flipping a displayed 35.21 to 35.22 through nothing but rounding.
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            out["flops_G"] = float(get_flops(model, imgsz=imgsz))
+            try:
+                from ultralytics.utils.torch_utils import get_flops
+
+                flops = float(get_flops(model, imgsz=imgsz))
+            except Exception:
+                flops = 0.0
+            if not flops:
+                flops = float(measure_flops(model, imgsz=imgsz)["flops_G"] or 0.0)
+        out["flops_G"] = flops
     del model
     _MEASURED[key] = out
     return out
