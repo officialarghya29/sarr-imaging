@@ -6,7 +6,7 @@
 
 **One SAR detector that generalises to a sensor it has never seen — because it is told *how* the image was acquired, not *which* sensor took it.**
 
-![tests](https://img.shields.io/badge/tests-450_passing-22c55e) ![fabricated](https://img.shields.io/badge/fabricated_results-0-black) ![arch](https://img.shields.io/badge/architectures-98_wired-3b82f6) ![exps](https://img.shields.io/badge/experiments-118_configured-8b5cf6) ![cost](https://img.shields.io/badge/SARVO--Lite-32.55_GFLOPs-0891b2) ![license](https://img.shields.io/badge/license-MIT-94a3b8)
+![tests](https://img.shields.io/badge/tests-467_passing-22c55e) ![fabricated](https://img.shields.io/badge/fabricated_results-0-black) ![arch](https://img.shields.io/badge/architectures-98_wired-3b82f6) ![exps](https://img.shields.io/badge/experiments-118_configured-8b5cf6) ![cost](https://img.shields.io/badge/SARVO--Lite-32.55_GFLOPs-0891b2) ![license](https://img.shields.io/badge/license-MIT-94a3b8)
 
 </div>
 
@@ -52,7 +52,7 @@ SAR image ──► SIA ──► backbone ──► components 1/2/9 ──► 
 | **Stack** | Python 3.10+ · Ultralytics 8.4.155 · PyTorch 2.x |
 | **Architectures** | 98 variants wired; every one builds and runs a forward pass |
 | **Experiments** | 118 configured; each reproducible from a committed YAML |
-| **Tests** | 450 passing — no dataset download and no GPU needed |
+| **Tests** | 467 passing — no dataset download and no GPU needed |
 | **Measured** | architecture cost, identity-at-init, protocol correctness, metric correctness, **six real-data pilot arms** on HRSID |
 | **Not measured** | the **paper's accuracy table** — the pilot is a subset run on a CPU, not the full benchmark |
 
@@ -467,6 +467,13 @@ Notes that belong next to the numbers rather than in a table cell:
   machine), and the front end costs real CPU throughput (62 → 37 FPS). The honest reading is
   that the proposal **survives both falsifiers it named — its matched-cost control and the
   seed-noise test — but has not demonstrated a paper-grade benefit**.
+* **The gain is a real per-pixel decision, and the acquisition-shift pilot is negative.**
+  The proposal named gain collapse as the way its claim could be empty, so `saryolo gain`
+  measures the trained gain directly on the held-out chips: within-image std 0.0331 versus
+  between-image std 0.0105, with 98 % of pixels active, so it is a per-pixel map and not a
+  per-scene scalar. A synthetic global-brightness shift, by contrast, does **not** separate
+  the arms — at severe darkening both hit the floor and at gain 0.3 the prototype is worse.
+  The null result is kept rather than dropped.
 * These are **pilot runs**, not a benchmark. Three seeds on one 200-image subset is not
   validation, and nothing here supports a claim about cross-sensor generalisation — that is
   RQ1, and it needs the full dataset.
@@ -647,7 +654,7 @@ uv pip install --python .venv/bin/python torch torchvision --index-url https://d
 uv pip install --python .venv/bin/python ultralytics pytest
 source .venv/bin/activate
 
-pytest tests/ -q                                          # 450 tests
+pytest tests/ -q                                          # 467 tests
 python -m saryolo arch --variant all --nc 1               # emit 92 model YAMLs
 python -m saryolo synth-data --out datasets/processed/synthetic_smoke
 python -m saryolo train --exp configs/exp/_smoke_baseline.yaml

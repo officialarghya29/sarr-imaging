@@ -519,6 +519,17 @@ def _cmd_robustness(args) -> int:
     return 0
 
 
+def _cmd_gain(args) -> int:
+    from saryolo.evaluation.gain import diagnose_gain
+
+    result = diagnose_gain(
+        args.weights, args.data, out_dir=args.out, imgsz=args.imgsz,
+        limit=args.limit, seed=args.seed, device=args.device,
+    )
+    print(json.dumps(result, indent=2, default=float))
+    return 0
+
+
 def _cmd_efficiency(args) -> int:
     from saryolo.evaluation.efficiency import profile_model, write_profile
 
@@ -1078,6 +1089,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--device", default=None)
     p.add_argument("--out", default="results/robustness")
     p.set_defaults(func=_cmd_robustness)
+
+    p = sub.add_parser("gain", help="gain-collapse diagnostic for the CFAR front end")
+    p.add_argument("--weights", required=True)
+    p.add_argument("--data", required=True)
+    p.add_argument("--imgsz", type=int, default=320)
+    p.add_argument("--limit", type=int, default=None)
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--device", default=None)
+    p.add_argument("--out", default="results/gain")
+    p.set_defaults(func=_cmd_gain)
 
     p = sub.add_parser("efficiency", help="params/FLOPs/latency/FPS for a checkpoint")
     p.add_argument("--weights", required=True)

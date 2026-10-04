@@ -70,6 +70,12 @@ CORRUPTIONS: dict[str, Corruption] = {
         "low_snr", "noise", (0.0, 0.10, 0.20, 0.35, 0.50),
         "Additive noise at a fraction of the dynamic range.", physical=False,
     ),
+    "brightness": Corruption(
+        "brightness", "gain", (1.0, 0.7, 0.5, 0.3, 0.15),
+        "Global radiometric gain: a different sensor gain or dynamic-range window. "
+        "A pure acquisition shift -- geometry and clutter structure are untouched.",
+        physical=True,
+    ),
 }
 
 
@@ -110,6 +116,8 @@ def apply_corruption(img: np.ndarray, name: str, severity: float, rng: np.random
         sd = float(severity)
         if sd > 0:
             arr = arr + rng.normal(0, sd, size=arr.shape).astype(np.float32)
+    elif name == "brightness":
+        arr = arr * float(severity)
     elif name == "identity":
         pass
     else:

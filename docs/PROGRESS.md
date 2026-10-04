@@ -155,6 +155,15 @@ Latest additions (this session):
    mAP50:95 loss is roughly half the baseline's (−10.7 % vs −15.6 %, −13.1 % vs −32.0 %). The
    front end still costs ~40 % of CPU throughput. Recorded as: **survives both falsifiers it
    named, on a 260-image single-machine pilot, with a small absolute effect** — not a result.
+   The gain-collapse falsifier was then built and run (`saryolo/evaluation/gain.py`, CLI
+   `saryolo gain`, tests in `tests/test_cfar_scope.py`): the trained gain is a genuine
+   per-pixel decision (within-image std 0.0331 vs between-image std 0.0105, 98 % of pixels
+   active), so it is **cleared**. A synthetic acquisition-shift pilot on a global radiometric
+   gain (a new `brightness` corruption) is a **null/mixed result** and is reported as one: at
+   severe darkening both arms hit the floor, and at gain 0.3 the prototype is worse. Phase 9
+   is finalised at pilot scope in §9 of the proposals document, which freezes the interface,
+   labels every claim final/preliminary/not-supported, and keeps the repository from being
+   renamed into a detector the evidence does not support.
 
 11. ~~RT-DETR feasibility arm (red-team W6)~~ — **built, not measured**:
    `SARYOLORTDetectionModel` + generator-derived `configs/models/rtdetr/rtdetr_s_cond_film.yaml`

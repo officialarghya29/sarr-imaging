@@ -789,12 +789,13 @@
     ]
   },
   "tests": {
-    "total": 450,
+    "total": 467,
     "by_file": {
       "tests/test_arch.py": 61,
       "tests/test_audit_docs.py": 31,
       "tests/test_augmentation.py": 15,
       "tests/test_cfar_frontend.py": 16,
+      "tests/test_cfar_scope.py": 17,
       "tests/test_cli.py": 30,
       "tests/test_conditioning.py": 9,
       "tests/test_conditioning_smoke.py": 6,

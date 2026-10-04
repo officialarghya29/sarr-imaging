@@ -166,27 +166,35 @@ class RatioSpaceCFARFrontEnd(nn.Module):
             stats.append(torch.sqrt(var) / (mu.abs() + self.eps))  # local coefficient of variation
         return torch.cat(stats, dim=1)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def gain_map(self, x: torch.Tensor) -> torch.Tensor:
+        """The per-pixel gain ``g`` about to be applied, shape ``(B, 1, H, W)``.
+
+        Factored out of :meth:`forward` so the gain is *measurable* rather than
+        inferred. The design's load-bearing claim is that the gain is a per-pixel
+        decision; a gain that collapsed to a single scalar would make that claim
+        empty while still producing a plausible output, so the diagnostic in
+        ``saryolo/evaluation/gain.py`` reads this directly.
+        """
         if self.mode == "conv":
             # Matched-cost control: the raw intensity, replicated to the statistic stack's
             # width so the gain network is byte-for-byte the same shape. No log, no local
             # statistics, no pooling -- a plain learned first representation at the same
             # parameter price as the proposal.
             raw = x.mean(dim=1, keepdim=True)
-            gain = torch.tanh(self.gain(raw.expand(-1, self.gain[0].in_channels, -1, -1)))
-            return x * (1.0 + gain)
+            return torch.tanh(self.gain(raw.expand(-1, self.gain[0].in_channels, -1, -1)))
         stats = self.statistics(x)
         if self.mode == "cfar":
-            gain = torch.tanh(self.gain(stats))
-        else:
-            # Fixed-threshold control: threshold the mean local contrast at a
-            # constant and suppress where the region looks textured rather than
-            # point-like. No parameters, so nothing here can be attributed to
-            # learning.
-            contrast = stats[:, 2::2].mean(dim=1, keepdim=True)  # the c_k channels
-            ratio = stats[:, 1::2].mean(dim=1, keepdim=True)  # the r_k channels
-            gain = torch.tanh(2.0 * (ratio - contrast).clamp(-1.0, 1.0))
-        return x * (1.0 + gain)
+            return torch.tanh(self.gain(stats))
+        # Fixed-threshold control: threshold the mean local contrast at a
+        # constant and suppress where the region looks textured rather than
+        # point-like. No parameters, so nothing here can be attributed to
+        # learning.
+        contrast = stats[:, 2::2].mean(dim=1, keepdim=True)  # the c_k channels
+        ratio = stats[:, 1::2].mean(dim=1, keepdim=True)  # the r_k channels
+        return torch.tanh(2.0 * (ratio - contrast).clamp(-1.0, 1.0))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x * (1.0 + self.gain_map(x))
 
     def extra_repr(self) -> str:
         return f"c1={self.c1}, mode={self.mode}, scales={self.scales}"

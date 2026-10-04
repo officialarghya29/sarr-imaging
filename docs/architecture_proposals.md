@@ -399,8 +399,8 @@ and no attributable result.
 | 5. Prototype | **Implemented and verified**: `RatioSpaceCFARFrontEnd`, arms `cfar_n`/`cfar_s` and controls `cfar_fixed_n`/`cfar_fixed_s`; forward, exact identity at init, non-zero gain gradient, real loss, an optimiser step, and a measured cost profile are all asserted in `tests/test_cfar_frontend.py` |
 | 6. Initial experiments | **Measured**: `REAL-004` (the arm), `REAL-005` (fixed-threshold control) and `REAL-006` (matched-cost control) on the HRSID subset against `REAL-001`, plus a three-seed paired repeat (`MSEED-B1/B2` vs `MSEED-C1/C2`) — the falsification tests in §5. Reported in §8 |
 | 7. Optimization by measured evidence | **Partially done**: the three-seed repeat and the matched-cost control were the first optimizations of the design; both are reported in §8. No other knob has been tuned |
-| 8. Benchmarking / ablations / failure analysis | **Partially done**: the five-corruption robustness sweep for `REAL-001` and `REAL-004` is reported in §8; a second-sensor benchmark and the gain-collapse diagnostic are not run (no GPU) |
-| 9. Finalization | not started — gated on the pilot replicating on a full release |
+| 8. Benchmarking / ablations / failure analysis | **Partially done**: the five-corruption sweep, the gain-collapse diagnostic and the synthetic acquisition-shift pilot for `REAL-001` / `REAL-004` are all in §8; a second-sensor benchmark is not run (no GPU) |
+| 9. Finalization | **Done at pilot scope** — §9 freezes the interface, labels every claim final/preliminary/not-supported, and states the remaining (GPU-gated) critical path. It does not name a detector |
 
 ---
 
@@ -408,12 +408,15 @@ and no attributable result.
 
 Phase 6–8 ran the falsification test from §5. It is a **pilot**: the 200/60/60 HRSID subset,
 40 epochs, 320 px, batch 4, one class, **CPU only**, every arm sharing the entire schedule so
-a row differs only in the first representation. Four things were added past the first
+a row differs only in the first representation. Six things were added past the first
 seed-0 result reported earlier: the **matched-cost control** (`cfar_conv`, REAL-006), a
-**three-seed paired repeat** of the primary comparison (MSEED-B1/B2 and MSEED-C1/C2), and a
-**corruption sweep** under the five built-in `saryolo robustness` corruptions. Every number
-below is read from `results/experiments.jsonl` or `results/robustness/*/robustness.json` by
-the run that produced it.
+**three-seed paired repeat** of the primary comparison (MSEED-B1/B2 and MSEED-C1/C2), a
+**corruption sweep** under the five built-in `saryolo robustness` corruptions, the
+**gain-collapse diagnostic** the proposal names as its own falsifier (`saryolo gain`), and a
+**synthetic acquisition-shift pilot** on a global radiometric gain. Every number below is
+read from `results/experiments.jsonl`, `results/robustness/*/robustness.json`,
+`results/robustness_brightness/*/robustness.json` or `results/gain/*/gain.json` by the run
+that produced it.
 
 Seed 0, all four arms on the same schedule (REAL-001 baseline, REAL-004 proposed, REAL-005
 fixed-threshold control, REAL-006 matched-cost conv control):
@@ -466,6 +469,48 @@ baseline against 0.2291 for the prototype. This is consistent with the mechanism
 claims: a statistic-based front end degrades more slowly as the local statistics get noisier.
 It is a **pilot** observation on one subset, not a robustness benchmark.
 
+**The gain is a per-pixel decision, not a collapsed scalar.** The proposal named gain
+collapse as the way its own claim could be empty, so the diagnostic was built and run
+(`saryolo gain --weights results/runs/REAL-004/weights/best.pt … --limit 60`) over the 60
+held-out chips. The trained gain is **not** constant and is **not** a per-scene scalar:
+
+| Quantity (clean, 60 images × 102 400 px) | Measured |
+| --- | ---: |
+| mean abs. gain | 0.113 |
+| within-image std (per-pixel decision) | 0.0331 |
+| between-image std (per-scene scalar) | 0.0105 |
+| active fraction (\|g\| > 0.05) | 98.2 % |
+| min / max gain | −0.431 / +0.152 |
+
+The within-image spread is three times the between-image spread, so the modulation varies
+*pixel to pixel inside a scene* rather than being one number per image — which is what the
+design claims and what a collapsed gain would contradict. Across synthetic shifts the gain
+reacts rather than freezing: under 2-look speckle its within-image std rises to 0.119 (more
+modulation where the statistic is noisier), while under heavy contrast compression it
+smooths to 0.005 — it learns to apply a nearly uniform darkening there, which is a real
+property of the trained map and is reported rather than hidden. This falsifier is **cleared**.
+
+**The synthetic acquisition-shift pilot is a null result and is reported as one.** Because the
+log-ratio channel is exactly invariant to a global radiometric gain (a property now pinned by
+`tests/test_cfar_scope.py`), the acquisition variable it is supposed to transfer across is the
+one worth isolating: the same 60 chips darkened by a global gain and re-evaluated. It does
+**not** separate the arms:
+
+| Global gain | Baseline mAP50:95 | CFAR mAP50:95 |
+| ---: | ---: | ---: |
+| 1.0 (clean) | 0.2889 | 0.3091 |
+| 0.7 | 0.3005 | 0.3224 |
+| 0.5 | 0.2750 | 0.2991 |
+| 0.3 | 0.1365 | **0.1094** |
+| 0.15 | 0.0007 | 0.0002 |
+
+At severe darkening both models are on the floor (≈0 mAP as the target contrast vanishes), so
+that regime is not a test; at moderate gain (0.5, 0.7) the prototype keeps its small lead; and
+at gain 0.3 it is **worse** than the baseline. The honest reading is that the radiometric-gain
+axis is dominated by an absolute detection floor and does not discriminate the two arms — the
+mechanism's *statistic* is gain-invariant, but that does not translate into a measured
+robustness advantage here. A null result is a result, and it is not dropped.
+
 **What the test does not settle.** The absolute effect is small. A mean mAP50:95 gap of
 +0.018 measured on **60 test images, one 200-image training subset, one CPU** is above the
 seed spread on this sample and below what anyone should call a result; the primary metric
@@ -474,12 +519,88 @@ The front end also costs real CPU throughput (61.8 → 36.7 FPS, −40 %) at thi
 the efficiency frontier gets *worse* even as accuracy improves. The correct statement is:
 **the proposal survives both falsifiers it named — its own matched-cost control and the
 seed-noise test — but on a 260-image, single-machine pilot, and the effect is small.** What
-would turn this into a claim: three seeds on the full HRSID release, a second sensor
-(SSDD or SARDet-100K) to show the statistic is not HRSID-specific, and the gain-collapse
-diagnostic (variance of `g` across scenes) to show the per-pixel decision is used. All three
-are blocked on GPU here; they are the first things a machine with one would run.
+would turn this into a claim: three seeds on the full HRSID release and a second sensor
+(SSDD or SARDet-100K) to show the statistic is not HRSID-specific. (The gain-collapse
+diagnostic is done, above; the acquisition-shift pilot is done and negative; the two that
+remain are the ones that need a GPU, and they are the first things a machine with one would
+run.)
 
 **What would withdraw it.** If the matched-cost conv stem had matched REAL-004, or if the
 three-seed paired Δ had averaged to zero, the direction should be withdrawn rather than
 rephrased. Neither happened, so the direction is retained — as the recommended direction to
 develop, and still not as a paper result.
+
+---
+
+## 9. Finalization — the frozen spec, and what the pilot does and does not license
+
+Phase 9 is where a name, a spec and a set of claims are made final. This section states what
+is frozen, what is only preliminary, and — the part that keeps the earlier sections honest —
+what the pilot does **not** license. Nothing here upgrades a pilot measurement into a paper
+result.
+
+### 9.1 The frozen interface (final)
+
+The recommended direction is frozen at the following contract, which every test in
+`tests/test_cfar_frontend.py` and `tests/test_cfar_scope.py` pins:
+
+| Element | Frozen value |
+| --- | --- |
+| Class | `saryolo.nn.modules.cfar.RatioSpaceCFARFrontEnd` (registered in `CUSTOM_MODULES`) |
+| Placement | row 0 of the backbone, via `ModelSpec.cfar`; a channel-preserving `C -> C` map |
+| Modes | `("cfar", "conv", "fixed")` — proposal and the two controls; `arch.CFAR_MODES` must equal the module's list |
+| Windows | `(3, 7, 15)`, odd and ≥ 3, validated where the mistake is made |
+| Gain width | `hidden = 24`; last layer zero-init **and** zero bias, so `g ≡ 0` at step 0 |
+| Identity contract | `cfar` and `conv` are exact identities at init (`max|f(x)−x| = 0.0e+00`); `fixed` declares `identity_at_init = False` on purpose |
+| Public surface | `statistics(x)`, `gain_map(x)`, `forward(x)`; `forward ≡ x * (1 + gain_map(x))` |
+| Arms | `cfar_n/s`, `cfar_conv_n/s`, `cfar_fixed_n/s` — six arms, one insertion point each |
+
+### 9.2 The measured record (every number is in the ledger)
+
+| Id | Arm | Role | mAP50 | mAP50:95 |
+| --- | --- | --- | ---: | ---: |
+| REAL-001 | YOLO11n baseline, seed 0 | reference | 0.5706 | 0.3012 |
+| REAL-002 | SARVO-Lite (s) | efficiency frontier | 0.5724 | 0.3287 |
+| REAL-003 | LoRA r=8 | parameter-efficient | 0.5781 | 0.2984 |
+| REAL-004 | CFAR front end, learned gain | proposal | 0.5691 | 0.3151 |
+| REAL-005 | CFAR statistic, fixed threshold | control (no learning) | 0.4952 | 0.2465 |
+| REAL-006 | matched-cost conv stem | control (no statistic) | 0.5654 | 0.3021 |
+| MSEED-B1/B2 | baseline seeds 1, 2 | seed spread | 0.5375 / 0.5792 | 0.2804 / 0.2871 |
+| MSEED-C1/C2 | front end seeds 1, 2 | pair | 0.5571 / 0.5838 | 0.3036 / 0.3036 |
+
+Reproduce with the four training configs (`REAL-001…006`) followed by
+`python -m saryolo robustness …`, `python -m saryolo gain …`, and
+`python scripts/make_readme_assets.py`; the exact commands are in
+`reports/reproduction_status.md` and the ledger refuses to render an unmeasured cell.
+
+### 9.3 Claim labels (what is final, preliminary, or blocked)
+
+| Claim | Label | Basis |
+| --- | --- | --- |
+| The module is an exact identity at init and its gain trains | **final** | test-pinned on the real graph, including the first-layer-recovery check |
+| The parameter overhead is +217 (< 0.5 %) and scale-independent | **final** | measured on the generated YAML at `n` and `s` |
+| The front end beats its own matched-cost and fixed-threshold controls | **preliminary** | one 200/60/60 subset, one machine |
+| The front end leads the baseline on mAP50:95 at three seeds | **preliminary** | +0.0179 mean, inside a small-subset envelope |
+| The trained gain is a per-pixel decision, not collapsed | **final for this checkpoint** | `results/gain/REAL-004/gain.json` |
+| The front end improves robustness under an acquisition shift | **not supported** | brightness pilot is a null/mixed result (§8) |
+| Cross-sensor / cross-resolution generalisation | **blocked on GPU** | needs the full release and a second source |
+
+### 9.4 The naming decision
+
+The repository keeps its name and the direction keeps **RS-CFAR** as a described
+*architecture direction*, not as a renamed detector. This is deliberate. The brief's
+prohibition is on presenting a module ladder under a new name as a new architecture, and the
+pilot is far too thin to justify naming a detector: it must first replicate on a full release
+and a second sensor. The frozen spec (§9.1) is what a collaborator would implement; the
+measured record (§9.2) is what they would have to beat; and §9.3 is the list of claims that a
+draft may and may not make from this repository as it stands.
+
+### 9.5 The remaining critical path
+
+1. The full HRSID release at three seeds per arm — a GPU job.
+2. A second sensor (SSDD or SARDet-100K), whose cross-source machinery exists (`saryolo loso`)
+   but has never been run on real data.
+3. The gain diagnostic re-run on those checkpoints — the tool exists, so this is a re-run,
+   not new code.
+4. Only then a draft, and §8's negative results (the acquisition-shift pilot) go in the draft
+   rather than an appendix.

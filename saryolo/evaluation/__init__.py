@@ -12,6 +12,7 @@ from .efficiency import (
     profile_yaml,
     write_profile,
 )
+from .gain import diagnose_gain, find_front_end, gain_maps, summarise_gain
 from .metrics import (
     AREA_RANGES,
     Detection,
@@ -56,6 +57,11 @@ __all__ = [
     "build_corrupted_split",
     "CORRUPTIONS",
     "Corruption",
+    # gain diagnostic (the front end's own falsifier)
+    "diagnose_gain",
+    "find_front_end",
+    "gain_maps",
+    "summarise_gain",
     # generalization
     "cross_dataset_eval",
     "class_compatibility",
