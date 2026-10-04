@@ -569,12 +569,30 @@ the front end's relative contribution is subsumed even as the detector improves.
 that augmentation would make the front end look better is **not supported**, and it is recorded
 as a negative.
 
+*Augmentation itself, unlike the front-end gap, survives a seed check.* The single-seed starting
+point was the obvious weakness in the paragraph above, so the two-view baseline was repeated at
+seeds 1 and 2 (`AUG-005`, `AUG-006`) and paired against the clean-split baseline at the same seeds
+(`MSEED-B1`, `MSEED-B2`):
+
+| Seed | Clean baseline mAP50:95 | Augmented ×2 baseline mAP50:95 | Paired gain |
+| ---: | ---: | ---: | ---: |
+| 0 (REAL-001 / AUG-003) | 0.3012 | 0.3898 | **+0.0886** |
+| 1 (MSEED-B1 / AUG-005) | 0.2804 | 0.3892 | **+0.1089** |
+| 2 (MSEED-B2 / AUG-006) | 0.2871 | 0.3728 | **+0.0857** |
+| mean ± std | 0.2895 ± 0.0106 | **0.3839 ± 0.0097** | **+0.0944 ± 0.0126** |
+
+The gain is positive at all three seeds and its mean is ~9× the seed spread of either arm, so the
+*recommendation* this section reaches (augment rather than add the front end) rests on a robust
+number. The *reason* for it — the gap shrink — does not, and stays labelled single-seed.
+
 **What the test does not settle.** The absolute effect is small. A mean mAP50:95 gap of
 +0.018 measured on **60 test images, one 200-image training subset, one CPU** is above the
 seed spread on this sample and below what anyone should call a result; the primary metric
-mAP50 is a wash or slightly negative at seed 0 (0.5691 vs 0.5706) and only ahead at seeds 1–2.
-The front end also costs real CPU throughput (61.8 → 36.7 FPS, −40 %) at this resolution, so
-the efficiency frontier gets *worse* even as accuracy improves. The correct statement is:
+mAP50 is a wash or slightly negative at seed 0 (0.5691 vs 0.5706) and only ahead at seeds 1–2.The front end also costs real CPU throughput (**3.0× per-image latency on real inputs**:
+      113.1 → 37.2 FPS at batch 8, 8.85 → 26.90 ms — a much larger penalty than its +9 % FLOPs
+      increase, so it is a latency cost on this CPU and not a compute cost), so the efficiency
+      frontier gets *worse* even as accuracy improves. Augmentation, by contrast, costs nothing at
+      inference: it trains the same graph. The correct statement is:
 **the proposal survives both falsifiers it named — its own matched-cost control and the
 seed-noise test — but on a 260-image, single-machine pilot, and the effect is small.** What
 would turn this into a claim: three seeds on the full HRSID release and a second sensor
@@ -631,6 +649,22 @@ A paper-style write-up of this interface is drafted in `docs/methods_rs_cfar.md`
 | AUG-002 | front end, SAR-augmented x1 | augmentation arm | 0.6049 | 0.3638 |
 | AUG-003 | baseline, SAR-augmented x2 | augmentation control | 0.6278 | 0.3898 |
 | AUG-004 | front end, SAR-augmented x2 | augmentation arm | 0.6160 | 0.3914 |
+| AUG-005 | baseline, SAR-augmented x2, seed 1 | seed spread | 0.6194 | 0.3892 |
+| AUG-006 | baseline, SAR-augmented x2, seed 2 | seed spread | 0.6137 | 0.3728 |
+
+Real-input cost, read from `results/efficiency/<exp>/efficiency.json` (median of three timed
+blocks, `saryolo efficiency --real --runs 3`, imgsz 320, batch 8, HRSID val images), measured
+back-to-back in one quiet interval so the rows are comparable; the FLOPs counter that produced each row is recorded in the profile
+(`flops_G_counter`: `ultralytics` for the baseline rows because the custom first layer makes
+Ultralytics' counter return 0 for the front end, `thop` for `REAL-004`/`AUG-002`):
+
+| Arm | FPS (real, batch 8) | ms/image | run spread | FLOPs counter |
+| --- | ---: | ---: | ---: | --- |
+| REAL-001 baseline | 113.1 | 8.85 | 3.1 % | ultralytics |
+| REAL-002 SARVO-Lite (s) | 13.7 | 72.88 | 0.3 % | ultralytics |
+| REAL-004 front end | 37.2 | 26.90 | 0.9 % | thop |
+| AUG-002 front end, augmented | 35.2 | 28.43 | 0.8 % | thop |
+| AUG-003 baseline, augmented | 101.2 | 9.89 | 1.9 % | ultralytics |
 
 Reproduce with the four training configs (`REAL-001…006`) followed by
 `python -m saryolo robustness …`, `python -m saryolo gain …`, and
@@ -647,7 +681,8 @@ Reproduce with the four training configs (`REAL-001…006`) followed by
 | The front end leads the baseline on mAP50:95 at three seeds | **preliminary** | +0.0179 mean, inside a small-subset envelope |
 | The trained gain is a per-pixel decision, not collapsed | **final, but seed-sensitive** | `results/gain/*/gain.json`; magnitude 0.113 / 0.021 / 0.025 across seeds (§8) |
 | The front end improves robustness under an acquisition shift | **not supported** | two acquisition axes (radiometric gain, anisotropy) are both null (§8) |
-| SAR-appearance augmentation improves the detector, and more helps | **measured, pilot** | `AUG-001`/`AUG-003`: baseline mAP50:95 0.3012 → 0.3571 → 0.3898 |
+| SAR-appearance augmentation improves the detector, and more helps | **measured, pilot, three seeds** | `AUG-001`/`AUG-003` ladder (+29.4 % relative); seed-checked at ×2: +0.0886/+0.1089/+0.0857, mean +0.0944 ± 0.0126 (`AUG-005`/`AUG-006`) |
+| The front end's real cost is a latency penalty, not a compute one | **final for the given checkpoints** | real-image profile: 3.0× per-image latency vs baseline against only +9 % FLOPs (§9.2) |
 | Augmentation widens the front end's lead | **not supported** | gap shrinks, +0.0139 → +0.0067 → +0.0016 (§8) |
 | Cross-sensor / cross-resolution generalisation | **blocked on GPU** | needs the full release and a second source |
 

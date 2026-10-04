@@ -538,6 +538,7 @@ def _cmd_efficiency(args) -> int:
     profile = profile_model(
         args.weights, imgsz=args.imgsz, device=args.device,
         data_yaml=args.data if args.real else None, batch=args.batch,
+        runs=getattr(args, "runs", 1),
     )
     print(json.dumps(profile, indent=2, default=float))
     if args.out:
@@ -1114,6 +1115,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="time on real dataset images instead of random noise (needs --data)")
     p.add_argument("--data", default=None, help="data.yaml whose val split feeds --real")
     p.add_argument("--batch", type=int, default=1)
+    p.add_argument("--runs", type=int, default=1,
+                   help="independent timed blocks; the reported number is their median "
+                        "(use >1 when comparing arms on a shared CPU)")
     p.set_defaults(func=_cmd_efficiency)
 
     p = sub.add_parser("cross-dataset", help="domain-shift evaluation on another dataset")

@@ -46,6 +46,11 @@ include = ["saryolo*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# `python -m pytest` puts the working directory on sys.path; the bare `pytest` console
+# script does not, so the same suite passed locally and failed everywhere else with
+# `ModuleNotFoundError: No module named 'saryolo'`. CI runs the console script, so the
+# repo root is declared here rather than relying on how the interpreter was invoked.
+pythonpath = ["."]
 filterwarnings = ["ignore::DeprecationWarning", "ignore::UserWarning"]
 markers = [
   "slow: tests that build large models or run training steps",

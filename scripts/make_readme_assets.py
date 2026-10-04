@@ -433,7 +433,15 @@ def _real_arms_facts(ledger: ExperimentLedger) -> dict:
         # both are real-data runs and both appear in the README pilot table. ``MSEED-``
         # runs are seed repeats of a ``REAL-`` arm and are deliberately excluded, so a
         # seed repeat cannot be mistaken for a new arm.
+        #
+        # The README table quotes the **seed-0** row of each arm, so any run at a non-zero
+        # training seed is a repeat rather than a new arm and is excluded on that basis too.
+        # This is the general rule the prefix check was a special case of: without it, the
+        # seed repeats of an *augmented* arm (AUG-005/006) would each have appeared in the
+        # README as if they were separate arms.
         if record.status != "completed" or not exp_id.startswith(("REAL-", "AUG-")):
+            continue
+        if record.train_seed not in (0, None):
             continue
         metrics = record.metrics or {}
         row: dict = {

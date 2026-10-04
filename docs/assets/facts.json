@@ -842,12 +842,14 @@
     "total": 106,
     "config_files": 108,
     "with_results": [],
-    "ledger_runs": 43,
+    "ledger_runs": 48,
     "non_experiment_runs": [
       "AUG-001",
       "AUG-002",
       "AUG-003",
       "AUG-004",
+      "AUG-005",
+      "AUG-006",
       "MSEED-B1",
       "MSEED-B2",
       "MSEED-C1",
@@ -865,7 +867,7 @@
     ]
   },
   "tests": {
-    "total": 476,
+    "total": 479,
     "by_file": {
       "tests/test_arch.py": 61,
       "tests/test_audit_docs.py": 31,
@@ -876,9 +878,9 @@
       "tests/test_conditioning.py": 9,
       "tests/test_conditioning_smoke.py": 6,
       "tests/test_data.py": 24,
-      "tests/test_efficiency.py": 17,
+      "tests/test_efficiency.py": 18,
       "tests/test_efficiency_frontier.py": 16,
-      "tests/test_efficiency_real.py": 7,
+      "tests/test_efficiency_real.py": 8,
       "tests/test_field_mask.py": 9,
       "tests/test_groups.py": 36,
       "tests/test_hard_examples.py": 20,
@@ -887,7 +889,7 @@
       "tests/test_metrics.py": 15,
       "tests/test_peft.py": 32,
       "tests/test_probes.py": 23,
-      "tests/test_repo.py": 29,
+      "tests/test_repo.py": 30,
       "tests/test_rtdetr_arm.py": 6,
       "tests/test_tables.py": 14,
       "tests/test_visualization.py": 8

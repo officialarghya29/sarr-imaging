@@ -187,7 +187,24 @@ Latest additions (this session):
    was run to test (that it *widens* the front end's lead) is **not supported**: the lead
    shrinks monotonically, +0.0139 → +0.0067 → +0.0016, and mAP50 is slightly worse for the arm
    at two views. Recorded honestly as a win for the detector and a negative for the front end;
-   see `paper/RESULTS.md` §3.
+   see `paper/RESULTS.md` §3. The augmentation gain itself was then seed-checked (`AUG-005`,
+   `AUG-006`, the two-view baseline at seeds 1 and 2): the paired gain over the clean-split
+   baseline is positive at **all three seeds** (+0.0886, +0.1089, +0.0857; mean **+0.0944 ±
+   0.0126**, ~9× the seed spread of either arm), so the recommendation rests on a robust number
+   even though the *reason* for it (the gap shrink) is still seed-0 only.
+
+13. ~~Real-input efficiency, and the FLOPs-counter provenance~~ — **measured**. Every cost
+   number used to be single-image on `torch.randn`, which times the *degenerate* branch of a
+   data-dependent first layer, so the profile now supports `saryolo efficiency --real --data …`
+   (timing a real HRSID val batch, recording `latency_source = "real"` and the input range) and
+   `--runs N` (median over independent blocks with the min/max spread kept, because one block
+   cannot see drift — the same checkpoint timed 37 % faster in a quiet session than a loaded
+   one). On real inputs the front end costs **3.0×** the baseline's per-image latency
+   (113.1 → 37.2 FPS at batch 8) against only **+9 %** FLOPs, so it is a *latency* cost, not a
+   compute cost, and `SARVO-Lite (s)` is 8.2×. `measure_flops` now records *which* counter
+   produced each number: Ultralytics' `get_flops` returns 0 for the CFAR arms (not an
+   exception), so those rows are `thop`; the two agree to ~0.2 % on a model both can measure,
+   which is now a test, so a mixed cost column is labelled rather than silent.
 
 What remains on the critical path needs a GPU: run `docs/RUNBOOK_SSDD.md` end to end. Every
 CPU-side prerequisite is now in place.

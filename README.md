@@ -6,7 +6,7 @@
 
 **One SAR detector that generalises to a sensor it has never seen — because it is told *how* the image was acquired, not *which* sensor took it.**
 
-![tests](https://img.shields.io/badge/tests-476_passing-22c55e) ![fabricated](https://img.shields.io/badge/fabricated_results-0-black) ![arch](https://img.shields.io/badge/architectures-98_wired-3b82f6) ![exps](https://img.shields.io/badge/experiments-122_configured-8b5cf6) ![cost](https://img.shields.io/badge/SARVO--Lite-32.55_GFLOPs-0891b2) ![license](https://img.shields.io/badge/license-MIT-94a3b8)
+![tests](https://img.shields.io/badge/tests-479_passing-22c55e) ![fabricated](https://img.shields.io/badge/fabricated_results-0-black) ![arch](https://img.shields.io/badge/architectures-98_wired-3b82f6) ![exps](https://img.shields.io/badge/experiments-124_configured-8b5cf6) ![cost](https://img.shields.io/badge/SARVO--Lite-32.55_GFLOPs-0891b2) ![license](https://img.shields.io/badge/license-MIT-94a3b8)
 
 </div>
 
@@ -51,8 +51,8 @@ SAR image ──► SIA ──► backbone ──► components 1/2/9 ──► 
 | --- | --- |
 | **Stack** | Python 3.10+ · Ultralytics 8.4.155 · PyTorch 2.x |
 | **Architectures** | 98 variants wired; every one builds and runs a forward pass |
-| **Experiments** | 122 configured; each reproducible from a committed YAML |
-| **Tests** | 476 passing — no dataset download and no GPU needed |
+| **Experiments** | 124 configured; each reproducible from a committed YAML |
+| **Tests** | 479 passing — no dataset download and no GPU needed |
 | **Measured** | architecture cost, identity-at-init, protocol correctness, metric correctness, **ten real-data arms** on an HRSID subset (six architecture arms, a three-seed repeat, and four SAR-augmentation arms) |
 | **Not measured** | the **paper's accuracy table** — the pilot is a subset run on a CPU, not the full benchmark |
 
@@ -78,7 +78,7 @@ SAR image ──► SIA ──► backbone ──► components 1/2/9 ──► 
 | | |
 | --- | --- |
 | **What this is** | A complete, reproducible research pipeline for SAR object detection: dataset audit → baseline → ten documented components → ablations → removal tests → robustness → efficiency → cross-dataset → paper. |
-| **What is proven** | The instrument: 476 tests, the baseline reproduces stock YOLO11 exactly, every custom module is an *exact* identity at initialisation and demonstrably not frozen, and the pipeline learns on **real** SAR imagery. |
+| **What is proven** | The instrument: 479 tests, the baseline reproduces stock YOLO11 exactly, every custom module is an *exact* identity at initialisation and demonstrably not frozen, and the pipeline learns on **real** SAR imagery. |
 | **What is *not* proven** | A benchmark result. The only accuracy numbers are a pilot on an HRSID subset (200/60/60, CPU), and the table generators refuse to print a cell that was never measured. |
 | **Why that's the point** | A detector paper is only as strong as its ablations. If the machinery that produces those ablations cannot be trusted, every number downstream is unverifiable. Build the instrument first. |
 
@@ -495,9 +495,33 @@ Notes that belong next to the numbers rather than in a table cell:
   effectively level, so the corruption model is supplying what the analytic statistic did. The
   augmentation is worth keeping for the detector; it is a **negative** for the front-end claim.
   Full numbers in [`paper/RESULTS.md`](paper/RESULTS.md).
+* **The augmentation win survives a seed check; the front end's does not, under augmentation.**
+  The ×2 augmented baseline was re-trained at seeds 1 and 2 (`AUG-005`, `AUG-006`) and paired
+  against the clean baseline at the same seeds: **+0.0886, +0.1089, +0.0857** mAP50:95 at seeds
+  0/1/2, mean **+0.0944 ± 0.0126** — positive at every seed and ~9× the seed spread. The
+  augmented arm is also the *steadier* one (0.3839 ± 0.0097 vs 0.2895 ± 0.0106). The
+  *gap-shrink* that makes the front end redundant is still seed-0 only, and is labelled so.
 * These are **pilot runs**, not a benchmark. Three seeds on one 200-image subset is not
   validation, and nothing here supports a claim about cross-sensor generalisation — that is
   RQ1, and it needs the full dataset.
+
+Cost on **real** images, not random noise — the front end is data-dependent, so a noise timing
+hits a degenerate branch. Measured with `saryolo efficiency --real --runs 3` (imgsz 320, batch 8,
+median of 3 independent blocks, HRSID val images):
+
+| Arm | FPS (real) | ms/image | run spread | vs baseline |
+| --- | ---: | ---: | ---: | ---: |
+| REAL-001 · YOLO11n baseline | 113.1 | 8.85 | 3.1 % | 1.0× |
+| REAL-002 · SARVO-Lite (s) frontier | 13.7 | 72.88 | 0.3 % | 8.2× |
+| REAL-004 · RS-CFAR prototype | 37.2 | 26.90 | 0.9 % | 3.0× |
+| AUG-003 · baseline, augmented ×2 | 101.2 | 9.89 | 1.9 % | 1.1× |
+
+The front end's real penalty (**3.0×** latency) is much larger than its FLOPs increase (+9 %), so
+it is a latency cost rather than a compute cost on CPU. The augmentation recommended instead costs
+nothing at inference — it trains the same graph. The whole table is one machine, back-to-back in
+one quiet interval; the same checkpoint timed 37 % faster here than in an earlier, loaded session,
+which is why the profiler now takes a median over blocks and reports the spread. Full numbers and
+provenance (including which FLOPs counter measured each row) in [`paper/RESULTS.md`](paper/RESULTS.md) §6.
 
 The qualitative panel above is generated from the best measured arm's checkpoint by
 `scripts/make_real_figures.py` (ground truth, predictions, and an overlay so false negatives and
@@ -675,7 +699,7 @@ uv pip install --python .venv/bin/python torch torchvision --index-url https://d
 uv pip install --python .venv/bin/python ultralytics pytest
 source .venv/bin/activate
 
-pytest tests/ -q                                          # 476 tests
+pytest tests/ -q                                          # 479 tests
 python -m saryolo arch --variant all --nc 1               # emit 92 model YAMLs
 python -m saryolo synth-data --out datasets/processed/synthetic_smoke
 python -m saryolo train --exp configs/exp/_smoke_baseline.yaml

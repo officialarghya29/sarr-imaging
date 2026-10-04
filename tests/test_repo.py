@@ -591,6 +591,24 @@ def test_readme_real_data_table_matches_the_measured_arms():
             )
 
 
+def test_the_facts_file_lists_exactly_the_arms_the_pilot_table_declares():
+    """A ledger run must be classified as an arm or as a repeat, never by accident.
+
+    The README pilot table quotes one row per *arm* at seed 0. Seed repeats live in the
+    ledger and in the prose seed tables, not as new rows -- and the general rule is the
+    training seed, not the id prefix. Without this check a seed repeat of an augmented arm
+    (``AUG-005``, seed 1) would have quietly appeared as a new arm in the table, which is
+    exactly the kind of row a reviewer would read as a separate configuration.
+    """
+    facts = json.loads((REPO_ROOT / "docs" / "assets" / "facts.json").read_text())
+    arms = set(facts.get("real", {}))
+    assert arms == set(README_REAL_ROWS.values()), (
+        f"facts.json lists {sorted(arms)} but the pilot table declares "
+        f"{sorted(README_REAL_ROWS.values())}: a new arm or a seed repeat must be classified "
+        "deliberately (see _real_arms_facts)"
+    )
+
+
 def test_readme_cost_table_matches_the_measured_models():
     """The README's cost table must agree with the measured model zoo.
 

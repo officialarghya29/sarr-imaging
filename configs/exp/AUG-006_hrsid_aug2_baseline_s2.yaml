@@ -1,0 +1,27 @@
+# SEED CHECK of the two-view augmentation pilot (baseline arm, seed 2).
+#
+# The third seed of the augmentation comparison. With AUG-003 (seed 0), this and
+# AUG-005 give the two-view augmented baseline the same three seeds that MSEED-B1/B2
+# gave the clean-split baseline, so the gain can be reported as a mean and a spread
+# rather than a single-seed difference.
+#
+#   python -m saryolo train --exp configs/exp/AUG-006_hrsid_aug2_baseline_s2.yaml
+experiment:
+  id: AUG-006
+  name: seed spread (HRSID-augmented x2 baseline, seed 2)
+  description: Seed-spread repeat of AUG-003 at seed 2; a robustness check, not a new arm.
+model: ../models/yolo11n_baseline_n.yaml
+dataset: ../datasets/hrsid_real_aug2.yaml
+train:
+  epochs: 40
+  imgsz: 320
+  batch: 4
+  seed: 2
+  optimizer: auto
+  cos_lr: true
+  patience: 15
+  workers: 4
+  deterministic: true
+notes: >-
+  Same arm, dataset and schedule as AUG-003 (seed 0); the only difference is the
+  training seed. Estimates the seed spread of the augmentation gain.

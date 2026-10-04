@@ -70,6 +70,27 @@ def test_an_empty_image_directory_is_refused_rather_than_timed_on_noise(tmp_path
         load_image_batch(tmp_path / "empty", imgsz=32, batch=2)
 
 
+def test_a_single_run_reports_no_spread_and_a_multi_run_reports_its_spread():
+    """A cost number is only trustworthy if the profiler can say how stable it is.
+
+    One timed block cannot measure drift between blocks, so it must *not* report a spread
+    of zero -- that would read as perfect stability rather than as "not measured here".
+    More than one block must report the median with its min/max, and the median must be
+    inside that range.
+    """
+    model = _cfar_model()
+    single = measure_latency(model, imgsz=32, warmup=1, repeats=2)
+    assert "latency_runs" not in single
+    assert "latency_ms_spread_pct" not in single
+
+    multi = measure_latency(model, imgsz=32, warmup=1, repeats=2, runs=3)
+    assert multi["latency_runs"] == 3
+    assert multi["latency_ms_min"] <= multi["latency_ms"] <= multi["latency_ms_max"]
+    assert multi["latency_ms_spread_pct"] >= 0.0
+    # The FPS/timing identity must hold for the *reported* median, not the last block.
+    assert multi["fps"] == pytest.approx(1000.0 / multi["latency_per_image_ms"], rel=1e-3)
+
+
 def test_measure_latency_rejects_a_batch_that_is_not_rgb_shaped():
     """A malformed batch must fail loudly; a wrong shape would be timed as a wrong model."""
     model = _cfar_model()

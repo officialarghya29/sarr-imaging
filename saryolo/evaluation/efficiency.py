@@ -91,23 +91,41 @@ def count_parameters(model) -> dict:
     return {"params": int(total), "params_M": round(total / 1e6, 3), "params_trainable": int(trainable)}
 
 
-def measure_flops(model, imgsz: int = 640) -> dict:
+def measure_flops(model, imgsz: int = 640, counter: str = "auto") -> dict:
     """FLOPs/GFLOPs for one forward pass at a square input size.
 
-    Prefers Ultralytics' own counter so the number is comparable with the YOLO
-    baseline's published figures, then falls back to ``thop``.
+    Args:
+        counter: ``"auto"`` (default), ``"ultralytics"`` or ``"thop"``. Forcing one is how
+            the two instruments can be checked against each other on a model both can
+            measure, which is what makes it safe to compare a baseline row measured by one
+            against a front-end row measured by the other.
+
+    Prefers Ultralytics' own counter so the number is comparable with the YOLO baseline's
+    published figures, then falls back to ``thop``. Which counter produced the value is
+    recorded as ``flops_G_counter``, because the fallback is not hypothetical: on the CFAR
+    arms ``get_flops`` returns **0.0** rather than raising, so those rows are thop numbers
+    while the baseline row is an Ultralytics number. The two agree to ~0.2 % when both can
+    run (1.613 vs 1.610 G on `baseline_n`), but a cost table that silently mixed counters
+    without saying so would be exactly the kind of unlabelled number this repository bans.
     """
-    result: dict = {"flops_G": None, "flops_G_imgsz": imgsz}
+    if counter not in ("auto", "ultralytics", "thop"):
+        raise ValueError(f"counter must be 'auto', 'ultralytics' or 'thop', got {counter!r}")
+    result: dict = {"flops_G": None, "flops_G_imgsz": imgsz, "flops_G_counter": None}
     try:
+        if counter == "thop":
+            raise ImportError("thop forced")
         from ultralytics.utils.torch_utils import get_flops
 
         flops = get_flops(model, imgsz)
         if flops:
             result["flops_G"] = round(float(flops), 3)
+            result["flops_G_counter"] = "ultralytics"
             return result
     except Exception:
         pass
     try:
+        if counter == "ultralytics":
+            raise ImportError("ultralytics counter forced but it returned nothing for this model")
         import torch
         from thop import profile
 
@@ -124,6 +142,7 @@ def measure_flops(model, imgsz: int = 640) -> dict:
         dummy = torch.zeros(1, 3, imgsz, imgsz, device=device)
         macs, _ = profile(_Wrap(model), inputs=(dummy,), verbose=False)
         result["flops_G"] = round(float(macs) * 2 / 1e9, 3)
+        result["flops_G_counter"] = "thop"
     except Exception as exc:
         result["flops_error"] = str(exc)
     return result
@@ -138,6 +157,7 @@ def measure_latency(
     half: bool = False,
     inputs=None,
     source: str | None = None,
+    runs: int = 1,
 ) -> dict:
     """Measure inference latency and FPS.
 
@@ -153,12 +173,20 @@ def measure_latency(
             default ``torch.randn``) makes the timing representative for a data-dependent
             first layer and is recorded as ``latency_source = "real"``.
         source: Label for the input distribution; inferred from ``inputs`` when omitted.
+        runs: How many independent timed blocks to take, reported as a median with a spread.
+            One block of 50 repeats estimates the *within-run* cost but says nothing about
+            drift between runs on a shared CPU, which is real: the same CFAR checkpoint
+            timed at 29.0 ms in one process and 32.9 ms in another. The reported number is
+            the median over ``runs`` blocks, and the min/max are kept so the spread is
+            visible instead of hidden behind a single average.
 
     Returns:
         Latency in ms (per batch and per image) plus FPS, and the provenance of the input
         distribution it was measured on (``latency_source`` plus its min/max/mean), so a
         cost number cannot be quoted without saying what it was measured on.
     """
+    import statistics
+
     import torch
 
     device = next(model.parameters()).device
@@ -178,24 +206,27 @@ def measure_latency(
         model = model.half()
         x = x.half()
 
+    runs = max(1, int(runs))
+    per_run_ms: list[float] = []
     with torch.no_grad():
         for _ in range(warmup):
             model(x)
         if device.type == "cuda":
             torch.cuda.synchronize()
             torch.cuda.reset_peak_memory_stats()
-        start = time.perf_counter()
-        for _ in range(repeats):
-            model(x)
-        if device.type == "cuda":
-            torch.cuda.synchronize()
-        elapsed = time.perf_counter() - start
+        for _ in range(runs):
+            start = time.perf_counter()
+            for _ in range(repeats):
+                model(x)
+            if device.type == "cuda":
+                torch.cuda.synchronize()
+            per_run_ms.append((time.perf_counter() - start) / repeats * 1000.0)
 
-    per_batch_ms = elapsed / repeats * 1000.0
-    return {
+    per_batch_ms = statistics.median(per_run_ms)
+    out = {
         "latency_ms": round(per_batch_ms, 3),
         "latency_per_image_ms": round(per_batch_ms / batch, 3),
-        "fps": round(batch * repeats / max(elapsed, 1e-9), 2),
+        "fps": round(1000.0 * batch / per_batch_ms, 2),
         "latency_batch": batch,
         "latency_imgsz": imgsz,
         "latency_half": bool(half),
@@ -203,6 +234,16 @@ def measure_latency(
         "latency_source": source,
         **stats,
     }
+    if runs > 1:
+        # Kept for a multi-run measurement only: with a single block the spread would be
+        # 0 by construction and would read as stability rather than as an unmeasured thing.
+        out["latency_runs"] = runs
+        out["latency_ms_min"] = round(min(per_run_ms), 3)
+        out["latency_ms_max"] = round(max(per_run_ms), 3)
+        out["latency_ms_spread_pct"] = round(
+            (max(per_run_ms) - min(per_run_ms)) / max(per_batch_ms, 1e-9) * 100.0, 1
+        )
+    return out
 
 
 def model_size_mb(weights: str | Path) -> float | None:
@@ -218,6 +259,7 @@ def profile_model(
     latency: bool = True,
     data_yaml: str | Path | None = None,
     batch: int = 1,
+    runs: int = 1,
 ) -> dict:
     """Full efficiency profile for a checkpoint.
 
@@ -231,6 +273,8 @@ def profile_model(
             ``latency_source = "real"``. This matters for any model whose first layer is
             data-dependent (see :func:`load_image_batch`).
         batch: Batch size for the real-image timing.
+        runs: Independent timed blocks; see :func:`measure_latency`. Use more than one
+            whenever the number will be compared against another arm.
     """
 
     from saryolo.training.trainer import load_model
@@ -258,7 +302,9 @@ def profile_model(
                 images_dir = root / (cfg.get("val") or "images/val")
                 inputs = load_image_batch(images_dir, imgsz=imgsz, batch=batch)
                 source = "real"
-            out.update(measure_latency(net, imgsz=imgsz, inputs=inputs, source=source, batch=batch))
+            out.update(
+                measure_latency(net, imgsz=imgsz, inputs=inputs, source=source, batch=batch, runs=runs)
+            )
         except Exception as exc:
             out["latency_error"] = str(exc)
     out["weights"] = str(weights)

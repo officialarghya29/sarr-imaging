@@ -129,6 +129,33 @@ def test_the_cheaper_model_is_cheaper_at_every_scale_and_by_a_real_margin():
         )
 
 
+def test_every_flop_count_names_the_counter_that_produced_it():
+    """A cost table that mixes counters without saying so is an unlabelled number.
+
+    Ultralytics' ``get_flops`` returns **0.0** (not an exception) on the CFAR arms, so those
+    rows fall through to ``thop`` while the baseline row is an Ultralytics number. Both are
+    valid, and they agree to ~0.2 % when both run -- but which one measured a row must be
+    recorded, or a reader comparing a baseline row against a front-end row is silently
+    comparing two instruments.
+    """
+    baseline = measure_flops(_build("baseline_n"), imgsz=320)
+    assert baseline["flops_G_counter"] == "ultralytics"
+    # The custom first layer defeats the Ultralytics counter, so this row must be labelled
+    # as the fallback -- and must still be a positive number.
+    cfar = measure_flops(_build("cfar_n"), imgsz=320)
+    assert cfar["flops_G_counter"] == "thop"
+    assert cfar["flops_G"] > 0
+    # The two counters must agree on a model both can measure, so the mixed table is fair.
+    # With the override, the *same* baseline model is forced through thop and compared.
+    forced_thop = measure_flops(_build("baseline_n"), imgsz=320, counter="thop")
+    assert forced_thop["flops_G_counter"] == "thop"
+    assert abs(baseline["flops_G"] - forced_thop["flops_G"]) < 0.05, (
+        f"the two counters disagree on the same model: {baseline['flops_G']} vs {forced_thop['flops_G']}"
+    )
+    with pytest.raises(ValueError, match="counter must be"):
+        measure_flops(_build("baseline_n"), imgsz=320, counter="nvml")
+
+
 def test_measure_flops_is_stable_across_repeated_calls():
     """Profiling is deterministic: the same model and size must give the same number."""
     model = _build("v2_lite_s")

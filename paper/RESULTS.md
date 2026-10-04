@@ -85,6 +85,24 @@ the robustness the analytic statistic was providing, so the front end's *relativ
 shrinks to nothing (the mAP50 gap is even slightly negative at x2: 0.6278 vs 0.6160). The
 augmentation is worth keeping for the detector; it is a **negative** for the front-end claim.
 
+**The augmentation gain itself survives the seed check.** The x1/x2 arms started at a single
+seed, so the ×2 baseline was repeated at seeds 1 and 2 (`AUG-005`, `AUG-006`) and paired against
+the clean-split baseline at the same seeds (`MSEED-B1`, `MSEED-B2`):
+
+| Seed | Clean baseline mAP50:95 | Augmented ×2 baseline mAP50:95 | Paired gain |
+| ---: | ---: | ---: | ---: |
+| 0 (REAL-001 / AUG-003) | 0.3012 | 0.3898 | **+0.0886** |
+| 1 (MSEED-B1 / AUG-005) | 0.2804 | 0.3892 | **+0.1089** |
+| 2 (MSEED-B2 / AUG-006) | 0.2871 | 0.3728 | **+0.0857** |
+| mean ± std | 0.2895 ± 0.0106 | **0.3839 ± 0.0097** | **+0.0944 ± 0.0126** |
+
+The gain is positive at **all three seeds**, its mean is ~9× the seed spread of either arm
+(+0.0944 against ±0.0106/±0.0097), and the augmented arm is also the *more stable* one
+(±0.0097 vs ±0.0106). Unlike the front end's +0.0179, this is not a noise-scale effect: at the
+worst seed the augmentation still buys +0.0857 mAP50:95. On mAP50 the same comparison gives
++0.0579 ± 0.0237 (0.6203 ± 0.0071 vs 0.5624 ± 0.0220). **The augmentation result is robust; the
+front-end gap under augmentation remains single-seed and is labelled as such.**
+
 ## 4. Robustness and acquisition shifts (pilot)
 
 Five-corruption sweep, mean relative mAP50:95 change from each arm's own clean score:
@@ -130,19 +148,109 @@ The cost numbers elsewhere are single-image, measured on ``torch.randn``. Becaus
 front end is *data-dependent* (``log(x + eps)`` and a local mean), a random-noise timing times
 the degenerate branch, so latency is re-measured on a real batch of HRSID val images
 (``saryolo efficiency --real``, imgsz 320, batch 8) and the profile records the input
-distribution it used (``latency_source = "real"``, min 0.012, max 0.996):
+distribution it used (``latency_source = "real"``, min 0.012, max 0.996).
 
-| Arm | FPS (batch 8, real) | ms/image | FPS (single image, noise) |
+The profiler takes a median over independent timed blocks (``--runs 3``) and reports the
+min/max alongside it, because one block cannot see drift on a shared CPU. That mattered: the
+same baseline checkpoint timed at 82.3 FPS in an earlier single-block session and at **113.1
+FPS** here, a 37 % gap that no within-block spread would have revealed. The table below is
+five checkpoints measured **back-to-back in one quiet interval**, which is what makes the rows
+comparable to each other; it is *not* a report of the machine's best case.
+
+| Arm | FPS (batch 8, real) | ms/image | run spread | ms/image (noise) |
+| --- | ---: | ---: | ---: | ---: |
+| REAL-001 · baseline | 113.1 | 8.85 | 3.1 % | 16.2 |
+| REAL-002 · **SARVO-Lite (s)**, frontier | 13.7 | 72.88 | 0.3 % | 80.7 |
+| REAL-004 · CFAR front end | 37.2 | 26.90 | 0.9 % | 27.2 |
+| AUG-002 · CFAR, augmented | 35.2 | 28.43 | 0.8 % | 31.6 |
+| AUG-003 · baseline, augmented | 101.2 | 9.89 | 1.9 % | 15.7 |
+
+**Reading.** On real inputs the front end costs **3.0×** the baseline's per-image latency
+(8.85 → 26.90 ms; 113.1 → 37.2 FPS at batch 8), and the frontier model costs **8.2×**
+(72.9 ms). The FLOPs gap is much smaller (1.76 vs 1.61 G, +9 %), so the front end is a
+*latency* cost rather than a compute cost on this CPU: it is a sequence of small,
+shape-preserving operators that do not vectorise as well as the backbone's dense convolutions.
+That is the number that matters for the cost argument in §7 — the intervention §7 recommends
+instead (augmentation) costs **nothing** here, and the augmented baseline in fact measures
+*faster* than the clean one (101.2 vs 113.1 FPS is within this machine's between-session noise;
+the deployed graph is identical).
+
+FLOPs provenance is recorded per row (``flops_G_counter``): Ultralytics' ``get_flops`` returns
+**0.0** on the CFAR arms rather than raising, so those rows are ``thop`` numbers while the
+baseline rows are Ultralytics numbers. The two counters agree to ~0.2 % on the baseline
+(`baseline_n`: 1.613 vs 1.610 G, cross-checked in `tests/test_efficiency.py`), so the mixed
+column is fair — but it is labelled rather than silently mixed. All numbers are one CPU, one
+machine, no GPU; the earlier single-block figures are kept in `results/efficiency/` history and
+the between-session variation is stated here rather than averaged away.
+
+## 7. Discussion: why augmentation subsumes the front end's benefit
+
+The clearest thing this pilot measured is not the front end at all — it is that **training under
+the SAR degradation model is a bigger lever than any architectural prior we tried, and it is a
+substitute for the one the prototype supplies.** The mechanism is worth stating precisely,
+because "augmentation helped" is not the same claim as "augmentation replaced the front end".
+
+The ratio-space CFAR front end is a *hard-coded local-statistic normaliser*. It computes a
+scale-ordered CFAR statistic of the log-intensity, ratio-normalises it, and hands the backbone a
+view in which the local background scale has already been divided out. Its value, if any,
+consists of presenting a statistics-normalised image to the first convolution block — a spoken
+prior that the network would otherwise have to discover from data.
+
+A SAR-appearance augmentation plan teaches the *same* invariance in the *data* instead. When every
+training image is drawn with speckle, contrast loss, blur, resolution loss and low SNR, the
+first block that learns to be stable to those corruptions is, functionally, learning the
+normalisation the front end hard-codes — except it is free at inference time. The measurement
+shows exactly this substitution: the front end's lead over the baseline shrinks monotonically as
+the training distribution absorbs the corruption model,
+
+| Training data | Baseline mAP50:95 | Front end mAP50:95 | Gap |
 | --- | ---: | ---: | ---: |
-| REAL-001 · baseline | 82.3 | 12.1 | 61.8 |
-| REAL-004 · CFAR front end | 34.5 | 29.0 | 36.7 |
-| AUG-002 · CFAR, augmented | 30.4 | 32.9 | 31.6 |
+| clean | 0.3012 | 0.3151 | **+0.0139** |
+| augmented ×1 | 0.3571 | 0.3638 | **+0.0067** |
+| augmented ×2 | 0.3898 | 0.3914 | **+0.0016** |
 
-Batching helps the baseline more than the front end (82.3 vs 34.5 FPS), so the front end's
-real throughput penalty at this resolution is larger than the single-image figure suggested
-(2.4x rather than 1.7x). Both are CPU numbers on one machine.
+and the gap reaches zero — slightly past it, in fact, on mAP50 (0.6278 baseline vs 0.6160 front
+end at ×2) — even though *both* arms are getting better. That pattern is the signature of a
+substitution rather than of a wall: the information the prior supplies is real, but it becomes
+redundant once the data supplies it too.
 
-## 7. Limitations (stated, not implied)
+**Why this decides the design.** The two interventions sit on opposite sides of the compute
+budget. The front end pays a **permanent inference cost** — +0.151 GFLOPs at 320 and a measured
+**3.0× latency penalty on real inputs** (113.1 → 37.2 FPS at batch 8, §6). Augmentation pays a
+training-time cost only (roughly +60 % training minutes for one extra view) and **nothing at
+inference**: the deployed model is an ordinary YOLO11n. When the two deliver the same accuracy,
+the one that is free at test time wins, and the measurement says augmentation delivers more, not
+the same: **+0.0886 mAP50:95** for the baseline from two augmented views, against **+0.0139** for
+the front end from clean data. Across every comparison available here, augmentation dominates on
+both accuracy and cost.
+
+**Scope of improvement, stated plainly.** The honest ranking of levers in this repository, by
+measured accuracy movement per unit of cost, is now:
+
+1. **Augmentation** — biggest accuracy movement in the repository (+29.4 % relative on
+   mAP50:95), zero inference cost. This is the design to spend effort on.
+2. **Model capacity** — the SARVO-Lite (s) frontier gains +0.0275 mAP50:95 over the baseline at
+   ~4× the compute (REAL-002 vs REAL-001); a larger model, not a better inductive bias.
+3. **The CFAR front end** — a small, seed-consistent but pilot-scale gain (+0.0179 mean mAP50:95
+   over three seeds) at a 3.0× real-time penalty, and it shrinks to nothing once (1) is applied.
+
+So the front end is worth keeping as a **cheap, self-contained ablation** — it is the mechanism
+the project set out to test, it clears both of its named falsifiers, and it is individually
+interpretable — but the evidence does not license promoting it to the headline. The headline
+should be the detector trained under the SAR degradation model.
+
+**What this comparison can and cannot settle.** The augmentation *gain* is now seed-checked: the
+×2 baseline was repeated at seeds 1 and 2 (`AUG-005`, `AUG-006`, §3) and beats the clean baseline
+at every seed by +0.0857…+0.1089 mAP50:95, so "augmentation helps, a lot" is a robust claim and not
+a lucky seed. What remains single-seed is the thing §7 actually depends on — the **×1/×2 gap
+shrink**, which is measured only at seed 0. Two further gaps: the **matched-cost control was not
+re-run under augmentation** (on clean data the parameter-identical conv stem, REAL-006, failed to
+match the prototype, which is what makes the clean gain interesting, but whether *it too* is
+subsumed is unmeasured); and this is **one augmentation ladder, one dataset, one machine**. The
+pattern is a substitution mechanism plus a monotone three-point trend, and both should be
+re-derived on the full release before the substitution is claimed at paper grade.
+
+## 8. Limitations (stated, not implied)
 
 * One dataset (HRSID), one subset (200/60/60), one machine, **no GPU**.
 * The primary comparison is **three seeds** — a noise check, not validation.
@@ -151,3 +259,5 @@ real throughput penalty at this resolution is larger than the single-image figur
 * The front end costs ~40 % of CPU throughput at this resolution.
 * Negative results (the two acquisition axes, the augmentation hypothesis) are kept here rather
   than moved to an appendix.
+* The augmented **accuracy** comparison now has three seeds (§3); the *gap-shrink* comparison —
+  the one §7 rests on — is still seed-0 only, and §7 says so.

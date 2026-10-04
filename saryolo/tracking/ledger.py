@@ -14,6 +14,7 @@ is stored as ``None``, and downstream table generation renders it as
 
 from __future__ import annotations
 
+import contextlib
 import csv
 import json
 import os
@@ -25,6 +26,37 @@ from pathlib import Path
 from .env import capture_environment, hash_config
 
 __all__ = ["ExperimentRecord", "ExperimentLedger"]
+
+
+try:  # POSIX advisory locking; the repo's runs are on Linux, Windows falls back below.
+    import fcntl
+
+except ImportError:  # pragma: no cover - exercised only on Windows
+    fcntl = None  # type: ignore[assignment]
+
+
+@contextlib.contextmanager
+def _exclusive(path: Path):
+    """Serialise writers on a lock file, so concurrent runs cannot corrupt the ledger.
+
+    Training jobs are launched in parallel, and before this lock existed two processes
+    appending at the same time raced on the *shared* CSV temp path: one would
+    ``os.replace`` it away while the other still expected it, raising
+    ``FileNotFoundError`` and killing an otherwise healthy run. A unique temp name per
+    process fixes the replace race; this lock also keeps the read-modify-write of the
+    derived CSV from interleaving. On platforms without ``fcntl`` it degrades to a
+    no-op, because a ledger write must never be the thing that stops a run.
+    """
+    if fcntl is None:  # pragma: no cover - Windows only
+        yield
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+") as fh:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
 
 METRIC_KEYS = (
     "mAP50",
@@ -93,13 +125,22 @@ class ExperimentLedger:
         self.root.mkdir(parents=True, exist_ok=True)
         self.jsonl_path = self.root / "experiments.jsonl"
         self.csv_path = self.root / "experiments.csv"
+        self.lock_path = self.root / ".experiments.lock"
 
     # ------------------------------------------------------------------ writing
     def append(self, record: ExperimentRecord) -> ExperimentRecord:
-        """Append a record (JSONL) and refresh the CSV view."""
-        with self.jsonl_path.open("a") as fh:
-            fh.write(json.dumps(asdict(record), default=str) + "\n")
-        self._rewrite_csv()
+        """Append a record (JSONL) and refresh the CSV view.
+
+        The whole append is serialised across processes (see :func:`_exclusive`), and the
+        JSONL line is written in a single call so a reader never sees a half-written
+        record even if the lock is unavailable on this platform.
+        """
+        line = json.dumps(asdict(record), default=str) + "\n"
+        with _exclusive(self.lock_path):
+            with self.jsonl_path.open("a") as fh:
+                fh.write(line)
+                fh.flush()
+            self._rewrite_csv()
         return record
 
     def start(self, experiment_id: str, model: str, dataset: str, config: dict | None = None, **kwargs) -> ExperimentRecord:
@@ -158,14 +199,24 @@ class ExperimentLedger:
         return max(candidates, key=lambda r: r.metrics[metric]) if candidates else None
 
     def _rewrite_csv(self) -> None:
-        """Rewrite the CSV view; skipped for very large ledgers."""
+        """Rewrite the CSV view; skipped for very large ledgers.
+
+        The temp file name is unique per process. A single fixed temp path meant that two
+        concurrent writers could both open it, so whichever replaced first removed the file
+        the other was about to replace -- a crash unrelated to the run itself.
+        """
         rows = [r.flatten() for r in self.load()]
         if not rows:
             return
         fields = list(rows[0].keys())
-        tmp = self.csv_path.with_suffix(".csv.tmp")
-        with tmp.open("w", newline="") as fh:
-            writer = csv.DictWriter(fh, fieldnames=fields)
-            writer.writeheader()
-            writer.writerows(rows)
-        os.replace(tmp, self.csv_path)
+        tmp = self.csv_path.with_name(f"{self.csv_path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+        try:
+            with tmp.open("w", newline="") as fh:
+                writer = csv.DictWriter(fh, fieldnames=fields)
+                writer.writeheader()
+                writer.writerows(rows)
+            os.replace(tmp, self.csv_path)
+        finally:
+            # Never leave a stray temp file behind, even if the replace failed.
+            with contextlib.suppress(FileNotFoundError):
+                tmp.unlink()
