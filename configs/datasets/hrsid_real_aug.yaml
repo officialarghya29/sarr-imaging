@@ -1,0 +1,15 @@
+# SAR-augmented HRSID subset: the real 200/60/60 pilot split with every training
+# image plus one SAR-augmented view (speckle / low contrast / blur / low resolution /
+# low SNR), val and test left *clean* so the measured number is still on real,
+# undeformed imagery.
+#
+# Built by `python -m saryolo augment --data configs/datasets/hrsid_real.yaml
+# --views 1 --out datasets/processed/hrsid_real_aug`; the per-file draw and severity
+# are recorded in datasets/processed/hrsid_real_aug/manifest.json.
+path: datasets/processed/hrsid_real_aug
+train: images/train
+val: images/val
+test: images/test
+nc: 1
+names:
+  0: ship

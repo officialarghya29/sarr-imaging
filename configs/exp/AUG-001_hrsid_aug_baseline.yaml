@@ -1,0 +1,29 @@
+# SAR-APPEARANCE AUGMENTATION PILOT (baseline arm) -- real HRSID subset.
+#
+# Pairs with AUG-002. Both train on the SAR-augmented training split
+# (configs/datasets/hrsid_real_aug.yaml: each source image plus one augmented view)
+# and are evaluated on the *clean* test split, so the two AUG arms differ only in
+# the first representation and the comparison to REAL-001/REAL-004 measures whether
+# training under the SAR degradation model widens the front end's lead. Identical
+# schedule to REAL-001 otherwise.
+#
+#   python -m saryolo train --exp configs/exp/AUG-001_hrsid_aug_baseline.yaml
+experiment:
+  id: AUG-001
+  name: HRSID-augmented baseline (YOLO11n, no front end)
+  description: Baseline trained on the SAR-augmented HRSID subset; pairs with AUG-002.
+model: ../models/yolo11n_baseline_n.yaml
+dataset: ../datasets/hrsid_real_aug.yaml
+train:
+  epochs: 40
+  imgsz: 320
+  batch: 4
+  seed: 0
+  optimizer: auto
+  cos_lr: true
+  patience: 15
+  workers: 4
+  deterministic: true
+notes: >-
+  Real HRSID subset, SAR-augmented train split (400 images), clean test. Pilot only;
+  the full release has 5,604 images.

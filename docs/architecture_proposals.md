@@ -548,6 +548,24 @@ small) advantage comes from. The advantage it does show lives on the *texture* c
 acquisition-transfer story the motivation tells. That gap is the most useful thing this pilot
 produced.
 
+**A third test — training under the SAR degradation model — is a large win for the detector and
+another negative for the front end.** The natural follow-up is whether augmenting training with
+the same SAR corruption model widens the front end's edge, since the model would no longer see
+clean imagery only (`AUG-001`/`AUG-002`, augmented train split, clean test split):
+
+| Context | Baseline mAP50:95 | CFAR mAP50:95 | Gap |
+| --- | ---: | ---: | ---: |
+| no augmentation (REAL-001 / REAL-004) | 0.3012 | 0.3151 | **+0.0139** |
+| SAR-augmented train (AUG-001 / AUG-002) | 0.3571 | 0.3638 | **+0.0067** |
+
+Augmentation lifts the *baseline* from 0.3012 to 0.3571 mAP50:95 (+18.6 % relative) — the
+largest accuracy movement anywhere in this repository — and it is worth keeping on that ground
+alone. But it does **not** widen the front end's lead; the lead **halves**. The honest reading is
+that the corruption model gives both arms much of the robustness the analytic statistic was
+providing, so the front end's relative contribution shrinks even as the detector improves. The
+hypothesis that augmentation would make the front end look better is **not supported**, and it is
+recorded as a negative.
+
 **What the test does not settle.** The absolute effect is small. A mean mAP50:95 gap of
 +0.018 measured on **60 test images, one 200-image training subset, one CPU** is above the
 seed spread on this sample and below what anyone should call a result; the primary metric
@@ -606,6 +624,8 @@ A paper-style write-up of this interface is drafted in `docs/methods_rs_cfar.md`
 | REAL-006 | matched-cost conv stem | control (no statistic) | 0.5654 | 0.3021 |
 | MSEED-B1/B2 | baseline seeds 1, 2 | seed spread | 0.5375 / 0.5792 | 0.2804 / 0.2871 |
 | MSEED-C1/C2 | front end seeds 1, 2 | pair | 0.5571 / 0.5838 | 0.3036 / 0.3036 |
+| AUG-001 | baseline, SAR-augmented train | augmentation control | 0.6060 | 0.3571 |
+| AUG-002 | front end, SAR-augmented train | augmentation arm | 0.6049 | 0.3638 |
 
 Reproduce with the four training configs (`REAL-001…006`) followed by
 `python -m saryolo robustness …`, `python -m saryolo gain …`, and
@@ -622,6 +642,8 @@ Reproduce with the four training configs (`REAL-001…006`) followed by
 | The front end leads the baseline on mAP50:95 at three seeds | **preliminary** | +0.0179 mean, inside a small-subset envelope |
 | The trained gain is a per-pixel decision, not collapsed | **final, but seed-sensitive** | `results/gain/*/gain.json`; magnitude 0.113 / 0.021 / 0.025 across seeds (§8) |
 | The front end improves robustness under an acquisition shift | **not supported** | two acquisition axes (radiometric gain, anisotropy) are both null (§8) |
+| SAR-appearance augmentation improves the detector | **measured, pilot** | `AUG-001`: baseline mAP50:95 0.3012 → 0.3571 |
+| Augmentation widens the front end's lead | **not supported** | gap halves, +0.0139 → +0.0067 (§8) |
 | Cross-sensor / cross-resolution generalisation | **blocked on GPU** | needs the full release and a second source |
 
 ### 9.4 The naming decision

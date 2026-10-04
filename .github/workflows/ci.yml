@@ -1,0 +1,37 @@
+name: CI
+
+# The repository's central rule is that every stated number is measured and every
+# module is an exact identity at initialisation, and both are enforced by tests that
+# need neither a GPU nor a dataset download. This workflow runs exactly that pair --
+# lint and the suite -- so a pushed commit cannot silently regress either.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Test
+        run: pytest -q

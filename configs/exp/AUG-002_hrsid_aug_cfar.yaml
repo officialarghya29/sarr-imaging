@@ -1,0 +1,29 @@
+# SAR-APPEARANCE AUGMENTATION PILOT (prototype arm) -- real HRSID subset.
+#
+# The recommended ratio-space CFAR front end (docs/architecture_proposals.md §2),
+# trained on the SAR-augmented train split and evaluated on the clean test split.
+# Pairs with AUG-001: the gap AUG-002 - AUG-001 is compared with the no-augmentation
+# gap REAL-004 - REAL-001 to test whether training under the SAR degradation model
+# widens the front end's lead. Schedule identical to AUG-001.
+#
+#   python -m saryolo train --exp configs/exp/AUG-002_hrsid_aug_cfar.yaml
+experiment:
+  id: AUG-002
+  name: HRSID-augmented SARVO prototype (ratio-space CFAR front end)
+  description: >-
+    CFAR front end trained on the SAR-augmented HRSID subset; pairs with AUG-001.
+model: ../models/yolo11n_cfar_n.yaml
+dataset: ../datasets/hrsid_real_aug.yaml
+train:
+  epochs: 40
+  imgsz: 320
+  batch: 4
+  seed: 0
+  optimizer: auto
+  cos_lr: true
+  patience: 15
+  workers: 4
+  deterministic: true
+notes: >-
+  Real HRSID subset, SAR-augmented train split (400 images), clean test. Pilot only,
+  not the paper's result.
