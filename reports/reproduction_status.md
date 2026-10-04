@@ -12,14 +12,15 @@ Every item below was run and observed in this environment.
 
 | What | Command | Observed result |
 | --- | --- | --- |
-| Test suite | `.venv/bin/python -m pytest -q` | **479 passed** |
+| Test suite | `.venv/bin/python -m pytest -q` | **482 passed** |
 | Baseline parity with stock YOLO11 | `pytest tests/test_arch.py -k baseline` | exact published counts (n: 2,624,080; s: 9,458,752 at 80 classes) |
-| All variants build and forward | `pytest tests/test_arch.py -k every_variant` | 92 variants pass |
+| All variants build and forward | `pytest tests/test_arch.py -k every_variant` | 98 variants pass |
 | Module identity at init | `pytest tests/test_arch.py -k identity` | `max\|f(x)−x\| = 0.0e+00` for all |
 | Architecture cost benchmark | `python -m saryolo bench --variants v2_full v2_lite_s ...` | see §2 |
 | Efficiency profiling | `pytest tests/test_efficiency.py` | 18 passed |
-| Paper tables generate | `python -m saryolo assets` | 18 files written; every accuracy cell `TBD` |
-| README charts regenerate | `python scripts/make_readme_assets.py` | 10 SVGs + `facts.json`, byte-reproducible |
+| Paper tables generate | `python -m saryolo assets` | 20 files written (10 tables × md/tex); every *benchmark* accuracy cell `TBD`, the real-data pilot table complete |
+| README charts regenerate | `python scripts/make_readme_assets.py` | 10 SVGs + PNG twins + `facts.json`, byte-reproducible |
+| Real-input efficiency | `python -m saryolo efficiency --real --runs 3 …` | 5 checkpoints profiled; front end costs 3.0× baseline latency |
 
 ## 2. Measured cost (architecture, no training required)
 

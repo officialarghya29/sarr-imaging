@@ -10,9 +10,13 @@ scale-wise routing the paper's central claim depends on.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from saryolo.evaluation.metrics import AREA_RANGES, Detection, compute_ap
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _det(image: str, cls: int, xyxy, score: float = 0.9) -> Detection:
@@ -256,3 +260,148 @@ def test_predict_to_labels_returns_the_directory_it_wrote(tmp_path, monkeypatch)
     labels = metrics.predict_to_labels("w.pt", tmp_path / "imgs", out_dir=out)
     assert Path(labels) == (out / "labels")
     assert sorted(p.name for p in Path(labels).glob("*.txt")) == ["img.txt"]
+
+
+def test_ground_truth_can_be_read_from_any_split_not_only_validation(tmp_path):
+    """The split is a parameter, because a caller that scored another split was silently wrong.
+
+    ``mine-hard`` predicts on the *train* images and then scored them against the *val* ground
+    truth: with the split hard-coded to ``val``, every predicted image had no labels and every
+    labelled image had no predictions, so the miner ranked images by raw spurious-detection
+    count and reported success. This pins the resolution rule that made it wrong.
+    """
+    import cv2
+    import numpy as np
+
+    from saryolo.evaluation.metrics import load_yolo_ground_truth
+
+    root = tmp_path / "ds"
+    for split, n_boxes in (("train", 2), ("val", 1)):
+        (root / "images" / split).mkdir(parents=True)
+        (root / "labels" / split).mkdir(parents=True)
+        img = (np.ones((64, 64, 3), dtype=np.uint8) * 200)
+        cv2.imwrite(str(root / "images" / split / "a.png"), img)
+        (root / "labels" / split / "a.txt").write_text(
+            "".join("0 0.5 0.5 0.1 0.1\n" for _ in range(n_boxes))
+        )
+    (tmp_path / "data.yaml").write_text(
+        f"path: {root}\ntrain: images/train\nval: images/val\nnc: 1\nnames:\n  0: ship\n"
+    )
+    cfg = tmp_path / "data.yaml"
+    # The default must stay the validation split: every evaluation caller depends on it.
+    assert len(load_yolo_ground_truth(cfg)) == 1
+    assert len(load_yolo_ground_truth(cfg, split="train")) == 2
+    assert len(load_yolo_ground_truth(cfg, split="val")) == 1
+
+
+# ------------------------------------------------------- agreement with the COCO reference
+def _coco_reference(dets, gts, nc: int, images: dict[str, tuple[int, int]]):
+    """mAP50:95 for the same boxes, computed by pycocotools itself.
+
+    This is the only external referee available for the repository's metric, and it is the
+    right one: COCO AP is what the module claims to implement, and pycocotools is the
+    definition. Returns ``None`` when pycocotools is not installed so the caller can skip.
+    """
+    pytest.importorskip("pycocotools.cocoeval")
+    import json
+    import tempfile
+    from pathlib import Path
+
+    from pycocotools.coco import COCO
+    from pycocotools.cocoeval import COCOeval
+
+    stems = sorted(images)
+    ids = {s: i + 1 for i, s in enumerate(stems)}
+    gt_json = {
+        "images": [
+            {"id": ids[s], "width": images[s][0], "height": images[s][1], "file_name": s}
+            for s in stems
+        ],
+        "annotations": [],
+        "categories": [{"id": c, "name": str(c)} for c in range(1, nc + 1)],
+    }
+    for i, g in enumerate(gts, start=1):
+        x1, y1, x2, y2 = g.xyxy
+        gt_json["annotations"].append(
+            {
+                "id": i,
+                "image_id": ids[g.image],
+                "category_id": g.cls + 1,
+                "bbox": [x1, y1, x2 - x1, y2 - y1],
+                "area": max((x2 - x1) * (y2 - y1), 0.0),
+                "iscrowd": 0,
+            }
+        )
+    dt_json = [
+        {
+            "image_id": ids[d.image],
+            "category_id": d.cls + 1,
+            "bbox": [d.xyxy[0], d.xyxy[1], d.xyxy[2] - d.xyxy[0], d.xyxy[3] - d.xyxy[1]],
+            "score": d.score,
+        }
+        for d in dets
+    ]
+    tmp = Path(tempfile.mkdtemp())
+    (tmp / "gt.json").write_text(json.dumps(gt_json))
+    (tmp / "dt.json").write_text(json.dumps(dt_json))
+    coco = COCO(str(tmp / "gt.json"))
+    ev = COCOeval(coco, coco.loadRes(str(tmp / "dt.json")), "bbox")
+    ev.params.maxDets = [1, 10, 100]
+    ev.evaluate()
+    ev.accumulate()
+    # `stats` is only populated by ``summarize`` -- reading it after ``accumulate`` alone
+    # raises IndexError on an empty list, which would look like an evaluator failure.
+    ev.summarize()
+    return float(ev.stats[0]), float(ev.stats[1])
+
+
+def test_the_ap_implementation_reproduces_pycocotools():
+    """Our COCO AP must equal the reference implementation on boxes it did not choose.
+
+    The metric is the only thing standing between a trained model and every claim in the
+    paper, and it is implemented here rather than imported. Ultralytics' validator reports a
+    *different* mAP50:95 for the same checkpoint (a detection-path tail difference at
+    conf=0.001, not an AP difference), so "which evaluator" has to be settled by an outside
+    referee. This is that referee.
+    """
+    images = {"a": (100, 100), "b": (80, 120), "c": (64, 64)}
+    # Overlapping boxes, a miss, a duplicate, a false positive, and a multi-class spread --
+    # the cases where a subtly wrong matching rule shows up and a single perfect box does not.
+    gts = [
+        _det("a", 0, (10, 10, 40, 40)),
+        _det("a", 1, (50, 50, 80, 90)),
+        _det("b", 0, (5, 5, 25, 25)),
+        _det("c", 0, (30, 30, 35, 35)),
+    ]
+    dets = [
+        _det("a", 0, (11, 11, 41, 41), 0.95),
+        _det("a", 0, (12, 9, 39, 42), 0.80),
+        _det("a", 1, (48, 52, 82, 88), 0.70),
+        _det("b", 0, (6, 6, 26, 26), 0.60),
+        _det("b", 1, (1, 1, 9, 9), 0.50),
+        _det("c", 0, (28, 28, 36, 36), 0.40),
+    ]
+    ours = compute_ap(dets, gts, nc=2, area_range=AREA_RANGES["all"])
+    ref = _coco_reference(dets, gts, 2, images)
+    assert ref is not None
+    assert ours["AP"] == pytest.approx(ref[0], abs=1e-3), (
+        f"COCO AP disagrees with pycocotools: ours {ours['AP']:.4f} vs reference {ref[0]:.4f}"
+    )
+    assert ours["AP50"] == pytest.approx(ref[1], abs=1e-3)
+
+
+def test_the_reported_protocol_field_says_how_the_number_was_measured():
+    """A metrics dict must name its protocol, so two evaluators cannot be silently mixed."""
+    cfg = REPO_ROOT / "configs" / "datasets" / "hrsid_real.yaml"
+    ckpt = REPO_ROOT / "results" / "runs" / "REAL-001" / "weights" / "best.pt"
+    if not ckpt.exists() or not (REPO_ROOT / "datasets/processed/hrsid_real/images/val").is_dir():
+        pytest.skip("HRSID subset or checkpoint not present; protocol field not exercised here")
+    from saryolo.evaluation.metrics import evaluate_detections
+
+    metrics = evaluate_detections(ckpt,
+    cfg,
+    imgsz=320,
+    out_dir="/tmp/m_protocol",
+    )
+    assert metrics["eval_protocol"] == "coco"
+    assert metrics["eval_max_det"] == 100

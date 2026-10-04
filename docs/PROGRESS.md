@@ -206,6 +206,37 @@ Latest additions (this session):
    exception), so those rows are `thop`; the two agree to ~0.2 % on a model both can measure,
    which is now a test, so a mixed cost column is labelled rather than silent.
 
+14. ~~Full-repository audit (every component, every subcommand, every config)~~ — **done**. All
+   59 package modules import, all 99 model YAMLs parse, all 124 experiment configs and 9 dataset
+   configs load, all 19 CLI subcommands respond and the ones that can run locally were executed
+   (train/eval/bench/robustness/gain/efficiency/mine-hard/augment/assets/check-data/stats/
+   ledger/loso). Four genuine defects were found and fixed:
+
+   * **The hard-example miner scored the wrong split.** `load_yolo_ground_truth` was hard-coded
+     to the validation split while `mine-hard` predicts on the train split, so every predicted
+     image had no labels and every labelled image had no predictions: the miner ranked images
+     by raw spurious-detection count against an empty reference and reported success. The split
+     is now a parameter, the miner reads ground truth from the split it predicted on, and a
+     prediction with no ground truth raises instead of counting every correct detection as
+     spurious.
+   * **Two evaluators were being mixed without saying so.** The ledger records Ultralytics'
+     training-time validator; `saryolo eval`, `robustness` and `cross-dataset` use this
+     repository's own COCO implementation. On the same REAL-001 checkpoint they report 0.5706 /
+     **0.3012** and 0.5709 / **0.2901** mAP50:95. That is not an AP bug: the repository's
+     evaluator reproduces **pycocotools exactly** on the identical detections (now a test), and
+     the gap comes from the two *inference paths* differing in the low-confidence tail (3331 vs
+     3502 boxes at conf=0.001). Metrics now carry an `eval_protocol` field so a quoted number
+     names its evaluator.
+   * **The component-numbering guard was vacuous.** It parsed a table row that never matched, so
+     it passed on an empty list and could not fail whatever the README said; it now parses the
+     numbered table and refuses an empty one.
+   * **Stale counts** in `reports/reproduction_status.md` (92 variants, 18 table files) were
+     corrected against the repository (98, 20).
+
+   The README was rebuilt around the project banner, cut from 1,008 lines to a focused document
+   that keeps the measured tables, the two guarantees, the component numbering and the
+   limitations, and drops the rest to `docs/`.
+
 What remains on the critical path needs a GPU: run `docs/RUNBOOK_SSDD.md` end to end. Every
 CPU-side prerequisite is now in place.
 

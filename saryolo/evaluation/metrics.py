@@ -129,8 +129,10 @@ def _label_path_for(image_path: Path) -> Path:
     return candidates[0]
 
 
-def _split_index(data_yaml: str | Path) -> tuple[dict[str, Path], dict[str, Path], list[str]]:
-    """Resolve the validation split to ``(images by stem, labels by stem, class names)``.
+def _split_index(
+    data_yaml: str | Path, split: str = "val"
+) -> tuple[dict[str, Path], dict[str, Path], list[str]]:
+    """Resolve one split to ``(images by stem, labels by stem, class names)``.
 
     Handles both forms a split can take, because a split is allowed to be either a directory
     of images or a ``.txt`` file listing them -- ultralytics accepts both, and this project now
@@ -138,12 +140,18 @@ def _split_index(data_yaml: str | Path) -> tuple[dict[str, Path], dict[str, Path
     ``images`` -> ``labels`` on a *list* entry produced a label "directory" that was really a
     file, so no ground truth was ever read and every metric came back ``None`` while the run
     still reported success.
+
+    The split is a parameter rather than the hard-coded ``val`` it used to be, because the
+    hard-coding was a real bug: ``mine-hard`` predicts on the *train* images and then read the
+    *val* ground truth, so every predicted image had no labels and every labelled image had no
+    predictions. The miner ranked images by the number of spurious detections they had, which
+    is not a difficulty signal, and nothing raised -- the two halves simply never met.
     """
     from saryolo.data.yolo import load_data_config
 
     root, cfg = load_data_config(data_yaml)
-    split = cfg.get("val") or cfg.get("val_images") or "images/val"
-    entry = Path(split) if Path(split).is_absolute() else root / split
+    key = cfg.get(split) or cfg.get(f"{split}_images") or f"images/{split}"
+    entry = Path(key) if Path(key).is_absolute() else root / key
     names = cfg.get("names") or [f"class_{i}" for i in range(int(cfg.get("nc", 1)))]
     if isinstance(names, dict):
         names = [names[k] for k in sorted(names)]
@@ -166,9 +174,14 @@ def _split_index(data_yaml: str | Path) -> tuple[dict[str, Path], dict[str, Path
     return image_index, label_index, list(names)
 
 
-def load_yolo_ground_truth(data_yaml: str | Path) -> list[Detection]:
-    """Read all validation-split boxes from YOLO label files in absolute pixels."""
-    image_index, label_index, _ = _split_index(data_yaml)
+def load_yolo_ground_truth(data_yaml: str | Path, split: str = "val") -> list[Detection]:
+    """Read one split's boxes from YOLO label files in absolute pixels.
+
+    Defaults to the validation split, which is what every evaluation caller wants; the split is
+    exposed because a caller that scored a *different* split (the hard-example miner scoring the
+    train images it predicted on) must read ground truth from that same split.
+    """
+    image_index, label_index, _ = _split_index(data_yaml, split=split)
     gts: list[Detection] = []
     for stem, label in sorted(label_index.items()):
         if not label.exists():
@@ -534,6 +547,16 @@ def evaluate_detections(
         "num_gt": len(gts),
         "num_det": len(dets),
         "classes": class_names,
+        # Which protocol produced these numbers, on the record. This evaluator and the
+        # training-time Ultralytics validator do not agree exactly on this subset for the
+        # same checkpoint (0.2901 vs 0.3012 mAP50:95 on REAL-001), because the two inference
+        # paths differ in the low-confidence tail of the detection distribution (3331 vs 3502
+        # boxes at conf=0.001), not because either AP implementation is wrong: this one
+        # reproduces pycocotools to 4 decimals on the identical detections. A quoted metric
+        # therefore has to say which evaluator it came from, and now it does.
+        "eval_protocol": "coco",
+        "eval_conf": float(conf),
+        "eval_max_det": 100,
     }
     for label in ("small", "medium", "large"):
         stats = compute_ap(dets, gts, nc, AREA_RANGES[label])

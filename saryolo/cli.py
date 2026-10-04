@@ -609,11 +609,23 @@ def _cmd_mine_hard(args) -> int:
         )
 
     preds = load_yolo_predictions(labels, mined_dir)
-    gts = load_yolo_ground_truth(data)
+    # Ground truth from the SAME split the predictions came from. This used to read the val
+    # split while predicting on train, so the predicted images had no labels and the labelled
+    # images had no predictions: the miner ranked train images by raw spurious-detection count
+    # against an empty reference and reported success. Scoring the mined split is the only
+    # reading under which the failure taxonomy means anything.
+    gts = load_yolo_ground_truth(data, split=args.split)
     if not gts:
         raise SystemExit(
-            f"no ground truth found for the val split of {data}; "
+            f"no ground truth found for the {args.split!r} split of {data}; "
             "difficulty scoring would be meaningless"
+        )
+    unmatched = {d.image for d in preds} - {g.image for g in gts}
+    if unmatched:
+        raise SystemExit(
+            f"{len(unmatched)} predicted image(s) have no ground truth in the {args.split!r} "
+            f"split (e.g. {sorted(unmatched)[:3]}); scoring them would count every correct "
+            "detection as spurious. Predictions and ground truth must come from one split."
         )
 
     contrast = image_contrast_map(data, split=args.split, limit=args.contrast_limit)

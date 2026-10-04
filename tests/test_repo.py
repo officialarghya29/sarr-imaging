@@ -723,14 +723,33 @@ def test_the_measured_counts_are_not_silently_zero():
 
 
 def test_readme_states_every_component_number_in_its_table():
-    """The component table and the architecture diagram must not disagree."""
+    """The component table and the architecture diagram must not disagree.
+
+    Read as a numbered table (``| 3 | Component 3 — ... |``) rather than as the single
+    ``| 1 | 2 | ... |`` row this once parsed: that row matched nothing, so the check passed
+    on an empty list and could not fail no matter what the README said. The non-vacuity
+    assertion below is what makes the numbering a claim instead of a formality.
+    """
     import re
 
     readme = (REPO_ROOT / "README.md").read_text()
-    table = readme.split("**Component numbering**")[1].split("\n\n")[0]
-    numbers = [int(n) for n in re.findall(r"^\| (\d+) \|$", table, flags=re.MULTILINE)]
+    after = readme.split("**Component numbering**", 1)[1]
+    # Walk the table rows rather than taking the text up to the first blank line: the phrase
+    # is followed by a blank line and then the table, so the old slicing grabbed the caption
+    # and never reached a single row.
+    numbers: list[int] = []
+    started = False
+    for line in after.splitlines():
+        if line.startswith("|"):
+            found = re.match(r"^\| (\d+) \|", line)
+            if found:
+                numbers.append(int(found.group(1)))
+                started = True
+        elif started:
+            break
+    assert numbers, "the component-numbering table is missing or unparseable -- every component must be numbered"
     assert numbers == list(range(1, len(numbers) + 1)), (
-        f"the component-numbering row must run 1..N with no gaps: {numbers}"
+        f"the component-numbering table must run 1..N with no gaps: {numbers}"
     )
     # Every number must be described as a Component somewhere in the prose as well.
     for n in numbers:
