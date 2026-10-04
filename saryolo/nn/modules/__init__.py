@@ -46,6 +46,7 @@ from .fusion import AdaptiveMultiScaleFusion
 from .input_adapter import SARInputAdapter
 from .refinement import TargetAwareRefinement
 from .speckle import SpeckleAwareFeatureModule
+from .ssac import ScatterSelectiveRefinement
 from .target_prior import TargetPriorModulation
 
 __all__ = [
@@ -61,6 +62,8 @@ __all__ = [
     "SARInputAdapter",
     # SARVO prototype: the proposed first representation (master Phase 5)
     "RatioSpaceCFARFrontEnd",
+    # SARVO prototype: the proposed core mechanism (master Phase 2, SSAC)
+    "ScatterSelectiveRefinement",
     # Acquisition conditioning (cross-sensor generalisation)
     "AcquisitionConditionedAdapter",
     "AcquisitionEncoder",
@@ -89,6 +92,7 @@ CUSTOM_MODULES = {
     "TargetAwareRefinement": TargetAwareRefinement,
     "SARInputAdapter": SARInputAdapter,
     "RatioSpaceCFARFrontEnd": RatioSpaceCFARFrontEnd,
+    "ScatterSelectiveRefinement": ScatterSelectiveRefinement,
     "AcquisitionConditionedAdapter": AcquisitionConditionedAdapter,
     "IdentityAttention": IdentityAttention,
     "SEAttention": SEAttention,

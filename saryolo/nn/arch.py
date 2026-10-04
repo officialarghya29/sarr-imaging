@@ -43,6 +43,10 @@ BASELINE_PARAMS: dict[str, int] = {"n": 2_624_080, "s": 9_458_752}
 #: unimportable from a checkpoint load). A test pins the two lists together.
 CFAR_MODES: tuple[str, ...] = ("cfar", "conv", "fixed")
 
+#: Modes of the SARVO core mechanism (``saryolo/nn/modules/ssac.py``). Duplicated as a
+#: literal for the same reason as ``CFAR_MODES``; a test pins the two lists together.
+SSAC_MODES: tuple[str, ...] = ("adaptive", "adaptive_raw", "fixed")
+
 
 @dataclass
 class ModelSpec:
@@ -99,6 +103,12 @@ class ModelSpec:
     #: representation from learned filters; this one computes an analytic radar
     #: statistic and learns only how much of it to use.
     cfar: str | None = None
+    #: SARVO core mechanism (master Phase 2, SSAC): the mode of
+    #: :class:`saryolo.nn.modules.ssac.ScatterSelectiveRefinement`, emitted per detection
+    #: level immediately pre-head. ``None`` disables. Distinct from every other slot in
+    #: that it decides *how much computation* a location receives rather than only how the
+    #: feature there is weighted.
+    ssac: str | None = None
     adapter: str | None = None
     enhancement: str | None = None
     speckle: str | None = None
@@ -128,6 +138,8 @@ class ModelSpec:
     def __post_init__(self) -> None:
         if self.cfar is not None and self.cfar not in CFAR_MODES:
             raise ValueError(f"cfar must be one of {CFAR_MODES}, got {self.cfar!r}")
+        if self.ssac is not None and self.ssac not in SSAC_MODES:
+            raise ValueError(f"ssac must be one of {SSAC_MODES}, got {self.ssac!r}")
         if self.scale not in SCALES:
             raise ValueError(f"scale must be one of {sorted(SCALES)}, got {self.scale!r}")
         if "p2" in self.levels and self.levels != ("p2", "p3", "p4", "p5"):
@@ -163,6 +175,8 @@ class ModelSpec:
             mods.append("context")
         if self.refinement:
             mods.append("refine")
+        if self.ssac:
+            mods.append("ssac")
         if self.has_p2:
             mods.append("p2_head")
         return mods
@@ -340,6 +354,13 @@ def build_yaml_dict(spec: ModelSpec) -> dict[str, Any]:
             heads[lvl] = b.add(
                 "head", heads[lvl], 1, "TargetAwareRefinement",
                 ["ch", heads[lvl], spec.refinement, 3, spec.refinement_max_offset],
+            )
+        if spec.ssac:
+            # The SARVO core mechanism acts last in the per-level chain, so the detection
+            # head reads the adaptively-refined representation -- which is what makes the
+            # "the allocation supports detection" claim direct rather than indirect.
+            heads[lvl] = b.add(
+                "head", heads[lvl], 1, "ScatterSelectiveRefinement", ["ch", heads[lvl], spec.ssac]
             )
 
     b.add("head", [heads[lvl] for lvl in spec.levels], 1, "Detect", ["nc"])
@@ -787,6 +808,49 @@ VARIANTS["cfar_fixed_n"] = _v(
 VARIANTS["cfar_conv_n"] = _v(
     "cfar_conv_n", scale="n", cfar="conv",
     notes="cfar_conv_s at scale n (pilot scale); the matched-cost control.",
+)
+
+#: SARVO core-mechanism prototype arms (master Phase 2, SSAC). Like the CFAR arms these
+#: are *not* component-ladder arms: no SFE, no SFM, no conditioning, no extra detection
+#: level. They differ from the stock detector in exactly one place -- the selective
+#: refinement inserted per detection level -- so a measured difference is attributable to
+#: the allocation mechanism and not to any module the ladder would otherwise carry.
+#:
+#: `adaptive` is the proposal; `adaptive_raw` is the assessment alternative (the same
+#: scorer fed the raw feature) that tests whether the SAR statistic is the useful signal;
+#: `fixed` is the **matched fixed-computation control** -- parameter-identical to
+#: `adaptive` by construction, with the allocation made spatially constant. The master
+#: workflow names the fixed-computation arm as the key control, and this is it.
+VARIANTS["ssac_s"] = _v(
+    "ssac_s", ssac="adaptive",
+    notes=("SARVO core mechanism: Scatter-Selective Adaptive Computation -- a per-region "
+           "allocation between a cheap shared path and an expensive selective refinement, "
+           "driven by an analytic SAR statistic and gated by a zero-initialised residual."),
+)
+VARIANTS["ssac_raw_s"] = _v(
+    "ssac_raw_s", ssac="adaptive_raw",
+    notes=("SSAC assessment alternative: identical scorer and allocation, fed the raw "
+           "feature instead of the SAR statistic. Matches the proposal => the statistic "
+           "is not the useful signal."),
+)
+VARIANTS["ssac_fixed_s"] = _v(
+    "ssac_fixed_s", ssac="fixed",
+    notes=("SSAC matched fixed-computation control: exact parameter parity with ssac_s, "
+           "with the allocation made spatially constant. Isolates adaptivity from capacity."),
+)
+#: Scale `n` of the same three arms. The real-data pilot runs at scale `n` (the only scale
+#: that fits the CPU budget), so the arms must exist there against the same baseline the
+#: pilot already measured -- otherwise the comparison would be across scales as well as
+#: across mechanisms.
+VARIANTS["ssac_n"] = _v(
+    "ssac_n", scale="n", ssac="adaptive", notes="ssac_s at scale n (pilot scale).",
+)
+VARIANTS["ssac_raw_n"] = _v(
+    "ssac_raw_n", scale="n", ssac="adaptive_raw", notes="ssac_raw_s at scale n (pilot scale).",
+)
+VARIANTS["ssac_fixed_n"] = _v(
+    "ssac_fixed_n", scale="n", ssac="fixed",
+    notes="ssac_fixed_s at scale n (pilot scale); the fixed-computation control.",
 )
 
 #: Baseline comparison variants (EXP-001b): scales of the stock detector.

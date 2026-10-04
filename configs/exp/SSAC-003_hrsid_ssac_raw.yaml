@@ -1,0 +1,34 @@
+# SARVO core mechanism -- the ASSESSMENT ALTERNATIVE (master Experiment 2).
+#
+# The same scorer and the same per-region allocation as SSAC-001, fed the raw feature
+# instead of the multi-scale SAR statistic. This tests whether the SAR statistic is the
+# useful signal: if this arm matches SSAC-001, the statistic is decoration and the
+# mechanism must be described as a generic dynamic network rather than a SAR design.
+#
+# Run only after SSAC-001 has been compared against its control (SSAC-002); it is the
+# second-order question, and running it first would spend the budget before the primary
+# comparison exists.
+#
+#   python -m saryolo train --exp configs/exp/SSAC-003_hrsid_ssac_raw.yaml
+experiment:
+  id: SSAC-003
+  name: real-data pilot (SSAC assessment alternative -- raw-feature scorer)
+  description: >-
+    Identical allocation and scorer shapes as SSAC-001, fed the raw feature instead of the
+    SAR statistic. Tests whether the statistic is the useful signal. Pilot only.
+model: ../models/yolo11n_ssac_raw_n.yaml
+dataset: ../datasets/hrsid_real.yaml
+train:
+  epochs: 40
+  imgsz: 320
+  batch: 4
+  seed: 0
+  optimizer: auto
+  cos_lr: true
+  patience: 15
+  workers: 4
+  deterministic: true
+notes: >-
+  Real HRSID subset, pilot scale. The scorer reads the raw feature, so its parameter count
+  differs slightly from the proposal's (3,403,257 vs 3,396,329); the comparison is therefore
+  about the signal, and is reported next to -- not instead of -- the matched control.

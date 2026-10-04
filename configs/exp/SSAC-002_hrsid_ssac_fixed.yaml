@@ -1,0 +1,34 @@
+# SARVO core mechanism -- the matched FIXED-COMPUTATION control (master Phase 7).
+#
+# The key control the master workflow names: the same SARVO core mechanism in the same
+# place and with the *same* layer shapes (3,396,329 parameters, identical to SSAC-001), but
+# with the allocation made spatially constant -- one learned difficulty scalar per image
+# instead of a per-region decision. This isolates *adaptivity* from *capacity*: if SSAC-001
+# does not beat this arm, the difference was the extra parameters and the refinement, not
+# the selective allocation, and the mechanism is withdrawn.
+#
+# Same dataset, schedule, resolution and seed as REAL-001 and SSAC-001.
+#
+#   python -m saryolo train --exp configs/exp/SSAC-002_hrsid_ssac_fixed.yaml
+experiment:
+  id: SSAC-002
+  name: real-data pilot (SARVO core mechanism -- matched fixed-computation control)
+  description: >-
+    Parameter-exact control for SSAC-001: identical block shapes, allocation made spatially
+    constant (no per-region decision). Pilot only.
+model: ../models/yolo11n_ssac_fixed_n.yaml
+dataset: ../datasets/hrsid_real.yaml
+train:
+  epochs: 40
+  imgsz: 320
+  batch: 4
+  seed: 0
+  optimizer: auto
+  cos_lr: true
+  patience: 15
+  workers: 4
+  deterministic: true
+notes: >-
+  Real HRSID subset, pilot scale. This is the fixed-computation SARVO the master workflow
+  requires; its parameter count is bit-identical to SSAC-001, so the pair measures the
+  allocation mechanism alone.

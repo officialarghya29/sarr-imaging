@@ -446,17 +446,17 @@ def _real_arms_facts(ledger: ExperimentLedger) -> dict:
     rows: dict[str, dict] = {}
     for record in ledger.load():
         exp_id = record.experiment_id
-        # ``REAL-`` are the architecture-pilot arms, ``AUG-`` the SAR-augmentation arms;
-        # both are real-data runs and both appear in the README pilot table. ``MSEED-``
-        # runs are seed repeats of a ``REAL-`` arm and are deliberately excluded, so a
-        # seed repeat cannot be mistaken for a new arm.
+        # ``REAL-`` are the architecture-pilot arms, ``AUG-`` the SAR-augmentation arms and
+        # ``SSAC-`` the SARVO core-mechanism arms; all three are real-data runs and all three
+        # appear in the README pilot table. ``MSEED-`` runs are seed repeats of a ``REAL-``
+        # arm and are deliberately excluded, so a seed repeat cannot be mistaken for a new arm.
         #
         # The README table quotes the **seed-0** row of each arm, so any run at a non-zero
         # training seed is a repeat rather than a new arm and is excluded on that basis too.
         # This is the general rule the prefix check was a special case of: without it, the
         # seed repeats of an *augmented* arm (AUG-005/006) would each have appeared in the
         # README as if they were separate arms.
-        if record.status != "completed" or not exp_id.startswith(("REAL-", "AUG-")):
+        if record.status != "completed" or not exp_id.startswith(("REAL-", "AUG-", "SSAC-")):
             continue
         if record.train_seed not in (0, None):
             continue
@@ -1043,7 +1043,11 @@ def chart_real_arms(facts: dict) -> None:
     row does not exist.
     """
     arms = facts.get("real", {})
-    fig, ax = plt.subplots(figsize=(15.0, 8.2))
+    # The figure width scales with the number of arms. Each tick label carries four short
+    # lines (id, model, cost, FPS), which render ~1.7 in wide, so a fixed 15 in canvas holds
+    # ten arms without touching and collides by ~30 % once a thirteenth is added -- the layout
+    # check measured exactly that. Two inches per arm keeps a margin as the pilot grows.
+    fig, ax = plt.subplots(figsize=(max(15.0, 2.0 * max(len(arms), 1)), 8.2))
     metrics = (("mAP50", CYAN), ("mAP50_95", VIOLET))
     width = 0.36
 

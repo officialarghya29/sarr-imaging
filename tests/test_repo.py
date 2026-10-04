@@ -514,6 +514,13 @@ README_REAL_ROWS: dict[str, str] = {
     "AUG-002 · prototype, SAR-augmented x1": "AUG-002",
     "AUG-003 · baseline, SAR-augmented x2": "AUG-003",
     "AUG-004 · prototype, SAR-augmented x2": "AUG-004",
+    # The SARVO core-mechanism arms (SSAC). The proposal and its *parameter-identical*
+    # fixed-computation control are the master workflow's key comparison, so they belong in
+    # the one table that quotes an accuracy number; the assessment alternative is the
+    # second-order question.
+    "SSAC-001 · SARVO core mechanism (SSAC)": "SSAC-001",
+    "SSAC-002 · control (fixed computation)": "SSAC-002",
+    "SSAC-003 · control (raw-feature assessment)": "SSAC-003",
 }
 
 #: Column name in the README pilot table -> metric key in ``facts.json``. ``epochs`` is a

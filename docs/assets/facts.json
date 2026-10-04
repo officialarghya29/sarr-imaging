@@ -1,5 +1,5 @@
 {
-  "variants": 98,
+  "variants": 104,
   "zoo": {
     "baseline_n": {
       "variant": "baseline",
@@ -828,6 +828,60 @@
       "latency_ms": 22.286,
       "model_size_MB": 5.19,
       "train_minutes": 10.03
+    },
+    "SSAC-001": {
+      "model": "yolo11n_ssac_n.yaml",
+      "dataset": "hrsid_real.yaml",
+      "epochs": 40,
+      "imgsz": 320,
+      "train_seed": 0,
+      "mAP50": 0.562612,
+      "mAP50_95": 0.308921,
+      "precision": 0.86277,
+      "recall": 0.538012,
+      "f1": 0.662745,
+      "params_M": 3.396,
+      "flops_G": 1.998,
+      "fps": 46.11,
+      "latency_ms": 21.685,
+      "model_size_MB": 6.77,
+      "train_minutes": 7.28
+    },
+    "SSAC-002": {
+      "model": "yolo11n_ssac_fixed_n.yaml",
+      "dataset": "hrsid_real.yaml",
+      "epochs": 40,
+      "imgsz": 320,
+      "train_seed": 0,
+      "mAP50": 0.565543,
+      "mAP50_95": 0.302575,
+      "precision": 0.918611,
+      "recall": 0.528041,
+      "f1": 0.670603,
+      "params_M": 3.396,
+      "flops_G": 1.998,
+      "fps": 47.6,
+      "latency_ms": 21.007,
+      "model_size_MB": 6.77,
+      "train_minutes": 7.38
+    },
+    "SSAC-003": {
+      "model": "yolo11n_ssac_raw_n.yaml",
+      "dataset": "hrsid_real.yaml",
+      "epochs": 40,
+      "imgsz": 320,
+      "train_seed": 0,
+      "mAP50": 0.565263,
+      "mAP50_95": 0.286335,
+      "precision": 0.893238,
+      "recall": 0.538205,
+      "f1": 0.671693,
+      "params_M": 3.403,
+      "flops_G": 2.003,
+      "fps": 47.96,
+      "latency_ms": 20.849,
+      "model_size_MB": 6.78,
+      "train_minutes": 7.47
     }
   },
   "real_subset": {
@@ -842,7 +896,7 @@
     "total": 106,
     "config_files": 108,
     "with_results": [],
-    "ledger_runs": 48,
+    "ledger_runs": 54,
     "non_experiment_runs": [
       "AUG-001",
       "AUG-002",
@@ -863,14 +917,17 @@
       "SMOKE-001",
       "SMOKE-002",
       "SMOKE-003",
-      "SMOKE-004"
+      "SMOKE-004",
+      "SSAC-001",
+      "SSAC-002",
+      "SSAC-003"
     ]
   },
   "tests": {
-    "total": 482,
+    "total": 510,
     "by_file": {
       "tests/test_arch.py": 61,
-      "tests/test_audit_docs.py": 31,
+      "tests/test_audit_docs.py": 37,
       "tests/test_augmentation.py": 15,
       "tests/test_cfar_frontend.py": 16,
       "tests/test_cfar_scope.py": 19,
@@ -891,6 +948,7 @@
       "tests/test_probes.py": 23,
       "tests/test_repo.py": 30,
       "tests/test_rtdetr_arm.py": 6,
+      "tests/test_ssac.py": 22,
       "tests/test_tables.py": 14,
       "tests/test_visualization.py": 8
     }

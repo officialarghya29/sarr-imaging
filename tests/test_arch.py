@@ -170,6 +170,9 @@ IDENTITY_MODES: dict[str, tuple[str, ...]] = {
     "SpatialFrequencyRepresentation": ("sff", "static", "highpass", "none"),
     "ContextAggregation": ("multi", "local", "regional", "none"),
     "TargetAwareRefinement": ("deform", "static", "local", "none"),
+    # The SARVO core mechanism (SSAC). Every mode gates a residual with a zero-initialised
+    # ``alpha``, so all three are exact identities at init and all three are gated.
+    "ScatterSelectiveRefinement": ("adaptive", "adaptive_raw", "fixed"),
     "SARInputAdapter": ("hybrid", "local", "learned", "identity"),
     # The conditioning adapter's modes *and* its field sets both travel through
     # ``parse_model`` as string arguments, so both vocabularies are registered: the mode and
@@ -197,7 +200,8 @@ def _declared_vocabularies() -> dict[str, tuple[str, ...]]:
         name: tuple(getattr(M, name).MODES)
         for name in ("SARFeatureEnhancement", "SpeckleAwareFeatureModule", "AdaptiveMultiScaleFusion",
                      "TargetPriorModulation", "SpatialFrequencyRepresentation", "ContextAggregation",
-                     "TargetAwareRefinement", "SARInputAdapter", "AcquisitionConditionedAdapter")
+                     "TargetAwareRefinement", "SARInputAdapter", "AcquisitionConditionedAdapter",
+                     "ScatterSelectiveRefinement", "RatioSpaceCFARFrontEnd")
     }
     vocab["attention slot"] = tuple(M.ATTENTION_BUILDERS)
     vocab["attention gate"] = ("adaptive", "static")
@@ -480,6 +484,7 @@ def test_every_new_slot_mode_is_exercised_by_a_variant():
     from saryolo.nn.modules import (
         ContextAggregation,
         SARInputAdapter,
+        ScatterSelectiveRefinement,
         SpatialFrequencyRepresentation,
         TargetAwareRefinement,
         TargetPriorModulation,
@@ -491,6 +496,10 @@ def test_every_new_slot_mode_is_exercised_by_a_variant():
         "context": {s.context for s in VARIANTS.values() if s.context},
         "refinement": {s.refinement for s in VARIANTS.values() if s.refinement},
         "adapter": {s.adapter for s in VARIANTS.values() if s.adapter},
+        # The SARVO core mechanism (SSAC). Covered here rather than only in its own test
+        # file because a channel/index wiring error is invisible to a unit-level test and
+        # only appears when ``parse_model`` resolves the real graph.
+        "ssac": {s.ssac for s in VARIANTS.values() if s.ssac},
     }
     expected = {
         "prior": set(TargetPriorModulation.MODES),
@@ -498,6 +507,7 @@ def test_every_new_slot_mode_is_exercised_by_a_variant():
         "context": set(ContextAggregation.MODES),
         "refinement": set(TargetAwareRefinement.MODES),
         "adapter": set(SARInputAdapter.MODES),
+        "ssac": set(ScatterSelectiveRefinement.MODES),
     }
     for slot, modes in expected.items():
         missing = modes - covered[slot]

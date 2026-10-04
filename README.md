@@ -6,10 +6,10 @@
 <h4 align="center">SAR Acquisition-Robust Visual Optimization — a SAR-native object detector</h4>
 
 <p align="center">
-  <img alt="tests" src="https://img.shields.io/badge/tests-482_passing-22c55e">
+  <img alt="tests" src="https://img.shields.io/badge/tests-510_passing-22c55e">
   <img alt="fabricated results" src="https://img.shields.io/badge/fabricated_results-0-black">
-  <img alt="architectures" src="https://img.shields.io/badge/architectures-98_wired-3b82f6">
-  <img alt="experiments" src="https://img.shields.io/badge/experiments-124_configured-8b5cf6">
+  <img alt="architectures" src="https://img.shields.io/badge/architectures-104_wired-3b82f6">
+  <img alt="experiments" src="https://img.shields.io/badge/experiments-127_configured-8b5cf6">
   <img alt="cost" src="https://img.shields.io/badge/SARVO--Lite-32.55_GFLOPs-0891b2">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-94a3b8">
 </p>
@@ -35,6 +35,7 @@ results.
 
 - [Status](#status)
 - [Headline results on real SAR data](#headline-results-on-real-sar-data)
+- [The core mechanism (SSAC)](#the-core-mechanism-ssac)
 - [Efficiency](#efficiency)
 - [Architecture](#architecture)
 - [Verified behaviour](#verified-behaviour)
@@ -50,9 +51,9 @@ results.
 | | |
 | --- | --- |
 | **What this is** | A complete, reproducible research pipeline: dataset audit → baseline → components → ablations → removal tests → robustness → efficiency → cross-dataset → paper. |
-| **Architectures** | 98 variants wired; every one builds and runs a forward pass |
-| **Experiments** | 124 configured; each reproducible from a committed YAML |
-| **Tests** | 482 passing — no dataset download and no GPU needed |
+| **Architectures** | 104 variants wired; every one builds and runs a forward pass |
+| **Experiments** | 127 configured; each reproducible from a committed YAML |
+| **Tests** | 510 passing — no dataset download and no GPU needed |
 | **Proven** | The instrument: the baseline reproduces stock YOLO11 **exactly**, every custom module is an *exact* identity at initialisation and demonstrably not frozen, and the pipeline trains and evaluates on **real** SAR imagery. |
 | **Not yet proven** | Every accuracy number is a **pilot** on a subset. The ablation ladder, cross-sensor generalisation and the full-release benchmark are `TBD`; they need a GPU and the full datasets. |
 
@@ -80,6 +81,15 @@ real and measured, not the paper's result.
 | AUG-002 · prototype, SAR-augmented x1 | 0.605 | 0.364 | 0.949 | 0.548 | 2.590 | 1.764 | 31.640 | 24.360 |
 | AUG-003 · baseline, SAR-augmented x2 | 0.628 | 0.390 | 0.942 | 0.585 | 2.590 | 1.613 | 63.690 | 16.500 |
 | AUG-004 · prototype, SAR-augmented x2 | 0.616 | 0.391 | 0.922 | 0.579 | 2.590 | 1.764 | 36.770 | 30.850 |
+| SSAC-001 · SARVO core mechanism (SSAC) | 0.563 | 0.309 | 0.863 | 0.538 | 3.396 | 1.998 | 46.110 | 7.280 |
+| SSAC-002 · control (fixed computation) | 0.566 | 0.303 | 0.919 | 0.528 | 3.396 | 1.998 | 47.600 | 7.380 |
+| SSAC-003 · control (raw-feature assessment) | 0.565 | 0.286 | 0.893 | 0.538 | 3.403 | 2.003 | 47.960 | 7.470 |
+
+`SSAC-001` and `SSAC-002` are the master workflow's key comparison: the proposal against a
+**parameter-identical** fixed-computation control (3,396,329 parameters and 1.998 GFLOPs in
+both, so a difference between them is the adaptive allocation and not capacity). `SSAC-003`
+feeds the same allocation the raw feature instead of the multi-scale SAR statistic — the
+assessment alternative. See [the core mechanism](#the-core-mechanism-ssac) below.
 
 Every cell is read from `results/experiments.jsonl`, written by the run that measured it;
 `docs/assets/facts.json` is generated from that ledger and the table is checked against it by
@@ -100,6 +110,10 @@ resolution and seed, so a row differs from its neighbours only in **what is trai
   small, and it is **subsumed by augmentation**: the lead shrinks monotonically (+0.0139 →
   +0.0067 → +0.0016) as the corruption model is learned from data instead. The front end is kept
   as a cheap, interpretable ablation; augmentation is the headline.
+- **The core mechanism passes its own control.** SSAC's per-region allocation beats a
+  parameter-*identical* fixed-computation control (**+0.0063** mAP50:95) and the multi-scale SAR
+  statistic beats the raw-feature alternative — which lands *below the baseline*. Small and
+  single-seed, and with no efficiency claim: the implementation is dense. See below.
 - **Negative results are kept, not buried.** Two synthetic acquisition-shift axes (global
   radiometric gain, along-track resolution loss) do **not** separate the arms. Reported as nulls.
 
@@ -107,6 +121,41 @@ Full numbers, per-IoU breakdowns and the claim-to-evidence audit: [`paper/RESULT
 and [`docs/claim_evidence_audit.md`](docs/claim_evidence_audit.md).
 
 ![Three measured arms on a real HRSID subset](docs/assets/real_arms.svg)
+
+---
+
+## The core mechanism (SSAC)
+
+SARVO's core idea is **Scatter-Selective Adaptive Computation (SSAC)**: spend expensive feature
+processing only where the image evidence says it is useful. A cheap shared path runs everywhere;
+a multi-scale SAR statistic (log-ratio + local coefficient of variation — the same family the
+CFAR front end uses) drives a per-region allocation `g ∈ (0, 1)`; the expensive refinement is
+added in proportion to `g`; and the whole block is gated by a zero-initialised residual, so it is
+an **exact identity** until it has learned something.
+
+The mechanism is built to be *falsifiable*, and the master workflow's key control is the arm
+that can kill it: **SSAC-002** is parameter-identical to **SSAC-001** (3,396,329 parameters and
+1.998 GFLOPs each) with the allocation made spatially constant. On the pilot:
+
+| Comparison | Measured | Reads as |
+| --- | --- | --- |
+| SSAC-001 vs SSAC-002 — adaptive vs fixed computation | **0.3089** vs 0.3026 mAP50:95 | the allocation, not capacity: **+0.0063**, small |
+| SSAC-001 vs REAL-001 baseline | 0.3089 vs 0.3012 mAP50:95 | +0.0077, same direction |
+| SSAC-003 vs SSAC-001 — raw feature vs SAR statistic | 0.2863 vs **0.3089** | the **SAR statistic is load-bearing**; the raw-feature alternative is *below the baseline* |
+| SSAC-001 vs SSAC-002 — small objects | AP_small **0.0737** vs 0.0647 | no small-object penalty; it improves |
+
+The trained allocation is a genuine per-region decision and concentrates where small objects
+live: at the **P3** level only **4.4 %** of locations sit above 0.5, and the within-image spread
+exceeds the between-image spread at every level. At P4/P5 the model raised the allocation nearly
+uniformly, so **those levels save nothing** — reported rather than hidden.
+
+**What this does not claim.** One seed, 60 test images, one CPU. The implementation is *dense*: it
+pays the full expensive-path cost and makes **no efficiency claim** — the sparse variant that
+would actually skip regions is specified but not yet built. The withdrawal conditions (no gain
+over the control; the raw-feature alternative matching the proposal; a small-object drop) were
+written in `docs/ssac_design.md` **before** the runs, and none fired. Full analysis:
+[`docs/ssac_assessment.md`](docs/ssac_assessment.md) ·
+[`docs/ssac_design.md`](docs/ssac_design.md).
 
 ---
 
@@ -223,13 +272,13 @@ Each row is an executable check, not a claim. The full list lives in `tests/`.
 | Check | Result | Evidence |
 | --- | --- | --- |
 | Baseline reproduces stock YOLO11 exactly | `2,624,080` (n), `9,458,752` (s) | `test_baseline_matches_stock_yolo11_parameter_count` |
-| **All 98 architectures construct and forward** | pass, at even and odd input sizes | `test_every_variant_builds_and_forwards` |
+| **All 104 architectures construct and forward** | pass, at even and odd input sizes | `test_every_variant_builds_and_forwards` |
 | Declared scales build at the right stride count | pass | `test_declared_scale_variants_build` |
 | Every SAR module is an **exact** identity at init | `max\|f(x)−x\| = 0.0e+00` | measured live + `test_each_module_is_exactly_identity_at_init` |
 | **No module is silently frozen at init** | every learnable mode has a non-zero gate gradient | `test_no_module_is_frozen_at_init` |
 | **All gates leave zero during real training** | `25/25` non-zero after 2 epochs | `SMOKE-003` checkpoint |
 | SAR-YOLO predicts identically to baseline at init | max abs diff `0.0` (v1 **and** v2) | `test_models_output_identically_to_baseline_at_init` |
-| Filenames cannot silently downgrade the scale | pass (98 variants) | `test_variant_filenames_encode_scale` |
+| Filenames cannot silently downgrade the scale | pass (104 variants) | `test_variant_filenames_encode_scale` |
 | **Conditioning is per-sample, not per-batch** | row *i* of a mixed-source batch equals row *i* run alone — the LOSO recipe depends on it | `test_conditioning_is_per_sample_not_per_batch` |
 | An out-of-vocabulary sensor is refused, not clamped | clamping would map an unseen sensor onto a trained-on one, silently | `test_a_vocabulary_mismatch_raises_instead_of_snapping_to_a_nearby_sensor` |
 | **The COCO metric reproduces pycocotools** | identical mAP50 and mAP50:95 on synthetic and real detections | `test_the_ap_implementation_reproduces_pycocotools` |
@@ -248,7 +297,7 @@ Each row is an executable check, not a claim. The full list lives in `tests/`.
 git clone https://github.com/officialarghya29/sarr-imaging.git && cd sarr-imaging
 python -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt
 
-pytest tests/ -q                                          # 482 tests
+pytest tests/ -q                                          # 510 tests
 ```
 
 Train and evaluate on the real subset (no GPU required):
@@ -277,7 +326,7 @@ config plus the HRSID release; see [`docs/DATASETS.md`](docs/DATASETS.md) and
 
 ```
 saryolo/
-  nn/            arch (98 variants) · model · modules/ (the SAR components) · losses
+  nn/            arch (104 variants) · model · modules/ (the SAR components) · losses
   data/          dataset registry · YOLO/VOC conversion · acquisition metadata · group splits
   training/      trainer (SAR-aware loss, conditioning) · LoRA · hard-example mining · runner
   evaluation/    COCO AP + scale-wise AP · robustness · efficiency · gain · cross-dataset · LOSO
@@ -285,10 +334,10 @@ saryolo/
   paper/         table generators (an unmeasured cell renders as TBD)
   tracking/      append-only experiment ledger
   cli.py         19 subcommands behind one entry point
-configs/         datasets/ · models/ (98 generated) · exp/ (EXP-001…019 + ablations + frontier)
+configs/         datasets/ · models/ (104 generated) · exp/ (EXP-001…019 + ablations + frontier)
 docs/            physics-to-architecture proposals · method drafts · claim-to-evidence audit
 paper/           manuscript skeleton + generated tables + results draft
-tests/           482 checks; the instrument is tested as hard as the model
+tests/           510 checks; the instrument is tested as hard as the model
 ```
 
 ---

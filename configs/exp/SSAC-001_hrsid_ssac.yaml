@@ -1,0 +1,34 @@
+# SARVO core mechanism (SSAC) on the real HRSID subset (master Phase 6, Stage B).
+#
+# The proposal arm of Experiment 1: Scatter-Selective Adaptive Computation inserted per
+# detection level, immediately pre-head. Its only purpose here is to be compared against
+# SSAC-002, which carries the *same* layer shapes (3,396,329 parameters in both) with the
+# allocation made spatially constant. If this arm does not beat that control, the benefit
+# was capacity and the mechanism is withdrawn -- the withdrawal condition is stated in
+# docs/ssac_design.md §3.2 before the run, not after it.
+#
+# Same dataset, schedule, resolution and seed as REAL-001, so the pair differs in one place.
+#
+#   python -m saryolo train --exp configs/exp/SSAC-001_hrsid_ssac.yaml
+experiment:
+  id: SSAC-001
+  name: real-data pilot (SARVO core mechanism -- SSAC, adaptive allocation)
+  description: >-
+    SSAC at pilot scale: per-region allocation between a cheap shared path and an expensive
+    selective refinement, driven by a multi-scale SAR statistic. Pilot only.
+model: ../models/yolo11n_ssac_n.yaml
+dataset: ../datasets/hrsid_real.yaml
+train:
+  epochs: 40
+  imgsz: 320
+  batch: 4
+  seed: 0
+  optimizer: auto
+  cos_lr: true
+  patience: 15
+  workers: 4
+  deterministic: true
+notes: >-
+  Real HRSID subset, pilot scale. 3,396,329 parameters -- parameter-identical to SSAC-002 by
+  construction, so a difference between the two is the adaptive allocation and not capacity.
+  The dense implementation pays the full expensive-path cost; no efficiency claim is made.

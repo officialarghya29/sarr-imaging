@@ -29,6 +29,8 @@ REQUIRED_DOCS = (
     "docs/baseline_comparison.md",
     "docs/related_work.md",
     "docs/architecture_proposals.md",
+    "docs/ssac_assessment.md",
+    "docs/ssac_design.md",
     "reports/agent_initial_audit.md",
     "reports/reproduction_status.md",
 )
@@ -42,6 +44,8 @@ CLAIM_DOCS = (
     "docs/baseline_comparison.md",
     "docs/related_work.md",
     "docs/architecture_proposals.md",
+    "docs/ssac_assessment.md",
+    "docs/ssac_design.md",
     "reports/agent_initial_audit.md",
     "reports/reproduction_status.md",
 )

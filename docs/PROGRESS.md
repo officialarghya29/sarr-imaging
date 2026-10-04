@@ -237,6 +237,41 @@ Latest additions (this session):
    that keeps the measured tables, the two guarantees, the component numbering and the
    limitations, and drops the rest to `docs/`.
 
+15. ~~The SARVO core mechanism (SSAC) — literature review, specification, prototype and the
+   fixed-computation control~~ — **built and measured**. The master context's initial hypothesis
+   was Scatter-Selective Adaptive Computation: allocate expensive feature processing per region
+   according to image evidence. The review (`docs/ssac_assessment.md`) found the *principle* is
+   old — Spatially Adaptive Computation Time (CVPR 2017), SplatNet, the Dynamic-Network survey's
+   "region selection" category, and two-stage detectors all own it — so SSAC was **revised, not
+   adopted as stated**: its only defensible novelty is a SAR-native assessment signal plus a
+   structural target-preservation guarantee. The specification and the three candidate
+   integration points (early adaptive / intermediate refinement / adaptive resolution) are in
+   `docs/ssac_design.md`, with intermediate refinement recommended on *falsifiability* grounds.
+
+   Prototype: `saryolo/nn/modules/ssac.py::ScatterSelectiveRefinement` (modes `adaptive`,
+   `adaptive_raw`, `fixed`), six arms, and `tests/test_ssac.py` (22 tests) covering the ten
+   functional checks the workflow lists plus the two falsifiers. The **matched fixed-computation
+   control is parameter-identical by construction** (3,396,329 parameters and 1.998 GFLOPs in
+   `ssac_n` and `ssac_fixed_n`; 12,588,713 / 6.87 G in the `s` arms). Three pilot arms ran on the
+   same HRSID subset and schedule as `REAL-001`, all recorded in the ledger:
+
+   | Id | Arm | mAP50 | mAP50:95 | AP_small |
+   | --- | --- | ---: | ---: | ---: |
+   | SSAC-001 | proposal (SAR-statistic allocation) | 0.5626 | **0.3089** | **0.0737** |
+   | SSAC-002 | matched fixed-computation control | 0.5655 | 0.3026 | 0.0647 |
+   | SSAC-003 | assessment alternative (raw-feature scorer) | 0.5653 | 0.2863 | — |
+
+   The proposal beats its parameter-identical control (**+0.0063** mAP50:95; +0.0077 over the
+   `REAL-001` baseline), and the raw-feature alternative lands *below the baseline* — so the SAR
+   statistic is load-bearing and the assessment is not decoration. The allocation is spatial and
+   concentrated: at P3 only 4.4 % of locations exceed 0.5, with within-image spread above
+   between-image spread at every level, while P4/P5 raise the allocation nearly uniformly and
+   therefore save nothing. **No efficiency claim is made**: the implementation is dense, the
+   sparse variant is specified but not yet built, and on this CPU the measured cost is *higher*
+   (1.998 vs 1.613 GFLOPs; 46.1 vs 61.8 FPS). The withdrawal conditions were written before the
+   runs and none fired; the effect is small and single-seed (60 test images, one CPU), and it is
+   labelled a pilot everywhere.
+
 What remains on the critical path needs a GPU: run `docs/RUNBOOK_SSDD.md` end to end. Every
 CPU-side prerequisite is now in place.
 
