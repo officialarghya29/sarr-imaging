@@ -119,16 +119,18 @@ Verified **here, now**:
 * the frontier arms are strictly cheaper than their scale-matched reference, dropping only
   the two declared slots;
 * efficiency profiling is internally consistent (see §2.3);
-* **[now]** three arms on a real HRSID subset trained, validated and profiled under one
-  schedule, with every number written to the ledger by the run that measured it;
+* **[now]** six arms on a real HRSID subset trained, validated and profiled under one
+  schedule, the primary arm-versus-baseline comparison repeated at three training seeds, and
+  corruption / acquisition-shift sweeps — with every number written to the ledger by the run
+  that measured it;
 * **[now]** a subset pilot cannot fill a benchmark cell — enforced structurally, not by
   convention (`_is_subset_pilot` + `test_a_subset_pilot_cannot_fill_a_benchmark_cell`);
 * **[now]** the LoRA arm's adapter genuinely influences the checkpoint (asserted from the
   saved file: 409/499 tensors differ from a fresh build, zero `lora_` keys).
 
-**Not** verified anywhere: any *cross-sensor*, *cross-resolution* or *multi-seed* claim, or
-any claim that a component improves detection on a full benchmark. Those require a GPU run
-on the full release.
+**Not** verified anywhere on real data: any *cross-sensor* or *cross-resolution* claim, or any
+claim that a component improves detection on a full benchmark. The multi-seed repeat exists
+only on the 200/60/60 HRSID subset; everything beyond it requires a GPU run on the full release.
 
 ---
 
@@ -165,8 +167,10 @@ Ordered by what unblocks the most, not by what is most interesting.
 ## 7. Honest summary
 
 The repository in 2026-10-03 was a **verified instrument with no measurements**. On
-2026-10-04 it is a **verified instrument with one honest pilot**: three arms measured on a
-real HRSID subset, every number written by the run that produced it, and the one bug that
+2026-10-04 it is a **verified instrument with one honest pilot**: six arms and a three-seed
+repeat measured on a real HRSID subset, with the proposal's own falsifiers (a matched-cost
+control, a seed-noise test and a gain-collapse diagnostic) all run — every number written by
+the run that produced it, and the one bug that
 would have made the most quotable of those numbers a lie (a parameter-efficient arm whose
 adapter was silently discarded) caught because a designer would not have looked for it and a
 *measurement* did.

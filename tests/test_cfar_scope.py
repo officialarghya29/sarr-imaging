@@ -223,3 +223,37 @@ def test_the_brightness_shift_is_an_identity_at_gain_one_and_darkens_below_it():
     darker = apply_corruption(img, "brightness", 0.5, np.random.default_rng(0))
     assert darker.max() < img.max(), "gain 0.5 did not darken the image"
     assert darker.shape == img.shape
+
+
+def test_the_anisotropic_shift_degrades_one_axis_only():
+    """An anisotropy shift must change the x axis and leave the range axis alone.
+
+    This is the difference between it and isotropic ``low_resolution``, which blurs both
+    axes. Tested on the one image class that makes the distinction observable: a scene
+    constant along x (identical columns) has no azimuthal content, so along-track-only
+    resampling must return it unchanged, while the isotropic corruption must not.
+    """
+    from saryolo.evaluation.robustness import apply_corruption
+
+    rng = np.random.default_rng(2)
+    column = (rng.random((32, 1)) * 255).astype(np.uint8)
+    img = np.repeat(column, 32, axis=1)  # constant along x, varies along y
+
+    same = apply_corruption(img, "anisotropic", 1.0, np.random.default_rng(0))
+    assert np.array_equal(same, img)
+    kept = apply_corruption(img, "anisotropic", 0.25, np.random.default_rng(0))
+    assert np.array_equal(kept, img), (
+        "a scene with no azimuthal content changed under along-track resampling; the shift "
+        "is touching the range axis as well"
+    )
+    isotropic = apply_corruption(img, "low_resolution", 0.25, np.random.default_rng(0))
+    assert not np.array_equal(isotropic, img), (
+        "the isotropic control did not blur a y-varying scene, so the comparison above "
+        "would not be discriminating"
+    )
+
+
+def test_the_gain_report_refuses_an_empty_split():
+    """An empty diagnostic must raise, not return a plausible-looking ``nan`` report."""
+    with pytest.raises(ValueError, match="no gain values"):
+        summarise_gain(np.zeros((0, 16), dtype=np.float64))

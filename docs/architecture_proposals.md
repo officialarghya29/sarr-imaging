@@ -490,11 +490,28 @@ modulation where the statistic is noisier), while under heavy contrast compressi
 smooths to 0.005 — it learns to apply a nearly uniform darkening there, which is a real
 property of the trained map and is reported rather than hidden. This falsifier is **cleared**.
 
-**The synthetic acquisition-shift pilot is a null result and is reported as one.** Because the
-log-ratio channel is exactly invariant to a global radiometric gain (a property now pinned by
-`tests/test_cfar_scope.py`), the acquisition variable it is supposed to transfer across is the
-one worth isolating: the same 60 chips darkened by a global gain and re-evaluated. It does
-**not** separate the arms:
+**But the gain is seed-sensitive, and that is a caveat worth its own paragraph.** Re-running the
+diagnostic on the seed-1 and seed-2 prototype checkpoints (`MSEED-C1`, `MSEED-C2`) gives a much
+weaker modulation than seed 0:
+
+| Checkpoint | mean abs. gain | within-image std | between-image std | active fraction | collapsed |
+| --- | ---: | ---: | ---: | ---: | :---: |
+| REAL-004 (seed 0) | 0.113 | 0.0331 | 0.0105 | 98.2 % | no |
+| MSEED-C1 (seed 1) | 0.021 | 0.0217 | 0.0121 | 6.0 % | no |
+| MSEED-C2 (seed 2) | 0.025 | 0.0160 | 0.0131 | 3.7 % | no |
+
+At all three seeds the within-image spread still exceeds the between-image spread, so the gain is
+a per-pixel map and never collapses — the falsifier is cleared at every seed. But its *magnitude* is
+strongly seed-dependent (mean abs. gain 0.113 → 0.021 → 0.025), which says the detector does not
+reliably commit to the sharp per-pixel modulation seed 0 learned. Combined with the modest paired
+accuracy gap (§ above), the honest reading is that the mechanism is present but that the training
+signal pushing the gain away from the identity is weak on this subset — a plausible part of why the
+accuracy effect is small.
+
+**Two synthetic acquisition-shift axes were run, and both are null results, reported as such.**
+The first is a global radiometric gain — the acquisition variable the log-ratio channel is exactly
+invariant to (a property now pinned by `tests/test_cfar_scope.py`). The same 60 chips were
+darkened by a global gain and re-evaluated. It does **not** separate the arms:
 
 | Global gain | Baseline mAP50:95 | CFAR mAP50:95 |
 | ---: | ---: | ---: |
@@ -510,6 +527,26 @@ at gain 0.3 it is **worse** than the baseline. The honest reading is that the ra
 axis is dominated by an absolute detection floor and does not discriminate the two arms — the
 mechanism's *statistic* is gain-invariant, but that does not translate into a measured
 robustness advantage here. A null result is a result, and it is not dropped.
+
+The second axis is **anisotropy** — along-track (azimuth) resolution loss only, the x axis
+downsampled and restored while the range axis is untouched, which is the geometry an isotropic
+`low_resolution` corruption cannot represent. It is also non-discriminating, and for the same
+reason `blur` and `low_resolution` were: both arms *improve*, because smoothing helps this small
+subset, and the arms keep their ~0.02 offset throughout.
+
+| Azimuth scale | Baseline mAP50:95 | CFAR mAP50:95 |
+| ---: | ---: | ---: |
+| 1.0 (clean) | 0.2889 | 0.3091 |
+| 0.75 | 0.2930 | 0.3180 |
+| 0.50 | 0.2981 | 0.3213 |
+| 0.35 | 0.2990 | 0.3218 |
+| 0.25 | 0.3059 | 0.3273 |
+
+So neither pure acquisition axis — radiometric or geometric — is where the prototype's (already
+small) advantage comes from. The advantage it does show lives on the *texture* corruptions
+(speckle, low contrast, clutter), which is consistent with the mechanism but is not the
+acquisition-transfer story the motivation tells. That gap is the most useful thing this pilot
+produced.
 
 **What the test does not settle.** The absolute effect is small. A mean mAP50:95 gap of
 +0.018 measured on **60 test images, one 200-image training subset, one CPU** is above the
@@ -555,6 +592,8 @@ The recommended direction is frozen at the following contract, which every test 
 | Public surface | `statistics(x)`, `gain_map(x)`, `forward(x)`; `forward ≡ x * (1 + gain_map(x))` |
 | Arms | `cfar_n/s`, `cfar_conv_n/s`, `cfar_fixed_n/s` — six arms, one insertion point each |
 
+A paper-style write-up of this interface is drafted in `docs/methods_rs_cfar.md`.
+
 ### 9.2 The measured record (every number is in the ledger)
 
 | Id | Arm | Role | mAP50 | mAP50:95 |
@@ -581,8 +620,8 @@ Reproduce with the four training configs (`REAL-001…006`) followed by
 | The parameter overhead is +217 (< 0.5 %) and scale-independent | **final** | measured on the generated YAML at `n` and `s` |
 | The front end beats its own matched-cost and fixed-threshold controls | **preliminary** | one 200/60/60 subset, one machine |
 | The front end leads the baseline on mAP50:95 at three seeds | **preliminary** | +0.0179 mean, inside a small-subset envelope |
-| The trained gain is a per-pixel decision, not collapsed | **final for this checkpoint** | `results/gain/REAL-004/gain.json` |
-| The front end improves robustness under an acquisition shift | **not supported** | brightness pilot is a null/mixed result (§8) |
+| The trained gain is a per-pixel decision, not collapsed | **final, but seed-sensitive** | `results/gain/*/gain.json`; magnitude 0.113 / 0.021 / 0.025 across seeds (§8) |
+| The front end improves robustness under an acquisition shift | **not supported** | two acquisition axes (radiometric gain, anisotropy) are both null (§8) |
 | Cross-sensor / cross-resolution generalisation | **blocked on GPU** | needs the full release and a second source |
 
 ### 9.4 The naming decision

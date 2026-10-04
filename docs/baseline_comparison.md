@@ -116,5 +116,7 @@ inference cost measured, not inferred from parameter count.
 
 **Summary.** Every *cost* comparison that can be made without a GPU has been made and is
 measured. Accuracy is measured **only** in the HRSID pilot of `reports/reproduction_status.md`
-§3 — three arms on a subset, one seed — and the ladder, the generalisation folds and the tuned
-LoRA sweep are unmeasured.
+§3 — six arms on a 200/60/60 subset, the primary arm-versus-baseline comparison repeated at
+three seeds, plus corruption and acquisition-shift sweeps. The full-release ladder, the
+generalisation folds and the tuned LoRA sweep are unmeasured, and the pilot's acquisition-shift
+result is **negative** (see `docs/architecture_proposals.md` §8).

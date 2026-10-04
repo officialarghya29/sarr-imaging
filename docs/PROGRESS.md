@@ -158,9 +158,15 @@ Latest additions (this session):
    The gain-collapse falsifier was then built and run (`saryolo/evaluation/gain.py`, CLI
    `saryolo gain`, tests in `tests/test_cfar_scope.py`): the trained gain is a genuine
    per-pixel decision (within-image std 0.0331 vs between-image std 0.0105, 98 % of pixels
-   active), so it is **cleared**. A synthetic acquisition-shift pilot on a global radiometric
-   gain (a new `brightness` corruption) is a **null/mixed result** and is reported as one: at
-   severe darkening both arms hit the floor, and at gain 0.3 the prototype is worse. Phase 9
+   active), so it is **cleared** — but only at seed 0 does it modulate hard (mean abs. gain
+   0.113); seeds 1 and 2 learn a much weaker gain (0.021, 0.025), so the decision is per-pixel
+   at every seed yet seed-sensitive in strength. Two synthetic acquisition-shift pilots are
+   **null results** and are reported as such: a global radiometric gain (a new `brightness`
+   corruption) separates nothing and is *worse* than the baseline at gain 0.3, and an
+   anisotropic along-track-resolution axis (a new `anisotropic` corruption) improves both arms
+   equally. The prototype's small advantage therefore lives on the texture corruptions, not on
+   pure acquisition transfer. A paper-style methods draft for the front end is in
+   `docs/methods_rs_cfar.md`. Phase 9
    is finalised at pilot scope in §9 of the proposals document, which freezes the interface,
    labels every claim final/preliminary/not-supported, and keeps the repository from being
    renamed into a detector the evidence does not support.

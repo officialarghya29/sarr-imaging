@@ -76,6 +76,13 @@ CORRUPTIONS: dict[str, Corruption] = {
         "A pure acquisition shift -- geometry and clutter structure are untouched.",
         physical=True,
     ),
+    "anisotropic": Corruption(
+        "anisotropic", "azimuth_scale", (1.0, 0.75, 0.5, 0.35, 0.25),
+        "Along-track (azimuth) resolution loss only: the x axis is downsampled and restored "
+        "while the range axis is left untouched, as when range and azimuth resolution differ."
+        " Unlike isotropic `low_resolution`, this changes the *anisotropy* of the scene.",
+        physical=True,
+    ),
 }
 
 
@@ -118,6 +125,14 @@ def apply_corruption(img: np.ndarray, name: str, severity: float, rng: np.random
             arr = arr + rng.normal(0, sd, size=arr.shape).astype(np.float32)
     elif name == "brightness":
         arr = arr * float(severity)
+    elif name == "anisotropic":
+        scale = float(severity)
+        if scale < 1.0:
+            h, w = arr.shape[:2]
+            small = cv2.resize(
+                arr, (max(int(w * scale), 1), h), interpolation=cv2.INTER_AREA
+            )
+            arr = cv2.resize(small, (w, h), interpolation=cv2.INTER_LINEAR)
     elif name == "identity":
         pass
     else:

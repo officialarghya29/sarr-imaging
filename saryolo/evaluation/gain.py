@@ -143,6 +143,11 @@ def summarise_gain(gains: np.ndarray, active: float = 0.05) -> dict:
     below it is being left essentially untouched.
     """
     gains = np.asarray(gains, dtype=np.float64)
+    if gains.size == 0:
+        # numpy would return ``nan`` from an empty reduction and the report would look
+        # like a measurement. Refuse instead, so a mis-pointed split cannot produce a
+        # silently empty diagnostic.
+        raise ValueError("no gain values to summarise; the split resolved to zero images")
     per_image_std = gains.std(axis=1)
     per_image_mean = gains.mean(axis=1)
     pooled_std = float(gains.std())
@@ -200,6 +205,11 @@ def diagnose_gain(
     )
     if limit:
         paths = paths[:limit]
+    if not paths:
+        raise FileNotFoundError(
+            f"no images found under {images_dir} for the gain diagnostic; check the data.yaml "
+            "`val` entry (an empty diagnostic must not be reported as a measurement)."
+        )
 
     model = load_model(str(weights))
     if device:
