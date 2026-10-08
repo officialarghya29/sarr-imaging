@@ -6,10 +6,10 @@
 <h4 align="center">SAR Acquisition-Robust Visual Optimization — a SAR-native object detector</h4>
 
 <p align="center">
-  <img alt="tests" src="https://img.shields.io/badge/tests-510_passing-22c55e">
+  <img alt="tests" src="https://img.shields.io/badge/tests-573_passing-22c55e">
   <img alt="fabricated results" src="https://img.shields.io/badge/fabricated_results-0-black">
-  <img alt="architectures" src="https://img.shields.io/badge/architectures-104_wired-3b82f6">
-  <img alt="experiments" src="https://img.shields.io/badge/experiments-127_configured-8b5cf6">
+  <img alt="architectures" src="https://img.shields.io/badge/architectures-110_wired-3b82f6">
+  <img alt="experiments" src="https://img.shields.io/badge/experiments-134_configured-8b5cf6">
   <img alt="cost" src="https://img.shields.io/badge/SARVO--Lite-32.55_GFLOPs-0891b2">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-94a3b8">
 </p>
@@ -51,9 +51,9 @@ results.
 | | |
 | --- | --- |
 | **What this is** | A complete, reproducible research pipeline: dataset audit → baseline → components → ablations → removal tests → robustness → efficiency → cross-dataset → paper. |
-| **Architectures** | 104 variants wired; every one builds and runs a forward pass |
-| **Experiments** | 127 configured; each reproducible from a committed YAML |
-| **Tests** | 510 passing — no dataset download and no GPU needed |
+| **Architectures** | 110 variants wired; every one builds and runs a forward pass |
+| **Experiments** | 134 configured; each reproducible from a committed YAML |
+| **Tests** | 573 passing — no dataset download and no GPU needed |
 | **Proven** | The instrument: the baseline reproduces stock YOLO11 **exactly**, every custom module is an *exact* identity at initialisation and demonstrably not frozen, and the pipeline trains and evaluates on **real** SAR imagery. |
 | **Not yet proven** | Every accuracy number is a **pilot** on a subset. The ablation ladder, cross-sensor generalisation and the full-release benchmark are `TBD`; they need a GPU and the full datasets. |
 
@@ -84,12 +84,18 @@ real and measured, not the paper's result.
 | SSAC-001 · SARVO core mechanism (SSAC) | 0.563 | 0.309 | 0.863 | 0.538 | 3.396 | 1.998 | 46.110 | 7.280 |
 | SSAC-002 · control (fixed computation) | 0.566 | 0.303 | 0.919 | 0.528 | 3.396 | 1.998 | 47.600 | 7.380 |
 | SSAC-003 · control (raw-feature assessment) | 0.565 | 0.286 | 0.893 | 0.538 | 3.403 | 2.003 | 47.960 | 7.470 |
+| SSAC-004 · prototype, sparse execution | 0.557 | 0.300 | 0.860 | 0.538 | 3.396 | 2.293 | 42.890 | 9.040 |
+| SSAC-005 · prototype, expand=1 expensive path | 0.557 | 0.287 | 0.886 | 0.526 | 2.953 | 1.789 | 50.470 | 8.880 |
+| SSAC-006 · prototype + sparsity penalty | 0.567 | 0.313 | 0.938 | 0.531 | 3.396 | 1.998 | 43.490 | 7.540 |
 
 `SSAC-001` and `SSAC-002` are the master workflow's key comparison: the proposal against a
 **parameter-identical** fixed-computation control (3,396,329 parameters and 1.998 GFLOPs in
 both, so a difference between them is the adaptive allocation and not capacity). `SSAC-003`
 feeds the same allocation the raw feature instead of the multi-scale SAR statistic — the
-assessment alternative. See [the core mechanism](#the-core-mechanism-ssac) below.
+assessment alternative. `SSAC-004` is the same trained mechanism with **sparse execution**
+(the efficiency question) and `SSAC-005` narrows the expensive path to `expand=1` (how much of
+the +31 % parameter price the accuracy needs). See [the core mechanism](#the-core-mechanism-ssac)
+below.
 
 Every cell is read from `results/experiments.jsonl`, written by the run that measured it;
 `docs/assets/facts.json` is generated from that ledger and the table is checked against it by
@@ -110,10 +116,15 @@ resolution and seed, so a row differs from its neighbours only in **what is trai
   small, and it is **subsumed by augmentation**: the lead shrinks monotonically (+0.0139 →
   +0.0067 → +0.0016) as the corruption model is learned from data instead. The front end is kept
   as a cheap, interpretable ablation; augmentation is the headline.
-- **The core mechanism passes its own control.** SSAC's per-region allocation beats a
-  parameter-*identical* fixed-computation control (**+0.0063** mAP50:95) and the multi-scale SAR
-  statistic beats the raw-feature alternative — which lands *below the baseline*. Small and
-  single-seed, and with no efficiency claim: the implementation is dense. See below.
+- **The core mechanism's accuracy claim did not survive its own seed check, and that is
+  reported as the result.** At seed 0, SSAC's per-region allocation beat a parameter-*identical*
+  fixed-computation control by **+0.0063** mAP50:95 and the raw-feature alternative landed below
+  the baseline. Repeating the pair at seeds 1 and 2 gives **+0.0063 / +0.0645 / −0.0050**
+  (mean **+0.0220 ± 0.0373**), so the seed-0 gain is not reproduced and the claim is **withdrawn
+  as unsupported at this scale**. What the pilot does support is negative and precise: the
+  allocation is real and spatial, sparse execution is a faithful implementation, and it does
+  **not** convert into a wall-clock saving at 320 px (**+29.5 %** at `keep = 1.0`, returning only
+  to the dense latency at `keep = 0.1`). Three follow-ups, three measured answers. See below.
 - **Negative results are kept, not buried.** Two synthetic acquisition-shift axes (global
   radiometric gain, along-track resolution loss) do **not** separate the arms. Reported as nulls.
 
@@ -135,7 +146,8 @@ an **exact identity** until it has learned something.
 
 The mechanism is built to be *falsifiable*, and the master workflow's key control is the arm
 that can kill it: **SSAC-002** is parameter-identical to **SSAC-001** (3,396,329 parameters and
-1.998 GFLOPs each) with the allocation made spatially constant. On the pilot:
+1.998 GFLOPs each) with the allocation made spatially constant. At seed 0 the comparison looked
+like this:
 
 | Comparison | Measured | Reads as |
 | --- | --- | --- |
@@ -144,17 +156,69 @@ that can kill it: **SSAC-002** is parameter-identical to **SSAC-001** (3,396,329
 | SSAC-003 vs SSAC-001 — raw feature vs SAR statistic | 0.2863 vs **0.3089** | the **SAR statistic is load-bearing**; the raw-feature alternative is *below the baseline* |
 | SSAC-001 vs SSAC-002 — small objects | AP_small **0.0737** vs 0.0647 | no small-object penalty; it improves |
 
+**Then the pair was repeated at seeds 1 and 2, and the claim did not survive it.** The paired
+differences are **+0.0063 / +0.0645 / −0.0050** mAP50:95 — positive at two seeds, negative at one,
+mean **+0.0220 ± 0.0373**. The proposal's own seed spread (0.2801–0.3089) is larger than the effect
+it was claiming, so the seed-0 gain is not reproduced and **the accuracy claim is withdrawn as
+unsupported at this scale**. The 0.0226 gap to the raw-feature alternative sits inside the same
+spread and was not re-run, so that claim goes the same way. What the seed check does show is that
+the *proposal* was the more stable arm — its spread is 0.029 against the control's 0.087, because
+the fixed-computation control mis-trains at seed 1 (0.2156) — but one collapsed seed is an
+observation with n = 1 behind it, not a result. The mechanism is neither confirmed nor withdrawn at
+this scale, and no later section is built on the seed-0 numbers.
+
+One more finding from the same check, because it is the honest half of it: the *allocation* is
+real regardless. Pushing it sparse with a penalty (`SSAC-006`) drops the mean allocation at P4 from
+**0.670 to 0.236** and the fraction of locations above 0.5 from 0.044 / 1.000 / 1.000 to
+0.000 / 0.000 / 0.162 (P3/P4/P5) — the routing budget has headroom, which is the premise the
+sparse build needs. Its accuracy (0.3126) is reported next to the proposal's (0.3089) but **not**
+as a gain: a difference this pilot cannot resolve is not a result.
+
 The trained allocation is a genuine per-region decision and concentrates where small objects
 live: at the **P3** level only **4.4 %** of locations sit above 0.5, and the within-image spread
 exceeds the between-image spread at every level. At P4/P5 the model raised the allocation nearly
 uniformly, so **those levels save nothing** — reported rather than hidden.
 
-**What this does not claim.** One seed, 60 test images, one CPU. The implementation is *dense*: it
-pays the full expensive-path cost and makes **no efficiency claim** — the sparse variant that
-would actually skip regions is specified but not yet built. The withdrawal conditions (no gain
-over the control; the raw-feature alternative matching the proposal; a small-object drop) were
-written in `docs/ssac_design.md` **before** the runs, and none fired. Full analysis:
-[`docs/ssac_assessment.md`](docs/ssac_assessment.md) ·
+### Does the allocation convert into a wall-clock saving? No — and the mechanism is why
+
+A dense implementation cannot answer that question, so sparse execution was built: the same
+graph, the same **3,396,329** parameters, the same trained weights, with the expensive path run
+only on the selected 16-pixel tiles, each gathered with a 2-pixel halo so a selected tile sees
+exactly the context it saw in the dense pass (at `keep = 1.0` the two modes agree bit-for-bit,
+which is what makes the sparse mode trustworthy enough to time). One checkpoint, both ways:
+
+| Execution | `keep` | Expensive path executed (P3 / P4 / P5) | ms / batch of 4 | FPS |
+| --- | ---: | --- | ---: | ---: |
+| dense | — | 1.00 / 1.00 / 1.00 | 51.251 | 78.05 |
+| sparse | 1.0 | 1.00 / 1.00 / 1.00 | 63.890 | 62.61 |
+| sparse | 0.5 | 0.87 / 0.78 / 1.00 | 50.731 | 78.85 |
+| sparse | 0.25 | 0.52 / 0.39 / 1.00 | 49.165 | 81.36 |
+| sparse | 0.1 | 0.17 / 0.39 / 1.00 | 48.547 | 82.39 |
+
+The answer is **no**. Routing has a real overhead — at `keep = 1.0` every tile is still gathered
+and the latency is **+29.5 %** for nothing — the skipping does buy that overhead back as the
+budget falls, and then it stops: at `keep = 0.1`, with **83 % of the P3 expensive path skipped**,
+the latency returns to the dense level and goes no lower. The per-level column shows the ceiling:
+at 320 px the P5 map is 10×10, a **single** tile, so no budget can skip anything there, and P4
+has four tiles. The mechanism's expensive path is concentrated in exactly the levels a 16-pixel
+tile cannot route at this input scale. That is the outcome `docs/ssac_design.md` §4 pre-registered
+as the expected one on CPU, and it is reported as a limit of the pilot's input scale rather than
+as evidence about the idea.
+
+Two further measured caveats, because they decide how the number may be read. The FLOP counters
+**cannot see the sparsity**: they trace dense kernels regardless of which ones execute, so the
+sparse arm reports **2.293 G** against the dense **1.998 G**. And the routing's saving is bounded
+below by the routing itself: at these map sizes the router is never free.
+
+![Dense versus sparse execution of the same checkpoint](docs/assets/ssac_execution.svg)
+
+**What this does not claim.** One checkpoint for the timing, three builds for the accuracy, 60 test
+images, one CPU, and one input scale. The efficiency claim is measured and **negative** on this
+host. The accuracy claim is **withdrawn**: the withdrawal conditions (no gain over the control;
+the raw-feature alternative matching the proposal; a small-object drop), written in
+`docs/ssac_design.md` §3.2 **before** the runs, did their job — condition 1 fires at seed 2, where
+the proposal no longer beats the parameter-identical control on mAP50:95. The small-object
+condition did not fire. Full analysis: [`docs/ssac_assessment.md`](docs/ssac_assessment.md) ·
 [`docs/ssac_design.md`](docs/ssac_design.md).
 
 ---
@@ -272,13 +336,13 @@ Each row is an executable check, not a claim. The full list lives in `tests/`.
 | Check | Result | Evidence |
 | --- | --- | --- |
 | Baseline reproduces stock YOLO11 exactly | `2,624,080` (n), `9,458,752` (s) | `test_baseline_matches_stock_yolo11_parameter_count` |
-| **All 104 architectures construct and forward** | pass, at even and odd input sizes | `test_every_variant_builds_and_forwards` |
+| **All 110 architectures construct and forward** | pass, at even and odd input sizes | `test_every_variant_builds_and_forwards` |
 | Declared scales build at the right stride count | pass | `test_declared_scale_variants_build` |
 | Every SAR module is an **exact** identity at init | `max\|f(x)−x\| = 0.0e+00` | measured live + `test_each_module_is_exactly_identity_at_init` |
 | **No module is silently frozen at init** | every learnable mode has a non-zero gate gradient | `test_no_module_is_frozen_at_init` |
 | **All gates leave zero during real training** | `25/25` non-zero after 2 epochs | `SMOKE-003` checkpoint |
 | SAR-YOLO predicts identically to baseline at init | max abs diff `0.0` (v1 **and** v2) | `test_models_output_identically_to_baseline_at_init` |
-| Filenames cannot silently downgrade the scale | pass (104 variants) | `test_variant_filenames_encode_scale` |
+| Filenames cannot silently downgrade the scale | pass (110 variants) | `test_variant_filenames_encode_scale` |
 | **Conditioning is per-sample, not per-batch** | row *i* of a mixed-source batch equals row *i* run alone — the LOSO recipe depends on it | `test_conditioning_is_per_sample_not_per_batch` |
 | An out-of-vocabulary sensor is refused, not clamped | clamping would map an unseen sensor onto a trained-on one, silently | `test_a_vocabulary_mismatch_raises_instead_of_snapping_to_a_nearby_sensor` |
 | **The COCO metric reproduces pycocotools** | identical mAP50 and mAP50:95 on synthetic and real detections | `test_the_ap_implementation_reproduces_pycocotools` |
@@ -297,7 +361,7 @@ Each row is an executable check, not a claim. The full list lives in `tests/`.
 git clone https://github.com/officialarghya29/sarr-imaging.git && cd sarr-imaging
 python -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt
 
-pytest tests/ -q                                          # 510 tests
+pytest tests/ -q                                          # 573 tests
 ```
 
 Train and evaluate on the real subset (no GPU required):
@@ -309,6 +373,13 @@ python -m saryolo eval --weights results/runs/REAL-004/weights/best.pt \
     --data configs/datasets/hrsid_real.yaml --imgsz 320
 python -m saryolo efficiency --weights results/runs/REAL-004/weights/best.pt \
     --imgsz 320 --real --data configs/datasets/hrsid_real.yaml --batch 8 --runs 3
+python -m saryolo train --exp configs/exp/SSAC-001_hrsid_ssac.yaml        # the core mechanism
+python -m saryolo train --exp configs/exp/SSAC-002_hrsid_ssac_fixed.yaml  # + its parameter-identical control
+python -m saryolo efficiency --weights results/runs/SSAC-001/weights/best.pt \
+    --imgsz 320 --real --data configs/datasets/hrsid_real.yaml --batch 4 --runs 5 \
+    --ssac-execution sparse --ssac-keep 1.0 --ssac-keep 0.5 --ssac-keep 0.25 --ssac-keep 0.1
+    # the same trained weights timed dense (default) and at four routing budgets;
+    # writes ssac_execution_sweep.json and reports what each level actually routed
 python -m saryolo gain --weights results/runs/REAL-004/weights/best.pt \
     --data configs/datasets/hrsid_real.yaml            # is the learned gain a per-pixel map?
 python -m saryolo robustness --weights results/runs/REAL-004/weights/best.pt \
@@ -326,7 +397,7 @@ config plus the HRSID release; see [`docs/DATASETS.md`](docs/DATASETS.md) and
 
 ```
 saryolo/
-  nn/            arch (104 variants) · model · modules/ (the SAR components) · losses
+  nn/            arch (110 variants) · model · modules/ (the SAR components) · losses
   data/          dataset registry · YOLO/VOC conversion · acquisition metadata · group splits
   training/      trainer (SAR-aware loss, conditioning) · LoRA · hard-example mining · runner
   evaluation/    COCO AP + scale-wise AP · robustness · efficiency · gain · cross-dataset · LOSO
@@ -334,10 +405,10 @@ saryolo/
   paper/         table generators (an unmeasured cell renders as TBD)
   tracking/      append-only experiment ledger
   cli.py         19 subcommands behind one entry point
-configs/         datasets/ · models/ (104 generated) · exp/ (EXP-001…019 + ablations + frontier)
+configs/         datasets/ · models/ (110 generated) · exp/ (EXP-001…019 + ablations + frontier)
 docs/            physics-to-architecture proposals · method drafts · claim-to-evidence audit
 paper/           manuscript skeleton + generated tables + results draft
-tests/           510 checks; the instrument is tested as hard as the model
+tests/           573 checks; the instrument is tested as hard as the model
 ```
 
 ---

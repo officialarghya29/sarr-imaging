@@ -15,8 +15,8 @@ on a subset is never presented as the benchmark result.
 
 | # | Claim | Label | Evidence (artifact / test) |
 | --- | --- | --- | --- |
-| 1 | The test suite passes and needs neither a GPU nor a download | **final** | `pytest -q` → 469 passed; `reports/reproduction_status.md` |
-| 2 | The architecture vocabulary is wired and self-consistent | **final** | 98 variants; `tests/test_arch.py` (61 tests) |
+| 1 | The test suite passes and needs neither a GPU nor a download | **final** | `pytest -q` → 573 passed; `reports/reproduction_status.md` |
+| 2 | The architecture vocabulary is wired and self-consistent | **final** | 110 variants; `tests/test_arch.py` (64 tests) |
 | 3 | Every custom module is an **exact** identity at initialisation | **final** | `docs/assets/facts.json` → `identity`, all `max|f(x)−x| = 0.0e+00`; `tests/test_arch.py` |
 | 4 | No module is frozen at init (identity comes from the gate, not a dead branch) | **final** | `tests/test_arch.py::test_no_module_is_frozen_at_init` |
 | 5 | The CFAR front end is an exact identity at init and its gain trains | **final** | `tests/test_cfar_frontend.py` (16 tests) |
@@ -32,6 +32,11 @@ on a subset is never presented as the benchmark result.
 | 14 | The prototype improves robustness under an acquisition shift | **not supported** | radiometric-gain and anisotropic-resolution pilots are both null (`docs/architecture_proposals.md` §8) |
 | 15 | Cross-sensor / cross-resolution generalisation | **blocked** | needs the full release + a second source; no GPU here |
 | 16 | Any number for the full-release ladder, LOSO folds, tuned LoRA sweep | **blocked / `TBD`** | unmeasured; the ledger renders `TBD` |
+| 17 | The adaptive SSAC allocation beats a parameter-identical fixed-computation control | **withdrawn — not supported at this scale** | `SSAC-001` vs `SSAC-002` at three seeds: +0.0063 / +0.0645 / −0.0050 mAP50:95, mean +0.0220 ± 0.0373, smaller than the proposal's own spread; `paper/RESULTS.md` §8.7 |
+| 18 | The multi-scale SAR statistic is a better assessment signal than the raw feature | **withdrawn — not resolvable at this scale** | `SSAC-003`'s 0.0226 gap sits inside the proposal's 0.0290 seed spread and was not re-run; `paper/RESULTS.md` §8.8 |
+| 19 | Sparse execution turns the allocation into a wall-clock saving | **not supported** | `SSAC-004` and the CLI routing sweep: **+29.5 %** at `keep = 1.0`, no saving at any budget at 320 px; `paper/RESULTS.md` §8.5 |
+| 20 | The sparsity penalty pushes the allocation sparse (the premise sparse execution needs) | **preliminary** | `SSAC-006` allocation diagnostic: P4 mean gate 0.670 → 0.236; its accuracy difference is explicitly **not** claimed as a gain |
+| 21 | The SSAC block is an exact identity at init and its sparse execution matches dense at `keep = 1.0` | **final** | `tests/test_ssac.py` (46 tests); bit-for-bit equality at `keep = 1.0`, no extra parameters |
 
 ## 2. The augmentation pilot
 

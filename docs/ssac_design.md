@@ -154,12 +154,14 @@ whether an uninformative allocation can be rescued — not part of the proposal.
 | Cheap path | `O(9 C H W)` | depth-wise 3×3 |
 | Expensive path | `O((C·e·9 + C·e + C·e·C) H W) ≈ O(C²e·HW)` | the 1×1 expand/contract |
 | **Dense total** | the sum — **no saving** | the expensive path |
-| **Sparse total** (unbuilt) | `O((9C + ρ·C²e)·HW)` for selected fraction `ρ` | the expensive path, scaled by `ρ` |
+| **Sparse total** (built — the `ssac_sparse` execution; see §5 S1) | `O((9C + ρ·C²e)·HW)` for selected fraction `ρ` | the expensive path, scaled by `ρ` |
 
 The important honest statement: **the dense implementation runs the expensive path
-everywhere.** The measured cost rises, and the mechanism's efficiency case exists only if a
-sparse implementation can actually skip the expensive path — which §4 states as the next
-engineering step and identifies as the risk.
+everywhere.** The measured FLOPs rise. The mechanism's efficiency case exists only if a
+sparse implementation can actually skip the expensive path — so one was built (§5 S1). It
+does skip the expensive path, but at the pilot's 320 px input scale that skip does not turn
+into a wall-clock saving, because the levels whose expensive path can be routed are single
+tiles at that resolution (§5 S1, `paper/RESULTS.md` §8.5).
 
 ---
 
@@ -264,11 +266,27 @@ more complete" would produce exactly the module-ladder outcome the brief forbids
 
 ## 3. Prototype status and the minimum validating experiment
 
+### 3.0 The arms this specification has been built out into
+
+| Arm | What it is | Why it exists |
+| --- | --- | --- |
+| `ssac_n` | the proposal: adaptive allocation, dense execution | Experiment 1 |
+| `ssac_fixed_n` | parameter-identical control, allocation spatially constant | the key falsifier |
+| `ssac_raw_n` | identical allocation fed the raw feature | Experiment 2 (is the statistic load-bearing?) |
+| `ssac_sparse_n` | the proposal with `execution="sparse"` | the efficiency question (§4, §5) |
+| `ssac_e1_n` | the expensive path's bottleneck at `expand=1` | how much of the +31.1 % parameter price is load-bearing |
+| `ssac_pen_n` | the proposal plus a `w_ssac_sparsity` penalty on the mean allocation | what the mechanism does when *pushed* sparse — the premise a sparse build relies on |
+
+Each arm is a `ModelSpec` in `saryolo/nn/arch.py`, generated into `configs/models/`, and has a
+runnable experiment config; the sparse build differs from its dense twin in **no parameter**,
+which is what makes the pair a cost comparison rather than a capacity comparison.
+
 ### 3.1 What is implemented and verified
 
 `saryolo/nn/modules/ssac.py::ScatterSelectiveRefinement`, modes
-`("adaptive", "adaptive_raw", "fixed")`, arms `ssac_{s,n}`, `ssac_raw_{s,n}`,
-`ssac_fixed_{s,n}`. Verified by `tests/test_ssac.py` (22 tests) plus the shared
+`("adaptive", "adaptive_raw", "fixed")` and executions `("dense", "sparse")`, arms
+`ssac_{s,n}`, `ssac_raw_{s,n}`, `ssac_fixed_{s,n}`, `ssac_sparse_{s,n}`, `ssac_e1_{s,n}`,
+`ssac_pen_{s,n}`. Verified by `tests/test_ssac.py` (46 tests) plus the shared
 identity/gradient guards in `tests/test_arch.py`:
 
 | Check (master Phase 4 requirement) | Status |
@@ -320,14 +338,179 @@ Any of these outcomes is a reportable result. None of them is a reason to skip t
 | --- | --- | --- |
 | **Allocation collapse** | `g` becomes constant across a scene | `gain_map` diagnostic; the `fixed` control *is* the collapsed model, so a collapse makes the proposal identical to the control by construction |
 | **Assessment too expensive** | assessment FLOPs approach the expensive path's | measure the assessment share in the efficiency profile |
-| **No wall-clock saving on CPU** | dense FLOPs fall (in a sparse build) but latency does not | this is the *expected* outcome on CPU; report it rather than claim a saving. Identical to the 2022 latency-aware-dynamics caveat and to this repo's own CFAR measurement (3.0× latency for +9 % FLOPs) |
+| **No wall-clock saving on CPU** | dense FLOPs fall (in a sparse build) but latency does not | **measured, and it happened**: sparse execution is +29.5 % latency at `keep = 1.0` (routing overhead) and returns only to the dense latency at `keep = 0.1`, where 83 % of the P3 expensive path is skipped — §5. Identical to the 2022 latency-aware-dynamics caveat and to this repo's own CFAR measurement (3.0× latency for +9 % FLOPs) |
+| **Routing cannot bite at small map sizes** | the executed fraction stays 1.0 at the deepest level whatever the budget | **measured**: at 320 px the P5 map is 10×10 — a single 16-pixel tile — so no budget can skip anything there. The limit is the input resolution, not the budget; it is stated as such |
+| **The FLOP counter reports the wrong thing** | a sparse build's GFLOPs are not below the dense build's | they are **above** it (2.293 vs 1.998 G), because the counter traces kernels regardless of which execute. This is why the efficiency claim rests on the wall-clock measurement and the ledger's `flops_G` for a sparse arm is read as a counter value, not as arithmetic performed |
 | **Uniform difficulty** | the dataset's regions are all equally hard, so there is nothing to allocate | `selected_fraction` near 1 at convergence; the HRSID subset is small and homogeneous, so this is a live risk |
 | **Small-object suppression** | scale-wise AP drops | structural (§1.4) plus Experiment 4 |
 | **Wall-clock **overhead** even when dense | Python-level routing grows latency | not applicable to this dense build; would apply to the sparse one |
 
-**The efficiency position, stated plainly.** SSAC's *accuracy* claim is testable now. Its
-*efficiency* claim is not: the dense implementation pays the full expensive-path cost, and a
-sparse implementation that actually skips regions is the required next engineering step —
-one that needs a sparse convolution/gather kernel to be honest, which on this CPU-only
-machine is unlikely to convert into a wall-clock saving. That is recorded here so the
-prototype cannot be quoted as an efficient method until it has measured one.
+**The efficiency position, stated plainly (now measured).** The dense implementation pays the
+full expensive-path cost, which is why the mechanism's first measurement was explicitly an
+accuracy measurement. Sparse execution now exists (`execution="sparse"`: 16-pixel tiles, the
+top `keep` fraction by mean evidence refined per image, each gathered tile carrying a 2-pixel
+halo = the expensive path's own receptive radius), and it is validated rather than asserted:
+at `keep = 1.0` it reproduces dense execution **bit-for-bit** in eval mode, and it is
+parameter-identical to the dense build (3,396,329 parameters either way, so a cost difference
+cannot be capacity).
+
+The measured answer, on one trained checkpoint at 320 px, batch 4, median of 5 timed blocks:
+
+dense 51.251 ms · sparse 63.890 ms at `keep = 1.0` · 50.731 at 0.5 · 49.165 at 0.25 · 48.547 at 0.1.
+
+So the routing costs **+29.5 %** when nothing is skipped, the skipping buys that back as the
+budget falls, and it stops at the dense latency — **no wall-clock saving is claimed**, and the
+per-level executed fraction (0.17 / 0.39 / 1.00 at `keep = 0.1`) shows why: the P5 map is a
+single tile at this resolution. Recorded here so the prototype cannot be quoted as an efficient
+method on the strength of its arithmetic alone.
+
+---
+
+## 5. The optimization loop (master Phase 9): problem → change → evidence → verdict
+
+Each row is one deliberate change to the mechanism, with what was predicted *before* the run and
+what was measured. Nothing here is a tuning log: a change is kept only when it is measured, and
+the rows that were rejected are kept too, because a rejected change is the evidence for the
+shape the mechanism has.
+
+All runs: HRSID 200/60/60, 40 epochs, 320 px, batch 4, seed 0, CPU, one class.
+
+### S0 — the arm that produced a duplicate, and the defect behind it
+
+**Problem.** The sparsity-penalty arm (`SSAC-006`) came out **bit-for-bit identical** to the
+unpenalised proposal (`SSAC-001`): every weight of the two checkpoints equal to the last bit,
+and all four reported metrics identical. A penalty that changes the objective cannot leave the
+weights untouched.
+
+**Cause, found by following that symptom.** `saryolo/training/trainer.py::is_saryolo_yaml` chose
+between the repository's own model/trainer and ultralytics' stock ones from a *hand-written tuple
+of layer names* — and the tuple omitted `RatioSpaceCFARFrontEnd` and `ScatterSelectiveRefinement`,
+the repository's two prototype mechanisms. Every SSAC and CFAR arm therefore trained through the
+**stock** `YOLO` facade, on ultralytics' `DetectionModel` with ultralytics' own loss, so
+`SARYOLODetectionModel.loss` — and with it the SAR-aware criterion and the new penalty — never ran.
+The runs converged and reported plausible numbers; nothing failed.
+
+**Change.** The list is now derived from `saryolo.nn.modules.CUSTOM_MODULES`, the single registry
+that defines what may appear in a model YAML, with two guards:
+`tests/test_arch.py::test_every_custom_layer_name_forces_the_custom_facade` and
+`::test_every_variant_that_needs_the_custom_model_gets_it` (checked against the architecture
+dict, so it cannot agree with a wrong lookup by construction).
+
+**Blast radius, measured four ways rather than reasoned once.** The defect changed *which* loss
+ran, so it could only matter for an arm that declares a `sar_loss` block.
+
+1. **Enumeration.** Of the 68 variants that declare a `sar_loss` block, **two** were not covered
+   by the old hand-written list — and both are the new penalty arms. No previously recorded
+   result was affected. This is now a test
+   (`tests/test_arch.py::test_every_variant_that_declares_a_sar_loss_block_gets_the_sar_loss`),
+   so a new variant cannot reintroduce it either.
+2. **Loss identity.** `SARAwareDetectionLoss` with every weight at zero is *bit-identical* to
+   ultralytics' `v8DetectionLoss` on an identical model and batch
+   (`tests/test_losses.py::test_the_sar_criterion_with_every_weight_off_is_the_stock_detection_loss`),
+   so an arm without a `sar_loss` block trained the same objective either way.
+3. **End-to-end re-run.** The seed-0 control was re-trained through the fixed path with
+   `--no-ledger` (a verification may not touch a result row): its weights reproduce the earlier
+   run **bit-for-bit** and its validator reports the same metrics (0.566 / 0.303). That is what
+   licenses reusing the SSAC-001/002/003 rows, and the arms that were in flight when the fix
+   landed.
+4. **The arm that mattered.** The penalty arm was re-run, because there the defect was not
+   harmless — it was the whole point of the arm.
+
+One more failure mode belongs in §4's table and is recorded here because it is the same kind of
+bug: a **halo that is too small** makes the sparse pass refine a tile with the wrong context,
+which shows up as an unexplained accuracy gap rather than as an error. The halo is therefore
+derived from the expensive path's own kernels, and the `keep = 1.0` equivalence test fails loudly
+if it is ever wrong.
+
+### S1 — sparse tile execution (the cost question)
+
+**Change.** `execution="sparse"`: 16-pixel tiles, the top `keep` fraction by mean evidence
+refined per image, each gathered tile carrying a halo of the expensive path's receptive radius.
+
+**Predicted before the run.** On a CPU, with Python-level routing, the arithmetic saving would
+probably not appear as a wall-clock saving — the 2022 latency-aware-dynamics result and this
+repository's own CFAR measurement (3.0× latency for +9 % FLOPs) both say so.
+
+**Measured.** Correctness: at `keep = 1.0` sparse execution reproduces the dense output
+**bit-for-bit** in eval mode, and the sparse build is parameter-identical (3,396,329) to the dense
+one. Cost: 51.251 ms dense against 63.890 ms at `keep = 1.0` (**+29.5 %** — the routing itself),
+50.731 at 0.5, 49.165 at 0.25, 48.547 at 0.1, where 83 % of the P3 expensive path is skipped.
+Accuracy: the sparse arm (`SSAC-004`) scores mAP50:95 **0.2995** against the dense proposal's
+0.3089 — the accuracy cost of not refining the unselected tiles is about the size of the
+mechanism's own gain over the baseline, and the sparse arm's AP_small (0.0697) stays above the
+control's (0.0647).
+
+**Verdict — rejected as an efficiency claim, kept as an implementation.** The routing does not
+pay for itself at 320 px, for a reason the per-level breakdown makes concrete rather than
+rhetorical: the P5 map is 10×10, a single 16-pixel tile, so no budget can skip anything at the
+level where most of the expensive path's cost sits. This is a statement about this input scale and
+this implementation, not about region-selective computation in general; the honest next step is a
+larger input size (P3 = 160×160, P5 = 40×40, 6 tiles there), which needs the GPU budget this host
+does not have.
+
+### S2 — narrowing the expensive path (`expand = 1`)
+
+**Problem.** The mechanism costs **+31.1 %** parameters over the stock detector. How much of that
+price does the accuracy actually need?
+
+**Change.** `ssac_e1_n`: the expensive path's bottleneck at `expand=1` instead of 2, everything
+else identical — 2,953,257 parameters (+14.0 % over stock) and 1.789 GFLOPs.
+
+**Measured.** mAP50:95 **0.2871** — below the stock baseline (0.3012) and well below the
+proposal (0.3089). So halving the expensive path's width does not halve the mechanism's benefit;
+it removes it. The extra 443,072 parameters are the load-bearing part of the cost, which is the
+answer the ablation was built to get. One nuance in the other direction, reported because it is
+in the numbers: this arm's AP_small is **0.0849**, *higher* than the proposal's 0.0737 — the
+narrowest expensive path favours the smallest objects while losing overall localisation. The cost
+ablation does not have a single monotone story, and this is the part that is not.
+
+**Verdict — kept as an ablation.** The narrow arm is not a cheaper operating point to adopt; it is
+evidence that the mechanism's cost is where its effect is.
+
+### S3 — pushing the allocation sparse (the premise the sparse build depends on)
+
+**Problem.** S1 shows a sparse build only pays off if the allocation is *concentrated*. The
+proposal's own allocation is concentrated at P3 (4.4 % of locations above 0.5) and **not** at
+P4/P5 (fraction 1.0), so the routing has nothing to skip where the expensive path is largest.
+The premise was unmeasured.
+
+**Change.** `ssac_pen_n`: the identical graph and seed, plus a `w_ssac_sparsity = 0.01` penalty on
+the mean allocation. Deliberately *not* a default — penalising the allocation to be small is
+circular when sparsity is the mechanism's own claim — and as an arm it also has a structural
+side effect worth knowing: the penalty is differentiable through the scorer while the block is
+still an exact identity, so this arm trains its allocation from step 0.
+
+**Measured.** The allocation falls at every level — mean `g` at P4 from **0.670 to 0.236**, at P3
+from 0.483 to 0.382, at P5 from 0.762 to 0.491 — and the fraction above 0.5 goes from 0.044 / 1.0 /
+1.0 to 0.000 / 0.000 / 0.162. Accuracy: 0.3126 mAP50:95 against the proposal's 0.3089, precision
+0.938 against 0.863. The between-image spread at P5 rises from 0.095 to 0.167, i.e. the penalised
+model allocates by scene rather than uniformly.
+
+**Verdict — kept, with its claim capped.** The mechanism can be pushed to allocate a third to a
+half as much at no measurable accuracy cost, which is the premise S1 needed. The small accuracy
+difference is **not** reported as a gain: S4 shows this pilot cannot resolve differences of that
+size, and a measurement that cannot be resolved is not a result.
+
+### S4 — the seed check, and the claim it withdrew
+
+**Problem.** The pair that decides the mechanism's accuracy claim is `SSAC-001` vs `SSAC-002`, one
+seed apart, +0.0063 mAP50:95. This repository had already measured the *baseline's* seed spread as
+0.021, so the size of the effect relative to the noise was an open question that only more seeds
+could answer.
+
+**Change.** Repeat the pair at seeds 1 and 2 (`SSAC-007`/`SSAC-009`, `SSAC-008`/`SSAC-010`), same
+dataset, schedule, resolution and batch.
+
+**Measured.** Paired differences **+0.0063 / +0.0645 / −0.0050** (mean +0.0220, sd 0.0373). The
+proposal's own spread is 0.2801–0.3089 against the control's 0.2156–0.3026: the control mis-trains
+at seed 1, and the proposal is the more stable of the two, but the *effect* is smaller than its own
+spread.
+
+**Verdict — the accuracy claim is withdrawn as unsupported at this scale.** Withdrawal condition 1
+of §3.2 fires at seed 2 and is not decisively avoided on the mean, so the honest record is: at 200
+training images and 60 test images the mechanism is neither confirmed nor withdrawn. The same
+applies to condition 2 (`SSAC-003`'s 0.0226 gap is inside the proposal's own 0.0290 spread, and it
+was not re-run). The mechanism's *design* survives — the allocation is real and spatial, sparse
+execution is faithful, and the mechanism can be pushed sparse — but its accuracy advantage does
+not, and no later section is built on it. Conditions 3 and 4 (small-object loss, uninformative
+allocation) did not fire at any seed.

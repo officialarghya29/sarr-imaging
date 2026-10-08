@@ -272,6 +272,87 @@ Latest additions (this session):
    runs and none fired; the effect is small and single-seed (60 test images, one CPU), and it is
    labelled a pilot everywhere.
 
+16. ~~Cost ablation of the core mechanism, and the defect it exposed~~ — **measured**. The three
+   questions left open by item 15 were: does the allocation convert into a wall-clock saving,
+   how much of the mechanism's +31.1 % parameter price is load-bearing, and does the mechanism
+   survive being pushed sparse. All three now have measured answers, and finding them turned up a
+   defect that the accuracy runs could never have shown.
+
+   **A defect, found because an arm produced a duplicate.** The sparsity-penalty arm came out
+   **bit-for-bit identical** to the unpenalised proposal — every weight equal, all four metrics
+   equal. A penalty changes the objective and cannot leave the weights untouched, so the symptom
+   pointed at the wiring: `saryolo/training/trainer.py::is_saryolo_yaml` decided between this
+   repository's model/trainer and ultralytics' stock ones from a *hand-written tuple of layer
+   names*, and that tuple omitted `RatioSpaceCFARFrontEnd` and `ScatterSelectiveRefinement` — the
+   repository's own two prototype mechanisms. Every SSAC and CFAR arm therefore trained on
+   ultralytics' `DetectionModel` with ultralytics' own loss, so `SARYOLODetectionModel.loss` (the
+   SAR-aware criterion, and the new allocation penalty) never ran. The runs converged and reported
+   plausible numbers; nothing failed. The list is now derived from
+   `saryolo.nn.modules.CUSTOM_MODULES`, the registry that defines what may appear in a YAML, with
+   two guards in `tests/test_arch.py` — one pinning the derivation, one checking every one of the
+   110 variants against its own architecture dict.
+
+   **Blast radius, measured rather than reasoned.** Of the 68 variants declaring a `sar_loss`
+   block, the enumeration finds **two** that the old list missed — the two new penalty arms — so no
+   previously recorded number was affected; that check is now a test. The loss identity is pinned
+   too: `SARAwareDetectionLoss` with all weights at zero is bit-identical to ultralytics'
+   `v8DetectionLoss` on an identical model and batch. And the end-to-end case is measured: the
+   seed-0 control was re-trained through the fixed path with `--no-ledger` (a verification may not
+   touch a result row), and its weights reproduce the earlier run **bit-for-bit**, with the same
+   validator metrics (0.566 / 0.303) — which licenses the SSAC-001/002/003 rows, and the arms
+   that were in flight when the fix landed. The penalty arm was re-run, because there the defect
+   was not harmless: it was the arm.
+
+   | Id | Arm | mAP50 | mAP50:95 | AP_small | Params | GFLOPs@320 |
+   | --- | --- | ---: | ---: | ---: | ---: | ---: |
+   | REAL-001 | YOLO11n baseline | 0.5706 | 0.3012 | — | 2,590,035 | 1.613 |
+   | SSAC-001 | proposal | 0.5626 | **0.3089** | **0.0737** | 3,396,329 | 1.998 |
+   | SSAC-002 | matched fixed-computation control | 0.5655 | 0.3026 | 0.0647 | 3,396,329 | 1.998 |
+   | SSAC-004 | proposal, **sparse execution** (keep 0.25) | 0.5570 | 0.2995 | 0.0697 | 3,396,329 | 2.293¹ |
+   | SSAC-005 | proposal with `expand=1` | 0.5574 | 0.2871 | 0.0849 | 2,953,257 | 1.789 |
+
+   ¹ The FLOP counter reads the *graph*, so it cannot see the sparsity: it reports **more** work for
+   the sparse build than for the dense one (2.293 against 1.998 G) even though 48–83 % of the
+   expensive path is skipped. That is why the efficiency question is answered with a wall-clock
+   measurement and not a FLOP ratio.
+
+   **The wall-clock answer is no.** One checkpoint, identical weights, timed both ways at 320 px,
+   batch 4, median of 5 blocks: dense 51.251 ms; sparse 63.890 ms at `keep = 1.0` (**+29.5 %**, the
+   routing's own overhead), 50.731 at 0.5, 49.165 at 0.25, 48.547 at 0.1 — where 83 % of the P3
+   expensive path is skipped and the latency has returned to the dense level and stopped. The
+   per-level breakdown says why: at this input size the P5 map is 10×10, a **single** 16-pixel
+   tile, so no budget can skip anything at the level that carries most of the expensive path. This
+   is the outcome `docs/ssac_design.md` §4 pre-registered as expected on CPU, and it is recorded as
+   a limit of the pilot's input scale, not as a verdict on region-selective computation.
+
+   **Correctness of the sparse form is proven, not assumed**: at `keep = 1.0` it reproduces dense
+   execution bit-for-bit in eval mode, the halo is derived from the expensive path's own kernels,
+   and the sparse build is parameter-identical to its dense twin, so a cost difference cannot be
+   capacity. The loop, with the rejected rows kept, is `docs/ssac_design.md` §5.
+
+   **Can the allocation be pushed sparse? Yes, and it costs nothing measurable.** `SSAC-006` adds
+   a `w_ssac_sparsity` penalty to the identical graph and seed (the penalty is deliberately *not* a
+   default, because penalising the allocation to be small is circular when sparsity is the
+   mechanism's own claim). Measured on 16 real val chips from the two trained checkpoints, the
+   learned allocation falls at every level — mean gate at P4 from **0.670 to 0.236**, at P3 from
+   0.483 to 0.382 — and the fraction of locations above 0.5 falls from 0.044 / 1.000 / 1.000 to
+   0.000 / 0.000 / 0.162 (P3/P4/P5). Accuracy 0.3126 against the proposal's 0.3089 with precision
+   0.938 against 0.863 — **not** reported as a gain, because the seed check below cannot resolve a
+   difference that size. It is reported as the premise the sparse build needed: the routing budget
+   has headroom, so the mechanism's sparsity is a property the model can be *held* to.
+
+   **And then the seed check withdrew the accuracy claim.** The pair that decides the mechanism —
+   the proposal against its parameter-identical control, +0.0063 mAP50:95 at seed 0 — was repeated
+   at seeds 1 and 2. The paired differences are **+0.0063 / +0.0645 / −0.0050** (mean **+0.0220 ±
+   0.0373**). Its own seed spread (0.2801–0.3089) is larger than the effect, the control mis-trains
+   at seed 1 (0.2156), and the sign is not stable. Withdrawal condition 1 of
+   `docs/ssac_design.md` §3.2 fires at seed 2, so the accuracy claim is **withdrawn as unsupported
+   at this scale** and the same applies to the assessment alternative (a 0.0226 gap inside a 0.0290
+   spread, and not re-run). This is the outcome the master workflow's discipline exists to produce:
+   a small positive result that did not survive being asked twice. What survives is the
+   mechanism's design — spatial allocation, faithful sparse execution, pushable sparsity — and none
+   of the positive accuracy numbers.
+
 What remains on the critical path needs a GPU: run `docs/RUNBOOK_SSDD.md` end to end. Every
 CPU-side prerequisite is now in place.
 

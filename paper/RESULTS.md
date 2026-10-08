@@ -275,15 +275,23 @@ the multi-scale SAR statistic.
 | SSAC-002 | matched fixed-computation control | 0.5655 | 0.3026 | 0.9186 | 0.5280 | 3,396,329 | 1.998 |
 | SSAC-003 | assessment alternative: raw-feature scorer | 0.5653 | 0.2863 | 0.8932 | 0.5382 | 3,403,257 | 2.003 |
 
-**What the test settles.** The proposal beats its parameter-identical control by **+0.0063**
-mAP50:95 and the baseline by +0.0077. The control itself is essentially the baseline
-(0.3026 vs 0.3012): the refinement block, applied uniformly, buys nothing. So the adaptivity
-is doing something the capacity is not — the first falsifier is cleared. The second is
-cleared more strongly: the raw-feature assessment alternative scores **0.2863**, *below the
-baseline* and 0.0226 under the proposal, so the SAR statistic is load-bearing and the
-mechanism is not merely a generic dynamic network. (mAP50 and precision go the other way —
-the proposal trades a little precision for localisation-weighted AP; that is reported, not
-spun.)
+**What the seed-0 run appeared to settle — and what §8.7 then took back.** At seed 0 the
+proposal beats its parameter-identical control by **+0.0063** mAP50:95 and the baseline by
++0.0077, and the control itself is essentially the baseline (0.3026 vs 0.3012), so the refinement
+block applied uniformly buys nothing. The raw-feature assessment alternative scores **0.2863**,
+*below the baseline* and 0.0226 under the proposal. Read alone, that pair of comparisons says the
+adaptivity is doing something the capacity is not, and that the SAR statistic — not the raw
+feature — is where the signal is.
+
+**It does not survive the seed check.** Section 8.7 repeats the proposal/control pair at seeds 1
+and 2 and finds the paired difference is **+0.0063 / +0.0645 / −0.0050** — positive at two seeds,
+negative at one, mean +0.0220 with a standard deviation of 0.0373, and a proposal seed spread
+(0.0290) larger than the seed-0 effect. The 0.0226 gap to the raw-feature alternative is inside
+that same spread, so the assessment claim is not distinguishable from seed noise either. **Both
+claims are withdrawn as unsupported at this scale.** They remain in this section because a
+negative that was measured belongs on the record, and because the seed-0 table above is what the
+withdrawal is *about*. (mAP50 and precision go the other way — the proposal trades a little
+precision for localisation-weighted AP; that is reported, not spun.)
 
 ### 8.2 Small-object preservation (Experiment 4)
 
@@ -320,31 +328,161 @@ level that carries small objects, which is where §8.2's small-object gain appea
 the model raised the allocation nearly uniformly (fraction 1.0), so **those levels save no
 compute at all**; that is a negative for the efficiency story and is stated as one.
 
-### 8.4 Computational overhead (Experiment 5) — and why no efficiency claim is made
+### 8.4 Computational overhead of the dense form (Experiment 5)
 
-The implementation is **dense**: the expensive path runs everywhere and the allocation changes
-values, not the arithmetic executed. So the measured cost *rises*:
+The dense implementation runs the expensive path everywhere, so the measured cost *rises*:
 
 | Arm | Params | Δ | GFLOPs@320 | Δ | FPS (CPU) |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | REAL-001 baseline | 2,590,035 | — | 1.613 | — | 61.8 |
 | SSAC-001 / SSAC-002 | 3,396,329 | +31.1 % | 1.998 | +23.9 % | 46.1 / 47.6 |
 
-A sparse variant that actually skips the unselected regions is specified in
-`docs/ssac_design.md` §4, but it is **not built**, and on this CPU-only machine the
-latency-aware-dynamics literature (and this repository's own CFAR measurement: 3.0× latency
-for +9 % FLOPs) both predict it would not convert into a wall-clock saving. **No efficiency
-claim is made for SSAC in either direction.** The accuracy comparison above is the only claim
-this pilot supports, and it is a pilot.
+This is the price of the dense form and nothing more: it says nothing about the sparse form,
+which is measured in §8.5.
 
-### 8.5 Claim labels
+### 8.5 Does the allocation convert into a wall-clock saving? (measured: no)
+
+Sparse execution was built for exactly this question: 16-pixel tiles, the top `keep` fraction
+by mean evidence refined per image, each gathered tile carrying a 2-pixel halo (the receptive
+radius of the expensive path). Two properties make the measurement admissible rather than a
+timing experiment: the sparse build is **parameter-identical** to the dense one (3,396,329
+parameters either way, so the difference is arithmetic and not capacity), and at `keep = 1.0`
+sparse execution reproduces dense execution **bit-for-bit** in eval mode, which is what proves
+the halo and the gather are right. One trained checkpoint (`SSAC-001`), identical weights,
+timed both ways on real val images at 320 px, batch 4, median of 5 blocks per row:
+
+| Execution | `keep` | Expensive path executed (P3 / P4 / P5) | ms / batch of 4 | FPS |
+| --- | ---: | --- | ---: | ---: |
+| dense | — | 1.00 / 1.00 / 1.00 | 51.251 | 78.05 |
+| sparse | 1.0 | 1.00 / 1.00 / 1.00 | 63.890 | 62.61 |
+| sparse | 0.5 | 0.87 / 0.78 / 1.00 | 50.731 | 78.85 |
+| sparse | 0.25 | 0.52 / 0.39 / 1.00 | 49.165 | 81.36 |
+| sparse | 0.1 | 0.17 / 0.39 / 1.00 | 48.547 | 82.39 |
+
+Three findings, in the order they matter.
+
+1. **Routing has a real overhead.** At `keep = 1.0` every tile is still gathered and scattered,
+   so the mechanism does strictly more work than the dense form: **+29.5 %** latency for no
+   saving at all. Any claim that the routing is free is false at this tile size.
+2. **Skipping pays the overhead back and then stops.** Latency falls monotonically with the
+   budget and lands *at* the dense level: at `keep = 0.1`, 83 % of the P3 expensive path is
+   skipped and the result is 48.5 ms against the dense 51.3 ms — a ~5 % difference whose
+   magnitude is inside the dense measurement's own block-to-block spread (50.6–61.1 ms). **No
+   wall-clock saving is claimed.**
+3. **The ceiling is the input scale, not the budget.** At 320 px the P5 feature map is 10×10,
+   which is a *single* tile of 16: no budget can skip anything there, and P4 has four tiles. The
+   per-level column shows the executed fraction pinned at 1.00 for P5 at every budget. The
+   mechanism's expensive path is concentrated in exactly the levels a 16-pixel tile cannot
+   route at this resolution.
+
+A methodological point that the cost columns alone would hide: **FLOP counters cannot see the
+sparsity.** They trace dense kernels regardless of which ones execute, so the sparse build
+reports **2.293 GFLOPs** against the dense 1.998 G. The efficiency claim therefore rests on
+the measured wall-clock, not on a FLOP ratio — and the ledger's `flops_G` column for the sparse
+arm must be read as the counter's value for the graph, not as the arithmetic performed.
+
+This is the outcome `docs/ssac_design.md` §4 pre-registered as the expected one on a CPU-only
+host, and it matches the latency-aware-dynamics literature. It is a statement about this pilot's
+input scale and this implementation (Python-level routing, 16-pixel tiles, `imgsz = 320`), not
+evidence that region-selective computation cannot be efficient.
+
+### 8.6 The cost ablation: how much of the +31 % parameter price is load-bearing
+
+The mechanism costs **+31.1 %** parameters over the stock detector (3,396,329 against 2,590,035).
+The first ablation narrows the expensive path's bottleneck from `expand=2` to `expand=1` and
+leaves everything else — assessment, allocation, placement, schedule, seed — exactly as proposed
+(`SSAC-005`, 2,953,257 parameters, +14.0 % over stock, 1.789 GFLOPs).
+
+| Arm | Expensive path | mAP50:95 | AP_small (own evaluator) | Params | Δ vs stock |
+| --- | --- | ---: | ---: | ---: | ---: |
+| REAL-001 baseline | none | 0.3012 | — | 2,590,035 | — |
+| SSAC-005 | **expand=1** | 0.2871 | 0.0849 | 2,953,257 | +14.0 % |
+| SSAC-001 proposal | expand=2 | **0.3089** | 0.0737 | 3,396,329 | +31.1 % |
+
+The narrow expensive path does **not** keep half the benefit; it loses all of it, landing
+0.0141 *below* the stock baseline while the full-width proposal is 0.0077 above. That is the
+answer this ablation was built to get: the extra 443,072 parameters are where the mechanism's
+effect lives, not overhead around it. The one place the direction reverses is worth reporting —
+`SSAC-005`'s AP_small (0.0849) is *higher* than the proposal's (0.0737), so the narrowest
+expensive path favours the smallest objects while losing overall localisation. The cost story
+here is not monotone, and the non-monotone part is stated rather than dropped.
+
+**The second ablation asks the opposite question: what happens if the mechanism is *pushed*
+sparse?** `SSAC-006` adds a penalty on the mean allocation (`w_ssac_sparsity = 0.01`) to the same
+graph, seed and schedule — parameter-identical to the proposal (3,396,329), so the only difference
+is the objective. The penalty is deliberately *not* part of the proposal: penalising the
+allocation to be small would be circular when sparsity is the mechanism's own claim. As an arm it
+measures whether the premise the sparse build relies on actually holds.
+
+| Level | Proposal mean `g` | Penalised mean `g` | Proposal fraction > 0.5 | Penalised fraction > 0.5 |
+| --- | ---: | ---: | ---: | ---: |
+| P3 (C=64) | 0.483 | **0.382** | 0.044 | **0.000** |
+| P4 (C=128) | 0.670 | **0.236** | 1.000 | **0.000** |
+| P5 (C=256) | 0.762 | **0.491** | 1.000 | **0.162** |
+
+Measured from the two trained checkpoints on 16 real val chips, the same protocol as §8.3.
+
+The penalty does what it is for: the learned allocation falls at every level, and at the two
+shallow levels it stops crossing 0.5 at all, which is what a sparse build needs in order to skip
+anything. Its accuracy is **0.3126** against the proposal's 0.3089 and its precision 0.938 against
+0.863 — but §8.7 shows this pilot cannot resolve differences of that size, so that is **not**
+reported as a gain. It is reported as: the mechanism can be pushed to allocate a third to a half
+as much, at no measurable cost in accuracy, which is the premise the sparse build needed and did
+not have before this arm. The one other visible change is the *between-image* spread at P5
+(0.095 → 0.167), i.e. the penalised model differentiates more between scenes — consistent with
+allocating by difficulty rather than uniformly.
+
+### 8.7 The seed check: the pilot's accuracy claim does not survive it
+
+The seed-0 difference between the proposal and its parameter-identical control was +0.0063
+mAP50:95, and this repository had already measured that the *baseline's* own seed spread is
+0.021 (0.3012 / 0.2804 / 0.2871). Repeating the pair at seeds 1 and 2 is therefore the test that
+decides whether the seed-0 comparison means anything — the same standard applied to the
+augmentation study in §3. The pairs use the same dataset, schedule, resolution and batch as the
+seed-0 pair; the only difference is the training seed.
+
+| Seed | Proposal | Matched control | Paired difference |
+| ---: | ---: | ---: | ---: |
+| 0 | 0.3089 | 0.3026 | +0.0063 |
+| 1 | 0.2801 | 0.2156 | **+0.0645** |
+| 2 | 0.2815 | 0.2865 | **−0.0050** |
+| mean | 0.2902 | 0.2682 | +0.0220 ± 0.0373 |
+
+Three things are true at once and none of them should be dropped.
+
+1. **The seed-0 gain is not reproduced.** The paired difference changes sign (seed 2 is 0.0050
+   *behind* the control), and its standard deviation across three seeds (0.0373) is larger than
+   its mean. Withdrawal condition 1 of `docs/ssac_design.md` §3.2 — "does not beat the control"
+   — fires at seed 2 and is not decisively avoided on the mean. **The accuracy claim is
+   withdrawn as unsupported at this scale.**
+2. **The proposal is the more stable arm.** Its seed spread is 0.2801–0.3089 (0.0290) against the
+   control's 0.2156–0.3026 (0.0870), because the control *mis-trains* at seed 1 (0.2156, below
+   every seed-0 arm in this section). A fixed-computation variant of a mechanism does not
+   obviously have to be less reliable than the mechanism; one seed that collapsed is not proof
+   that it is, and it is reported as an observation with n = 1 behind it.
+3. **The mean is positive and the sign is mostly positive.** +0.0220 with two of three seeds in
+   the proposal's favour is not evidence of harm either. What the pilot supports is the honest
+   null: **at 200 training images and 60 test images, one seed is not enough to see a 0.006
+   difference, and three seeds are not enough to resolve it.** The mechanism is neither confirmed
+   nor withdrawn; the experiment that would decide it is §9's scale, not this one.
+
+**The assessment claim goes the same way, without being re-run.** `SSAC-003` (raw-feature
+scorer) is 0.0226 below the proposal at seed 0, and the proposal's own seed spread is 0.0290.
+A difference smaller than the noise of the arm it is measured on is not evidence that the SAR
+statistic is load-bearing; it is a single-seed observation that the seed check has now shown
+this pilot cannot resolve. It stays in the table, labelled as what it is.
+
+### 8.8 Claim labels
 
 | Claim | Label | Evidence |
 | --- | --- | --- |
-| The adaptive allocation beats a parameter-identical fixed-computation control | **preliminary** — one seed, 60 test images | `SSAC-001` vs `SSAC-002` |
-| The SAR statistic is a better assessment signal than the raw feature | **preliminary** — same pilot | `SSAC-001` vs `SSAC-003` |
-| The mechanism does not harm small-object performance | **preliminary** | AP_small 0.0737 vs 0.0647 |
-| SSAC is computationally efficient | **not supported** | dense implementation costs +24 % FLOPs; sparse variant unbuilt |
+| The adaptive allocation beats a parameter-identical fixed-computation control | **withdrawn — not supported at this scale** | three seeds: +0.0063 / +0.0645 / −0.0050, mean +0.0220 ± 0.0373; the seed-0 gain is not reproduced (§8.7) |
+| The SAR statistic is a better assessment signal than the raw feature | **withdrawn — not resolvable at this scale** | the seed-0 gap (0.0226) is smaller than the proposal's own seed spread (0.0290); `SSAC-003` was not re-run |
+| The mechanism does not harm small-object performance | **preliminary** | AP_small 0.0737 vs 0.0647 at seed 0; not seed-checked |
+| How much of the +31 % parameter price the accuracy needs | **controlled** (seed 0) | `SSAC-005` (`expand=1`) loses the whole benefit: 0.2871, below the stock baseline |
+| A sparsity penalty can push the allocation sparse at no measurable accuracy cost | **preliminary** (seed 0) | `SSAC-006`: mean `g` 0.670 → 0.236 at P4, fraction > 0.5 → 0.000 at P3/P4, accuracy 0.3126 vs 0.3089 — a difference this pilot cannot resolve, so it is not claimed as a gain (§8.6) |
+| SSAC is computationally efficient | **not supported — measured negative** | sparse execution (same weights, parameter-identical) is +29.5 % at keep=1.0 and returns only to the dense latency at keep=0.1; FLOP counters cannot see the sparsity |
+| Sparse execution is a faithful implementation of the dense mechanism | **controlled** | keep=1.0 sparse == dense bit-for-bit in eval; halo derived from the expensive path; asserted in `tests/test_ssac.py` |
 | SSAC is a novel mechanism | **not claimed** | the principle is SACT/SplatNet/region-selection; see `docs/ssac_assessment.md` |
 
 ## 9. Limitations (stated, not implied)

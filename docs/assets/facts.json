@@ -1,5 +1,5 @@
 {
-  "variants": 104,
+  "variants": 110,
   "zoo": {
     "baseline_n": {
       "variant": "baseline",
@@ -882,6 +882,60 @@
       "latency_ms": 20.849,
       "model_size_MB": 6.78,
       "train_minutes": 7.47
+    },
+    "SSAC-004": {
+      "model": "yolo11n_ssac_sparse_n.yaml",
+      "dataset": "hrsid_real.yaml",
+      "epochs": 40,
+      "imgsz": 320,
+      "train_seed": 0,
+      "mAP50": 0.556953,
+      "mAP50_95": 0.299535,
+      "precision": 0.859672,
+      "recall": 0.538012,
+      "f1": 0.661829,
+      "params_M": 3.396,
+      "flops_G": 2.293,
+      "fps": 42.89,
+      "latency_ms": 23.317,
+      "model_size_MB": 6.77,
+      "train_minutes": 9.04
+    },
+    "SSAC-005": {
+      "model": "yolo11n_ssac_e1_n.yaml",
+      "dataset": "hrsid_real.yaml",
+      "epochs": 40,
+      "imgsz": 320,
+      "train_seed": 0,
+      "mAP50": 0.557428,
+      "mAP50_95": 0.287105,
+      "precision": 0.886383,
+      "recall": 0.526316,
+      "f1": 0.660463,
+      "params_M": 2.953,
+      "flops_G": 1.789,
+      "fps": 50.47,
+      "latency_ms": 19.814,
+      "model_size_MB": 5.92,
+      "train_minutes": 8.88
+    },
+    "SSAC-006": {
+      "model": "yolo11n_ssac_pen_n.yaml",
+      "dataset": "hrsid_real.yaml",
+      "epochs": 40,
+      "imgsz": 320,
+      "train_seed": 0,
+      "mAP50": 0.56657,
+      "mAP50_95": 0.312596,
+      "precision": 0.938027,
+      "recall": 0.531099,
+      "f1": 0.678206,
+      "params_M": 3.396,
+      "flops_G": 1.998,
+      "fps": 43.49,
+      "latency_ms": 22.992,
+      "model_size_MB": 6.77,
+      "train_minutes": 7.54
     }
   },
   "real_subset": {
@@ -896,7 +950,7 @@
     "total": 106,
     "config_files": 108,
     "with_results": [],
-    "ledger_runs": 54,
+    "ledger_runs": 77,
     "non_experiment_runs": [
       "AUG-001",
       "AUG-002",
@@ -920,13 +974,173 @@
       "SMOKE-004",
       "SSAC-001",
       "SSAC-002",
-      "SSAC-003"
+      "SSAC-003",
+      "SSAC-004",
+      "SSAC-005",
+      "SSAC-006",
+      "SSAC-007",
+      "SSAC-008",
+      "SSAC-009",
+      "SSAC-010"
     ]
   },
+  "ssac_execution": {
+    "SSAC-001": {
+      "weights": "results/runs/SSAC-001/weights/best.pt",
+      "params": 3396329,
+      "flops_G": 1.998,
+      "protocol": {
+        "imgsz": 320,
+        "batch": 4,
+        "runs": 7,
+        "input": "real",
+        "device": "cpu"
+      },
+      "dense": {
+        "execution": "dense",
+        "keep": null,
+        "latency_ms": 51.251,
+        "fps": 78.05,
+        "latency_ms_min": 50.551,
+        "latency_ms_max": 61.129,
+        "latency_ms_spread_pct": 20.6,
+        "executed_rich_fraction": [
+          1.0
+        ],
+        "selected_tile_fraction": [
+          1.0
+        ],
+        "tiles": [
+          1
+        ],
+        "selected_tiles": [
+          1
+        ]
+      },
+      "sparse": [
+        {
+          "execution": "sparse",
+          "keep": 1.0,
+          "latency_ms": 63.89,
+          "fps": 62.61,
+          "latency_ms_min": 63.763,
+          "latency_ms_max": 64.118,
+          "latency_ms_spread_pct": 0.6,
+          "executed_rich_fraction": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "selected_tile_fraction": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "tiles": [
+            9,
+            4,
+            1
+          ],
+          "selected_tiles": [
+            9,
+            4,
+            1
+          ]
+        },
+        {
+          "execution": "sparse",
+          "keep": 0.5,
+          "latency_ms": 50.731,
+          "fps": 78.85,
+          "latency_ms_min": 50.541,
+          "latency_ms_max": 50.844,
+          "latency_ms_spread_pct": 0.6,
+          "executed_rich_fraction": [
+            0.8681,
+            0.7812,
+            1.0
+          ],
+          "selected_tile_fraction": [
+            0.5556,
+            0.5,
+            1.0
+          ],
+          "tiles": [
+            9,
+            4,
+            1
+          ],
+          "selected_tiles": [
+            5,
+            2,
+            1
+          ]
+        },
+        {
+          "execution": "sparse",
+          "keep": 0.25,
+          "latency_ms": 49.165,
+          "fps": 81.36,
+          "latency_ms_min": 48.708,
+          "latency_ms_max": 49.644,
+          "latency_ms_spread_pct": 1.9,
+          "executed_rich_fraction": [
+            0.5208,
+            0.3906,
+            1.0
+          ],
+          "selected_tile_fraction": [
+            0.3333,
+            0.25,
+            1.0
+          ],
+          "tiles": [
+            9,
+            4,
+            1
+          ],
+          "selected_tiles": [
+            3,
+            1,
+            1
+          ]
+        },
+        {
+          "execution": "sparse",
+          "keep": 0.1,
+          "latency_ms": 48.547,
+          "fps": 82.39,
+          "latency_ms_min": 48.269,
+          "latency_ms_max": 48.798,
+          "latency_ms_spread_pct": 1.1,
+          "executed_rich_fraction": [
+            0.1736,
+            0.3906,
+            1.0
+          ],
+          "selected_tile_fraction": [
+            0.1111,
+            0.25,
+            1.0
+          ],
+          "tiles": [
+            9,
+            4,
+            1
+          ],
+          "selected_tiles": [
+            1,
+            1,
+            1
+          ]
+        }
+      ]
+    }
+  },
   "tests": {
-    "total": 510,
+    "total": 573,
     "by_file": {
-      "tests/test_arch.py": 61,
+      "tests/test_arch.py": 64,
       "tests/test_audit_docs.py": 37,
       "tests/test_augmentation.py": 15,
       "tests/test_cfar_frontend.py": 16,
@@ -935,20 +1149,22 @@
       "tests/test_conditioning.py": 9,
       "tests/test_conditioning_smoke.py": 6,
       "tests/test_data.py": 24,
-      "tests/test_efficiency.py": 18,
+      "tests/test_docs.py": 25,
+      "tests/test_efficiency.py": 22,
       "tests/test_efficiency_frontier.py": 16,
       "tests/test_efficiency_real.py": 8,
       "tests/test_field_mask.py": 9,
       "tests/test_groups.py": 36,
       "tests/test_hard_examples.py": 20,
       "tests/test_init.py": 9,
-      "tests/test_losses.py": 24,
+      "tests/test_ledger.py": 5,
+      "tests/test_losses.py": 25,
       "tests/test_metrics.py": 18,
       "tests/test_peft.py": 32,
       "tests/test_probes.py": 23,
-      "tests/test_repo.py": 30,
+      "tests/test_repo.py": 31,
       "tests/test_rtdetr_arm.py": 6,
-      "tests/test_ssac.py": 22,
+      "tests/test_ssac.py": 46,
       "tests/test_tables.py": 14,
       "tests/test_visualization.py": 8
     }
