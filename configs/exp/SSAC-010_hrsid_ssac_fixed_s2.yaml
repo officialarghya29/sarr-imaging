@@ -1,0 +1,27 @@
+# MULTI-SEED repeat of SSAC-002 (the matched fixed-computation control) at seed 2.
+#
+# See SSAC-009: the control half of the seed study. Together with SSAC-008 this closes the
+# three-seed pair, so the proposal-vs-control difference is reported as a paired mean with a
+# spread over seeds {0, 1, 2} rather than as one seed-0 draw.
+#
+#   python -m saryolo train --exp configs/exp/SSAC-010_hrsid_ssac_fixed_s2.yaml
+experiment:
+  id: SSAC-010
+  name: seed spread (SSAC fixed-computation control, seed 2)
+  description: >-
+    Multi-seed repeat of SSAC-002 at seed 2; a seed-spread measurement, not a new arm.
+model: ../models/yolo11n_ssac_fixed_n.yaml
+dataset: ../datasets/hrsid_real.yaml
+train:
+  epochs: 40
+  imgsz: 320
+  batch: 4
+  seed: 2
+  optimizer: auto
+  cos_lr: true
+  patience: 15
+  workers: 4
+  deterministic: true
+notes: >-
+  Seed spread only. Same arm, dataset and schedule as SSAC-002 (seed 0); the only difference
+  is the training seed.

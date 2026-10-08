@@ -1,5 +1,5 @@
-# SAR-YOLO / ssac_raw_n  -- GENERATED FILE, do not edit by hand.
-# Regenerate with:  python -m saryolo arch --variant ssac_raw_n
+# SAR-YOLO / ssac_sparse_n  -- GENERATED FILE, do not edit by hand.
+# Regenerate with:  python -m saryolo arch --variant ssac_sparse_n
 # scale=n  levels=p3-p4-p5  modules=ssac
 # efficiency_arm=False  (True = the arm exists for the cost claim)
 # sar_loss=off
@@ -7,7 +7,7 @@
 # NOTE: when this file is loaded, ultralytics derives the compound scale from the
 # FILE NAME (guess_model_scale), overwriting the 'scale' key below. The file must
 # therefore keep its 'yolo11n_' prefix or it will silently build at scale 'n'.
-# ssac_raw_s at scale n (pilot scale).
+# ssac_sparse_s at scale n (pilot scale).
 #
 # [from, repeats, module, args]
 nc: 1
@@ -117,11 +117,11 @@ head:
   - ScatterSelectiveRefinement
   - - ch
     - 16
-    - adaptive_raw
+    - adaptive
     - [3, 7]
     - 16
     - 2
-    - dense
+    - sparse
     - 16
     - 0.25
     - 0.0
@@ -132,11 +132,11 @@ head:
   - ScatterSelectiveRefinement
   - - ch
     - 19
-    - adaptive_raw
+    - adaptive
     - [3, 7]
     - 16
     - 2
-    - dense
+    - sparse
     - 16
     - 0.25
     - 0.0
@@ -147,11 +147,11 @@ head:
   - ScatterSelectiveRefinement
   - - ch
     - 22
-    - adaptive_raw
+    - adaptive
     - [3, 7]
     - 16
     - 2
-    - dense
+    - sparse
     - 16
     - 0.25
     - 0.0

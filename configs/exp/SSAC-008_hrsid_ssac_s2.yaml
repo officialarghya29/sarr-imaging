@@ -1,0 +1,26 @@
+# MULTI-SEED repeat of SSAC-001 (the proposal: adaptive allocation) at seed 2.
+#
+# See SSAC-007 for why this family exists. The pair formed with SSAC-010 gives the
+# proposal-vs-control comparison three seeds, so the reported difference can be quoted as a
+# paired difference with a spread rather than as one number from one draw.
+#
+#   python -m saryolo train --exp configs/exp/SSAC-008_hrsid_ssac_s2.yaml
+experiment:
+  id: SSAC-008
+  name: seed spread (SSAC proposal, seed 2)
+  description: Multi-seed repeat of SSAC-001 at seed 2; a seed-spread measurement, not a new arm.
+model: ../models/yolo11n_ssac_n.yaml
+dataset: ../datasets/hrsid_real.yaml
+train:
+  epochs: 40
+  imgsz: 320
+  batch: 4
+  seed: 2
+  optimizer: auto
+  cos_lr: true
+  patience: 15
+  workers: 4
+  deterministic: true
+notes: >-
+  Seed spread only. Same arm, dataset and schedule as SSAC-001 (seed 0); the only difference
+  is the training seed.

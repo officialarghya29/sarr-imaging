@@ -1,0 +1,42 @@
+# SARVO core mechanism -- ALLOCATION-SPARSITY arm (master Phase 9).
+#
+# The proposal deliberately carries *no* sparsity penalty: penalising the allocation to be
+# small would be circular, because "the allocation is sparse" is the mechanism's own claim,
+# and a penalty that forces it would make the claim true by construction.
+#
+# This arm exists to measure the other side of that trade: what the mechanism does when it is
+# *pushed* sparse, which is the premise the sparse implementation relies on. The penalty is
+# w_ssac_sparsity = 0.01 on the mean allocation of every block, added to the detection loss
+# by saryolo/nn/model.py. One consequence is structural and worth stating: a penalty on the
+# mean allocation is differentiable through the scorer even while the block is an exact
+# identity at initialisation, so this arm trains its allocation from step 0, whereas every
+# other SSAC arm's scorer is masked by alpha=0 until the residual gate moves.
+#
+# Read it against SSAC-001 (same graph, same seed, no penalty):
+#   * accuracy held and the measured allocation fell  -> the routing budget has headroom.
+#   * accuracy fell with the allocation                 -> extraction and accuracy are coupled
+#     and the sparse arm (SSAC-004) is measuring something the mechanism cannot afford.
+#
+#   python -m saryolo train --exp configs/exp/SSAC-006_hrsid_ssac_pen.yaml
+experiment:
+  id: SSAC-006
+  name: real-data pilot (SSAC, allocation-sparsity penalty)
+  description: >-
+    SSAC with an explicit penalty on the mean allocation (w_ssac_sparsity = 0.01), to measure
+    what the mechanism does when it is pushed sparse. Same graph and seed as SSAC-001.
+model: ../models/yolo11n_ssac_pen_n.yaml
+dataset: ../datasets/hrsid_real.yaml
+train:
+  epochs: 40
+  imgsz: 320
+  batch: 4
+  seed: 0
+  optimizer: auto
+  cos_lr: true
+  patience: 15
+  workers: 4
+  deterministic: true
+notes: >-
+  Real HRSID subset, pilot scale. Parameter-identical to SSAC-001 (3,396,329); the only
+  difference is the objective, not the architecture. The penalty is an arm and not a default,
+  which is why SSAC-001 has no such term.

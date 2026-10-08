@@ -485,6 +485,70 @@ def _real_arms_facts(ledger: ExperimentLedger) -> dict:
     return dict(sorted(rows.items()))
 
 
+def _ssac_execution_facts() -> dict:
+    """The dense-vs-sparse wall-clock sweep, keyed by the experiment whose checkpoint it timed.
+
+    Read from the profiles the ``saryolo efficiency`` CLI wrote (``results/efficiency/<EXP>/``),
+    not from prose. ``results/**`` is gitignored, so this is a *snapshot* taken while the
+    measurement exists and committed into ``facts.json`` -- the same pattern the ledger already
+    uses for the accuracy tables, and the reason a reader of the committed file can see the
+    protocol (batch, image size, number of timed blocks, input distribution) next to the
+    number.
+
+    The dense row is the checkpoint's own profile and the sparse rows are the sweep of the
+    *same* checkpoint, which is the only form in which the comparison is about execution: the
+    weights are identical because they are the same file.
+    """
+    root = ROOT / "results" / "efficiency"
+    facts: dict = {}
+    for sweep_path in sorted(root.glob("*/ssac_execution_sweep.json")):
+        dense_path = sweep_path.parent / "efficiency.json"
+        if not dense_path.exists():
+            continue
+        sparse = json.loads(sweep_path.read_text())
+        dense = json.loads(dense_path.read_text())
+        if not isinstance(sparse, list) or not sparse:
+            continue
+        if dense.get("weights") != sparse[0].get("weights"):
+            # The dense profile in this directory belongs to a different checkpoint, so the
+            # pair would not be a comparison of one model executed two ways.
+            continue
+
+        def row(profile: dict) -> dict:
+            levels = (profile.get("ssac_routing") or {}).get("levels", [])
+            executed = [lv["executed_rich_fraction"] for lv in levels]
+            tiles = [lv["selected_tile_fraction"] for lv in levels]
+            return {
+                "execution": profile.get("ssac_execution", "dense"),
+                "keep": profile.get("ssac_keep") if levels else None,
+                "latency_ms": round(float(profile["latency_ms"]), 3),
+                "fps": round(float(profile["fps"]), 2),
+                "latency_ms_min": profile.get("latency_ms_min"),
+                "latency_ms_max": profile.get("latency_ms_max"),
+                "latency_ms_spread_pct": profile.get("latency_ms_spread_pct"),
+                "executed_rich_fraction": [round(v, 4) for v in executed] or [1.0],
+                "selected_tile_fraction": [round(v, 4) for v in tiles] or [1.0],
+                "tiles": [lv["tiles"] for lv in levels] or [1],
+                "selected_tiles": [lv["selected_tiles"] for lv in levels] or [1],
+            }
+
+        facts[sweep_path.parent.name] = {
+            "weights": dense["weights"],
+            "params": dense.get("params"),
+            "flops_G": dense.get("flops_G"),
+            "protocol": {
+                "imgsz": dense.get("latency_imgsz"),
+                "batch": dense.get("latency_batch"),
+                "runs": dense.get("latency_runs"),
+                "input": dense.get("latency_source"),
+                "device": dense.get("latency_device"),
+            },
+            "dense": row(dense),
+            "sparse": [row(p) for p in sparse],
+        }
+    return facts
+
+
 def _dataset_split_counts(data_yaml: str | Path) -> dict:
     """Images per split of a processed dataset, counted on disk.
 
@@ -585,6 +649,9 @@ def build_facts() -> dict:
         cwd=ROOT, capture_output=True, text=True,
     )
     counts = Counter(line.split("::")[0] for line in proc.stdout.splitlines() if "::" in line)
+    facts["ssac_execution"] = _ssac_execution_facts()
+    if facts["ssac_execution"]:
+        print(f"  dense/sparse timing for {sorted(facts['ssac_execution'])}")
     facts["tests"] = {"total": sum(counts.values()), "by_file": dict(sorted(counts.items()))}
     print(f"  {facts['tests']['total']} tests in {len(counts)} files")
 
@@ -831,6 +898,79 @@ def chart_slot_ablations_v2(facts: dict) -> None:
     )
 
 
+def chart_ssac_execution(facts: dict) -> None:
+    """Latency against the routing budget, and the map-size limit that bounds it.
+
+    The honest half of the mechanism's efficiency question: one trained checkpoint, timed dense
+    and at four routing budgets, with the *same* weights and parameter count either way. The
+    right panel shows why the curve flattens -- at a 320 px input the P5 feature map is a single
+    tile, so no budget can skip anything there. A single number would read as a tuning result;
+    the per-level breakdown shows it is a property of the input scale.
+
+    Layout note: the executed fraction is written into the left panel's tick labels rather than
+    drawn as bars behind the latency line. Bars and a line sharing one axes put their data
+    labels in the same place, and the layout linter caught exactly that (an 83 % overlap between
+    the budget's own value and the latency above it).
+    """
+    runs = facts.get("ssac_execution") or {}
+    if not runs:
+        return
+    exp, data = sorted(runs.items())[0]
+    dense, sparse = data["dense"], data["sparse"]
+    protocol = data["protocol"]
+    keeps = [r["keep"] for r in sparse]
+    latency = [r["latency_ms"] for r in sparse]
+    executed = [sum(r["executed_rich_fraction"]) / len(r["executed_rich_fraction"]) for r in sparse]
+    dense_ms = dense["latency_ms"]
+    xs = list(range(len(keeps)))
+
+    fig, axes = plt.subplots(1, 2, figsize=(16.6, 7.2), gridspec_kw={"width_ratios": [1.1, 1.0]})
+
+    ax = axes[0]
+    ax.plot(xs, latency, "-o", color=CYAN, linewidth=2.6, markersize=10, zorder=3)
+    ax.axhline(dense_ms, color=MAGENTA, linestyle="--", linewidth=2.0, zorder=2)
+    for x, v in zip(xs, latency, strict=True):
+        ax.annotate(f"{v:.1f}", (x, v), textcoords="offset points", xytext=(0, 14),
+                    ha="center", fontsize=10.5, color=TEXT)
+    overhead = (latency[0] / dense_ms - 1.0) * 100.0
+    # One text box rather than a label on the line plus a second annotation: both of those
+    # landed on the neighbour's data label, which is what the layout linter reported.
+    ax.text(0.98, 0.97, f"dense execution: {dense_ms:.1f} ms\nrouting costs +{overhead:.0f}% at keep=1",
+            transform=ax.transAxes, ha="right", va="top", fontsize=10, color=MAGENTA,
+            linespacing=1.5)
+    ax.set_xticks(xs, [f"{k:g}\n{v:.2f} executed" for k, v in zip(keeps, executed, strict=True)])
+    ax.set_xlabel("routing budget `keep`  (fraction of tiles refined, and the mean share\n"
+                  "of the expensive path actually executed)")
+    ax.set_ylabel("latency per batch of 4 (ms)")
+    ax.set_ylim(min(latency + [dense_ms]) * 0.72, max(latency + [dense_ms]) * 1.16)
+    _style(ax, "The routing is real; the wall-clock saving is not",
+           f"One trained {exp} checkpoint, timed both ways: identical weights,\n"
+           f"identical {data['params']:,} parameters. {protocol['input']} images at "
+           f"{protocol['imgsz']}px, batch {protocol['batch']},\nmedian of {protocol['runs']} "
+           f"timed blocks on {protocol['device']}, one quiet interval.")
+
+    ax = axes[1]
+    levels = sparse[-1]["executed_rich_fraction"]
+    names = ["P3", "P4", "P5"][: len(levels)]
+    xs = list(range(len(levels)))
+    ax.bar(xs, levels, width=0.5, color=VIOLET, alpha=0.9)
+    ax.set_ylim(0, 1.22)
+    ax.set_xticks(xs, names)
+    ax.set_ylabel("share of the expensive path executed")
+    ax.set_xlabel("detection level (P5 is the deepest, smallest feature map)")
+    for x, v, tiles, chosen in zip(xs, levels, sparse[-1]["tiles"], sparse[-1]["selected_tiles"],
+                                   strict=True):
+        ax.text(x, v + 0.05, f"{v:.2f}", ha="center", fontsize=10.5, color=TEXT)
+        ax.text(x, v / 2, f"{chosen} of {tiles}\ntiles", ha="center", va="center",
+                fontsize=10, color=BG)
+    _style(ax, "Why it cannot save on this input",
+           f"The same checkpoint at keep={keeps[-1]:g}. At {protocol['imgsz']}px the P5 map is\n"
+           "10x10, a single 16px tile, so no budget can skip anything there,\nand P4 has only "
+           "four tiles to choose from.")
+
+    _save(fig, "ssac_execution.svg")
+
+
 def chart_cost_frontier(facts: dict) -> None:
     """Horizontal bars: measured params and GFLOPs for the frontier arms.
 
@@ -1044,10 +1184,16 @@ def chart_real_arms(facts: dict) -> None:
     """
     arms = facts.get("real", {})
     # The figure width scales with the number of arms. Each tick label carries four short
-    # lines (id, model, cost, FPS), which render ~1.7 in wide, so a fixed 15 in canvas holds
+    # lines (id, model, cost, FPS), which render ~1.5 in wide, so a fixed 15 in canvas holds
     # ten arms without touching and collides by ~30 % once a thirteenth is added -- the layout
-    # check measured exactly that. Two inches per arm keeps a margin as the pilot grows.
-    fig, ax = plt.subplots(figsize=(max(15.0, 2.0 * max(len(arms), 1)), 8.2))
+    # check measured exactly that. Two inches per arm keeps a margin while the pilot is small,
+    # but the count keeps growing, so the per-arm width is capped so the canvas stays inside
+    # the 26 in envelope the layout checker enforces: a chart that grows without bound is
+    # rendered unreadably small in the README. At sixteen arms this is 1.5 in per arm, still
+    # wider than the ~1.2 in label, so the ticks keep their gap.
+    n_arms = max(len(arms), 1)
+    per_arm = min(2.0, 24.0 / n_arms)
+    fig, ax = plt.subplots(figsize=(max(15.0, per_arm * n_arms), 8.2))
     metrics = (("mAP50", CYAN), ("mAP50_95", VIOLET))
     width = 0.36
 
@@ -1153,6 +1299,7 @@ def main() -> None:
     chart_ladder_params(facts)
     chart_accuracy_cost(facts)
     chart_cost_frontier(facts)
+    chart_ssac_execution(facts)
     chart_slot_ablations(facts)
     chart_slot_ablations_v2(facts)
     chart_identity(facts)

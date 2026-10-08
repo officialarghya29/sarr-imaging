@@ -155,6 +155,13 @@ class SARYOLODetectionModel(DetectionModel):
         enabling consistency would silently change the normalisation of the whole network --
         and the ablation would be measuring that, not the consistency term. The BN modules are
         switched to eval mode for the perturbed pass and restored afterwards.
+
+        When the core mechanism's allocation-sparsity penalty is enabled (``w_ssac_sparsity``),
+        the mean allocation of every SSAC block is added to the loss. The means are read from
+        the modules **immediately after the primary forward**, before the perturbed pass can
+        overwrite them: otherwise the penalty would be computed on the degraded view whenever
+        both switches were on together. With the weight at zero this is bit-for-bit the parent
+        behaviour, one forward pass and one criterion call.
         """
         if getattr(self, "criterion", None) is None:
             self.criterion = self.init_criterion()
@@ -164,6 +171,8 @@ class SARYOLODetectionModel(DetectionModel):
         # fields, so an unconditioned dataset is a trained input rather than a bypassed path.
         set_batch_metadata(self, batch.get(METADATA_KEY))
         preds = self.forward(batch["img"]) if preds is None else preds
+        sparsity = float(getattr(self.criterion, "w_ssac_sparsity", 0.0) or 0.0)
+        gate_means = self._ssac_gate_means() if sparsity > 0.0 else []
 
         weight = getattr(self.criterion, "w_consistency", 0.0)
         if weight and "feats" in preds and batch.get("img") is not None:
@@ -193,4 +202,29 @@ class SARYOLODetectionModel(DetectionModel):
                     m.train(state)
             if "feats" in preds_b:
                 self.criterion.set_views(preds["feats"], preds_b["feats"])
-        return self.criterion(preds, batch)
+        loss, items = self.criterion(preds, batch)
+        if sparsity > 0.0 and gate_means:
+            import torch
+
+            # Differentiable in the allocation: this is the term that pushes the mechanism to
+            # concentrate its expensive path, and the arm exists to measure what that costs in
+            # accuracy and buys in routing.
+            term = sparsity * torch.stack(gate_means).mean()
+            loss = loss + term
+            if isinstance(items, dict):
+                items["ssac_sparsity"] = term.detach()
+        return loss, items
+
+    def _ssac_gate_means(self) -> list:
+        """Mean allocation of every SSAC block, from the most recent forward pass, as tensors.
+
+        Returns a list rather than a stack so the caller can tell "no block recorded a mean"
+        (an unpenalised build, or a forward that never ran) from "the allocation was zero".
+        """
+        from saryolo.nn.modules.ssac import ScatterSelectiveRefinement
+
+        return [
+            m.last_gate_mean
+            for m in self.modules()
+            if isinstance(m, ScatterSelectiveRefinement) and m.last_gate_mean is not None
+        ]

@@ -535,14 +535,32 @@ def _cmd_efficiency(args) -> int:
 
     if args.real and not args.data:
         raise SystemExit("--real requires --data: timing is taken on the dataset's val images")
-    profile = profile_model(
-        args.weights, imgsz=args.imgsz, device=args.device,
-        data_yaml=args.data if args.real else None, batch=args.batch,
-        runs=getattr(args, "runs", 1),
-    )
-    print(json.dumps(profile, indent=2, default=float))
+    keeps = getattr(args, "ssac_keep", None)
+    execution = getattr(args, "ssac_execution", None)
+    tile = getattr(args, "ssac_tile", None)
+    if (keeps or tile is not None) and execution != "sparse":
+        raise SystemExit(
+            "--ssac-keep/--ssac-tile only mean something for sparse execution; pass "
+            "--ssac-execution sparse (a keep with dense execution switches nothing off)"
+        )
+    # A sweep is the point of the objective-mechanism cost comparison: one checkpoint, several
+    # routing budgets, one timing protocol. Each level is a separate timed profile written side
+    # by side, so no number has to be quoted from a run whose protocol differed.
+    plans = [(execution, keep) for keep in (keeps or [None])] if keeps else [(execution, None)]
+    profiles = [
+        profile_model(
+            args.weights, imgsz=args.imgsz, device=args.device,
+            data_yaml=args.data if args.real else None, batch=args.batch,
+            runs=getattr(args, "runs", 1),
+            ssac_execution=execution, ssac_keep=keep, ssac_tile=tile,
+        )
+        for execution, keep in plans
+    ]
+    payload = profiles[0] if len(profiles) == 1 else profiles
+    print(json.dumps(payload, indent=2, default=float))
     if args.out:
-        write_profile(profile, Path(args.out) / "efficiency.json")
+        name = "efficiency.json" if len(profiles) == 1 else "ssac_execution_sweep.json"
+        write_profile(payload, Path(args.out) / name)
     return 0
 
 
@@ -1130,6 +1148,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--runs", type=int, default=1,
                    help="independent timed blocks; the reported number is their median "
                         "(use >1 when comparing arms on a shared CPU)")
+    p.add_argument("--ssac-execution", choices=("dense", "sparse"), default=None,
+                   help="switch the checkpoint's SARVO core-mechanism blocks before timing; "
+                        "dense and sparse builds are parameter-identical, so this is how the "
+                        "same trained weights are timed both ways")
+    p.add_argument("--ssac-keep", type=float, action="append", default=None,
+                   help="tile fraction for sparse execution; repeat to sweep several budgets "
+                        "in one command (writes ssac_execution_sweep.json)")
+    p.add_argument("--ssac-tile", type=int, default=None, help="tile size for sparse execution")
     p.set_defaults(func=_cmd_efficiency)
 
     p = sub.add_parser("cross-dataset", help="domain-shift evaluation on another dataset")

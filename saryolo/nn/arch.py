@@ -47,6 +47,13 @@ CFAR_MODES: tuple[str, ...] = ("cfar", "conv", "fixed")
 #: literal for the same reason as ``CFAR_MODES``; a test pins the two lists together.
 SSAC_MODES: tuple[str, ...] = ("adaptive", "adaptive_raw", "fixed")
 
+#: Execution modes of the same block. Orthogonal to ``SSAC_MODES``: the mode decides how the
+#: allocation is computed, the execution decides how much arithmetic is spent on it. A
+#: ``sparse`` arm is parameter-identical to its ``dense`` twin, so the pair differs only in
+#: the amount of arithmetic executed -- which is what makes an efficiency comparison
+#: attributable. Duplicated as a literal; a test pins the two lists together.
+SSAC_EXECUTIONS: tuple[str, ...] = ("dense", "sparse")
+
 
 @dataclass
 class ModelSpec:
@@ -109,6 +116,20 @@ class ModelSpec:
     #: that it decides *how much computation* a location receives rather than only how the
     #: feature there is weighted.
     ssac: str | None = None
+    #: Core-mechanism configuration, emitted into the module's YAML argument list. Explicit
+    #: fields rather than one packed string, because the cost ablation varies them one at a
+    #: time and a half-specified arm would be a wiring mistake waiting to happen. Every one of
+    #: them is validated in ``__post_init__`` and pinned against the module's own constructor
+    #: order by ``tests/test_ssac.py::test_the_yaml_argument_order_matches_the_module_signature``.
+    ssac_scales: tuple[int, ...] = (3, 7)
+    ssac_hidden: int = 16
+    ssac_expand: int = 2
+    ssac_execution: str = "dense"
+    ssac_tile: int = 16
+    ssac_keep: float = 0.25
+    ssac_penalty: float = 0.0
+    ssac_tau: float = 1.0
+    ssac_select: float = 0.5
     adapter: str | None = None
     enhancement: str | None = None
     speckle: str | None = None
@@ -140,6 +161,19 @@ class ModelSpec:
             raise ValueError(f"cfar must be one of {CFAR_MODES}, got {self.cfar!r}")
         if self.ssac is not None and self.ssac not in SSAC_MODES:
             raise ValueError(f"ssac must be one of {SSAC_MODES}, got {self.ssac!r}")
+        if self.ssac_execution not in SSAC_EXECUTIONS:
+            raise ValueError(f"ssac_execution must be one of {SSAC_EXECUTIONS}, got {self.ssac_execution!r}")
+        if self.ssac and not self.ssac_scales:
+            raise ValueError("ssac_scales must not be empty: the assessment needs a window")
+        if self.ssac and self.ssac_tile < 1:
+            raise ValueError(f"ssac_tile must be >= 1, got {self.ssac_tile!r}")
+        if self.ssac and not 0.0 < self.ssac_keep <= 1.0:
+            raise ValueError(f"ssac_keep must be a fraction in (0, 1], got {self.ssac_keep!r}")
+        if self.ssac and self.ssac_execution == "sparse" and self.ssac_keep >= 1.0:
+            # Not an error in the module (keep=1 is the equivalence case the tests use), but a
+            # sparse *arm* that refines every tile pays the gather/scatter for nothing, so it
+            # would be an arm whose stated purpose it cannot serve.
+            raise ValueError("a sparse ssac arm with ssac_keep >= 1 refines every tile and cannot measure a routing saving")
         if self.scale not in SCALES:
             raise ValueError(f"scale must be one of {sorted(SCALES)}, got {self.scale!r}")
         if "p2" in self.levels and self.levels != ("p2", "p3", "p4", "p5"):
@@ -359,8 +393,20 @@ def build_yaml_dict(spec: ModelSpec) -> dict[str, Any]:
             # The SARVO core mechanism acts last in the per-level chain, so the detection
             # head reads the adaptively-refined representation -- which is what makes the
             # "the allocation supports detection" claim direct rather than indirect.
+            #
+            # The argument list is written out in full, in the module's own positional order,
+            # rather than relying on defaults: the YAML is the artefact a checkpoint carries,
+            # so a reader (and the arg-order test) must be able to see which mechanism was
+            # actually built without reading the class. The trailing two constructor arguments
+            # (``alpha_init``, ``eps``) stay at their defaults -- they are numerical details,
+            # not mechanism choices.
             heads[lvl] = b.add(
-                "head", heads[lvl], 1, "ScatterSelectiveRefinement", ["ch", heads[lvl], spec.ssac]
+                "head", heads[lvl], 1, "ScatterSelectiveRefinement",
+                [
+                    "ch", heads[lvl], spec.ssac, list(spec.ssac_scales), spec.ssac_hidden,
+                    spec.ssac_expand, spec.ssac_execution, spec.ssac_tile, spec.ssac_keep,
+                    spec.ssac_penalty, spec.ssac_tau, spec.ssac_select,
+                ],
             )
 
     b.add("head", [heads[lvl] for lvl in spec.levels], 1, "Detect", ["nc"])
@@ -852,6 +898,33 @@ VARIANTS["ssac_fixed_n"] = _v(
     "ssac_fixed_n", scale="n", ssac="fixed",
     notes="ssac_fixed_s at scale n (pilot scale); the fixed-computation control.",
 )
+
+#: SSAC **execution** arms (master Phase 9, cost ablation). Each is parameter-identical to the
+#: dense proposal; they differ only in how much arithmetic the expensive path performs, which
+#: is what lets a cost difference be attributed to the execution rather than to capacity.
+#:
+#: * ``ssac_sparse_s``  -- refines only the selected tiles, with a halo of context. The arm the
+#:   efficiency claim has to be earned on: it is the only one whose measured latency can fall.
+#: * ``ssac_e1_s``      -- the expensive path's bottleneck at expand=1, i.e. the cheap end of
+#:   the cost/benefit question "how much of the mechanism's +31 % parameter cost is load-bearing".
+#: * ``ssac_pen_s``     -- the proposal with an explicit allocation-sparsity penalty. The
+#:   penalty is deliberately absent from the proposal itself (penalising the allocation to be
+#:   small is circular when sparsity is the mechanism's own claim); as an arm it measures what
+#:   the mechanism does when *pushed* sparse, which is the premise a sparse build relies on.
+for _arm, _kw in (
+    ("ssac_sparse_s", {"ssac_execution": "sparse", "ssac_tile": 16, "ssac_keep": 0.25}),
+    ("ssac_e1_s", {"ssac_expand": 1}),
+    ("ssac_pen_s", {"ssac_penalty": 0.01, "sar_loss": {"w_ssac_sparsity": 0.01}}),
+):
+    VARIANTS[_arm] = _v(
+        _arm, ssac="adaptive", **{k: v for k, v in _kw.items()},
+        notes=f"SSAC cost-ablation arm ({_arm}): {sorted(_kw)}",
+    )
+    _scale_n = f"{_arm[:-2]}_n"  # not str.replace: the arm names contain other "_s"
+    VARIANTS[_scale_n] = _v(
+        _scale_n, scale="n", ssac="adaptive", **{k: v for k, v in _kw.items()},
+        notes=f"{_arm} at scale n (pilot scale).",
+    )
 
 #: Baseline comparison variants (EXP-001b): scales of the stock detector.
 for _s in ("n", "s", "m", "l"):

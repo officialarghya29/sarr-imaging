@@ -115,15 +115,48 @@ head:
 - - 16
   - 1
   - ScatterSelectiveRefinement
-  - [ch, 16, adaptive]
+  - - ch
+    - 16
+    - adaptive
+    - [3, 7]
+    - 16
+    - 2
+    - dense
+    - 16
+    - 0.25
+    - 0.0
+    - 1.0
+    - 0.5
 - - 19
   - 1
   - ScatterSelectiveRefinement
-  - [ch, 19, adaptive]
+  - - ch
+    - 19
+    - adaptive
+    - [3, 7]
+    - 16
+    - 2
+    - dense
+    - 16
+    - 0.25
+    - 0.0
+    - 1.0
+    - 0.5
 - - 22
   - 1
   - ScatterSelectiveRefinement
-  - [ch, 22, adaptive]
+  - - ch
+    - 22
+    - adaptive
+    - [3, 7]
+    - 16
+    - 2
+    - dense
+    - 16
+    - 0.25
+    - 0.0
+    - 1.0
+    - 0.5
 - - [23, 24, 25]
   - 1
   - Detect

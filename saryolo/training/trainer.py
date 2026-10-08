@@ -627,15 +627,38 @@ class SARYOLO(YOLO):
         return task_map
 
 
+def custom_layer_names() -> tuple[str, ...]:
+    """Every module name that may appear in a model YAML, read from the module registry.
+
+    Read from :data:`saryolo.nn.modules.CUSTOM_MODULES` rather than written out here, and the
+    reason is a defect this function used to have. The tuple below was hand-maintained, and it
+    drifted the moment the repository's own two prototype mechanisms were added:
+    ``RatioSpaceCFARFrontEnd`` and ``ScatterSelectiveRefinement`` were both missing from it, so
+    every CFAR and SSAC arm resolved to the **stock** ``YOLO`` facade and trained on
+    ultralytics' ``DetectionModel`` -- which means ``SARYOLODetectionModel.loss``, the
+    SAR-aware criterion and the allocation-sparsity penalty never ran for those arms.
+
+    Nothing failed. The runs trained, converged and produced plausible numbers, and the only
+    visible symptom was that a penalised arm came out **bit-for-bit identical** to its
+    unpenalised twin: the penalty was inert. That is what a silent mismatch between "the model
+    the repository describes" and "the model the trainer built" looks like from the outside,
+    so the list is now derived from the one registry that defines it.
+    """
+    from saryolo.nn.modules import CUSTOM_MODULES
+
+    return tuple(sorted(CUSTOM_MODULES))
+
+
 def is_saryolo_yaml(model_path: str) -> bool:
-    """Whether a YAML references a custom SAR-YOLO or conditioning layer."""
+    """Whether a YAML references a custom SAR-YOLO or conditioning layer.
+
+    The check is deliberately a substring search over the file's text: `parse_model` looks the
+    module name up in exactly the same way, and a name that appears anywhere in the file (a
+    row, a comment, a provenance header) means the graph cannot be built by the stock parser
+    without this repository's register step.
+    """
     path = Path(model_path)
     if not path.is_file() or path.suffix not in (".yaml", ".yml"):
         return False
-    names = (
-        "SARFeatureEnhancement", "SpeckleAwareFeatureModule", "SARAdaptiveAttention",
-        "AdaptiveMultiScaleFusion", "SEAttention", "ECAAttention", "CBAMAttention",
-        "AcquisitionConditionedAdapter", "TargetPriorModulation", "SpatialFrequencyRepresentation",
-        "ContextAggregation", "TargetAwareRefinement", "SARInputAdapter",
-    )
-    return any(name in path.read_text() for name in names)
+    text = path.read_text()
+    return any(name in text for name in custom_layer_names())

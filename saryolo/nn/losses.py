@@ -64,6 +64,14 @@ SAR_LOSS_DEFAULTS: dict[str, float] = {
     "w_consistency": 0.0,
     "consistency_kind": "speckle",
     "consistency_severity": 4.0,
+    # SARVO core mechanism (SSAC): weight of the allocation-sparsity penalty. Applied by the
+    # *model's* ``loss()`` -- not inside this criterion -- because the quantity it penalises is
+    # the mechanism's own mean allocation, which the criterion never sees (it receives
+    # predictions, not modules). The criterion holds the weight, exactly as it holds
+    # ``w_consistency``, so one YAML ``sar_loss`` block configures both. Off by default and
+    # deliberately absent from the proposal arm: penalising the allocation to be small is
+    # circular when sparsity is the mechanism's own claim.
+    "w_ssac_sparsity": 0.0,
 }
 
 
@@ -201,6 +209,7 @@ class SARAwareDetectionLoss(v8DetectionLoss):
         self.bg_frac = float(cfg["bg_frac"])
         self.small_area = float(cfg["small_area"])
         self.w_consistency = float(cfg["w_consistency"])
+        self.w_ssac_sparsity = float(cfg["w_ssac_sparsity"])
         # The perturbed view's feature maps are supplied by the model's `loss()` before this
         # criterion is called, because producing them needs a forward pass the criterion
         # cannot perform (it receives predictions, not the model). Held as plain attributes

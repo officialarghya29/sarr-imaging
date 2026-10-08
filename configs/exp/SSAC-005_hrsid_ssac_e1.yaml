@@ -1,0 +1,41 @@
+# SARVO core mechanism -- EXPENSIVE-PATH COST ablation (master Phase 9).
+#
+# SSAC-001 costs +31.1% parameters over the stock YOLO11n (3,396,329 vs 2,590,035), and the
+# obvious question is how much of that is load-bearing. This arm answers the first half of it
+# by shrinking the expensive path's bottleneck from expand=2 to expand=1 -- the cheap end of
+# the mechanism's own cost range -- and leaving everything else (assessment, allocation,
+# placement, schedule, seed) exactly as the proposal.
+#
+# Read it as a three-way comparison, all measured on the same subset and schedule:
+#
+#   baseline_n    2,590,035   no mechanism
+#   ssac_e1_n     2,953,257   the mechanism with a narrow expensive path   <- this arm
+#   ssac_n        3,396,329   the mechanism as proposed
+#
+# If this arm matches SSAC-001 on accuracy, the extra 443,072 parameters bought nothing and
+# the proposal should be narrowed. If it loses accuracy while SSAC-001 gains it, that is
+# evidence the expensive path's width is the load-bearing part of the mechanism.
+#
+#   python -m saryolo train --exp configs/exp/SSAC-005_hrsid_ssac_e1.yaml
+experiment:
+  id: SSAC-005
+  name: real-data pilot (SSAC, expand=1 expensive path)
+  description: >-
+    The SSAC mechanism with the expensive path's bottleneck at expand=1 instead of 2:
+    +14.0% parameters over the stock detector instead of +31.1%. Cost ablation only.
+model: ../models/yolo11n_ssac_e1_n.yaml
+dataset: ../datasets/hrsid_real.yaml
+train:
+  epochs: 40
+  imgsz: 320
+  batch: 4
+  seed: 0
+  optimizer: auto
+  cos_lr: true
+  patience: 15
+  workers: 4
+  deterministic: true
+notes: >-
+  Real HRSID subset, pilot scale. Same dataset, schedule, resolution and seed as SSAC-001, so
+  the only difference is the width of the expensive path. Not an efficiency arm: it is a cost
+  ablation that says how much of the mechanism's parameter price the accuracy actually needs.

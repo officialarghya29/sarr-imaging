@@ -46,6 +46,12 @@ import make_readme_assets as M  # noqa: E402
 CHARTS = (
     M.chart_ladder_params,
     M.chart_accuracy_cost,
+    # ``chart_cost_frontier`` was missing from this list, so the one figure whose captions are
+    # longest of the cost family was never linted -- and neither was any chart added after it,
+    # because the omission was invisible. The list is the guard's coverage, so a chart that is
+    # rendered but absent here is checked by nothing.
+    M.chart_cost_frontier,
+    M.chart_ssac_execution,
     M.chart_slot_ablations,
     M.chart_slot_ablations_v2,
     M.chart_identity,

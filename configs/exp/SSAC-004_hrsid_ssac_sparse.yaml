@@ -1,0 +1,42 @@
+# SARVO core mechanism -- SPARSE EXECUTION arm (master Phase 9, cost ablation).
+#
+# The dense proposal pays the expensive path at every location, so it cannot have an
+# efficiency claim at all. This arm executes the *same* mechanism, on the *same* graph, with
+# the *same* parameter count as SSAC-001, but refines only the quarter of tiles the
+# allocation selects (with a halo, so a selected tile sees the same context it would have in
+# the dense pass). A cost difference between this arm and SSAC-001 is therefore the amount of
+# arithmetic executed and nothing else.
+#
+# What it is really testing: whether the selection -- measured at 4.4% of P3 locations above
+# 0.5 in SSAC-001 -- is enough to reach the same accuracy when the unselected tiles are no
+# longer refined at all. If it is not, the mechanism's accuracy depends on the dense pass and
+# the efficiency story requires a different design (see docs/ssac_design.md §9).
+#
+# Parameter-identical to SSAC-001 by construction; the ledger's own parameter and FLOP
+# columns are checked against it.
+#
+#   python -m saryolo train --exp configs/exp/SSAC-004_hrsid_ssac_sparse.yaml
+experiment:
+  id: SSAC-004
+  name: real-data pilot (SSAC, sparse tile execution)
+  description: >-
+    SSAC trained and evaluated with sparse execution: the expensive path runs only on the
+    selected quarter of tiles, halo-corrected. Parameter-identical to SSAC-001.
+model: ../models/yolo11n_ssac_sparse_n.yaml
+dataset: ../datasets/hrsid_real.yaml
+train:
+  epochs: 40
+  imgsz: 320
+  batch: 4
+  seed: 0
+  optimizer: auto
+  cos_lr: true
+  patience: 15
+  workers: 4
+  deterministic: true
+notes: >-
+  Real HRSID subset, pilot scale. Identical layer shapes and parameter count to SSAC-001;
+  only the amount of arithmetic executed differs (16px tiles, keep=0.25, halo=2). Because the
+  tiles' BatchNorm statistics are computed per tile in training, sparse *training* is an
+  approximation of dense training and the two are not numerically identical -- that is stated
+  in saryolo/nn/modules/ssac.py rather than assumed away.

@@ -27,8 +27,11 @@ __all__ = [
     "measure_flops",
     "measure_latency",
     "model_size_mb",
+    "override_ssac_execution",
     "profile_model",
     "profile_yaml",
+    "ssac_blocks",
+    "ssac_routing",
     "write_profile",
 ]
 
@@ -82,6 +85,90 @@ def _input_stats(x) -> dict:
         "latency_input_max": round(float(x.max()), 5),
         "latency_input_mean": round(float(x.mean()), 5),
     }
+
+
+def ssac_blocks(model) -> list:
+    """Every SARVO core-mechanism block in ``model``, in graph order.
+
+    Imported lazily so that profiling a model without the mechanism does not import it, and
+    so this module keeps no import-time dependency on the module package.
+    """
+    from saryolo.nn.modules.ssac import ScatterSelectiveRefinement
+
+    return [m for m in model.modules() if isinstance(m, ScatterSelectiveRefinement)]
+
+
+def override_ssac_execution(model, execution=None, keep=None, tile=None) -> dict:
+    """Force a loaded model's SSAC blocks into an execution mode, recording what was applied.
+
+    The dense and sparse builds of an SSAC arm are parameter-identical, so the *only* way to
+    compare their cost on one checkpoint is to switch the execution after loading. That is
+    what makes the objective-mechanism efficiency sweep possible: one trained model, timed
+    both ways, with the difference attributable to the amount of arithmetic executed rather
+    than to a differently-trained set of weights.
+
+    Raises when there is nothing to switch. A ``--ssac-*`` flag that silently did nothing
+    would produce a dense measurement labelled as a sparse one, which is precisely the
+    failure the no-fabrication rule is about.
+    """
+    blocks = ssac_blocks(model)
+    if not blocks:
+        raise ValueError(
+            "this checkpoint has no ScatterSelectiveRefinement blocks, so an execution "
+            "override would do nothing -- refuse rather than report a different mode"
+        )
+    for block in blocks:
+        if execution is not None:
+            block.execution = str(execution)
+        if keep is not None:
+            block.keep = float(keep)
+        if tile is not None:
+            block.tile = int(tile)
+    applied = {
+        "ssac_blocks": len(blocks),
+        "ssac_execution": blocks[0].execution,
+        "ssac_keep": float(blocks[0].keep),
+        "ssac_tile": int(blocks[0].tile),
+        "ssac_halo": int(getattr(blocks[0], "halo", 0)),
+    }
+    if any(b.execution != blocks[0].execution for b in blocks) or any(
+        b.keep != blocks[0].keep for b in blocks
+    ):
+        raise ValueError("the override left the levels in different execution modes")
+    return applied
+
+
+def ssac_routing(model, inputs) -> dict:
+    """Per-level routing diagnostics of ``model`` on one batch of inputs.
+
+    Measured through forward-pre-hooks rather than by reimplementing the assessment, so the
+    number reported is the number the graph actually used. Returns an empty dict for a model
+    without the mechanism, because "this model does not route" is a fact, not a failure.
+    """
+    import torch
+
+    blocks = ssac_blocks(model)
+    if not blocks or inputs is None:
+        return {}
+    captured: list[dict] = []
+
+    def make_hook(block, level):
+        def hook(_module, args):
+            if args and isinstance(args[0], torch.Tensor):
+                captured.append({"level": level, "c1": block.c1, **block.routing_stats(args[0])})
+        return hook
+
+    handles = [b.register_forward_pre_hook(make_hook(b, i)) for i, b in enumerate(blocks)]
+    was_training = model.training
+    model.eval()
+    try:
+        with torch.no_grad():
+            model(inputs)
+    finally:
+        for handle in handles:
+            handle.remove()
+        model.train(was_training)
+    return {"levels": captured}
 
 
 def count_parameters(model) -> dict:
@@ -260,6 +347,9 @@ def profile_model(
     data_yaml: str | Path | None = None,
     batch: int = 1,
     runs: int = 1,
+    ssac_execution: str | None = None,
+    ssac_keep: float | None = None,
+    ssac_tile: int | None = None,
 ) -> dict:
     """Full efficiency profile for a checkpoint.
 
@@ -275,6 +365,12 @@ def profile_model(
         batch: Batch size for the real-image timing.
         runs: Independent timed blocks; see :func:`measure_latency`. Use more than one
             whenever the number will be compared against another arm.
+        ssac_execution: ``"dense"`` or ``"sparse"`` to switch the loaded model's core-mechanism
+            blocks before timing (see :func:`override_ssac_execution`). ``None`` leaves the
+            checkpoint's own configuration, and the profile then records no ``ssac_*`` key --
+            because "not overridden" and "overridden to dense" are different facts.
+        ssac_keep: Tile fraction for sparse execution.
+        ssac_tile: Tile size for sparse execution.
     """
 
     from saryolo.training.trainer import load_model
@@ -291,6 +387,8 @@ def profile_model(
     out.update(counts)
     out.update(measure_flops(net, imgsz=imgsz))
     out["model_size_MB"] = model_size_mb(weights)
+    if ssac_execution is not None or ssac_keep is not None or ssac_tile is not None:
+        out.update(override_ssac_execution(net, ssac_execution, ssac_keep, ssac_tile))
     if latency:
         try:
             inputs = None
@@ -305,6 +403,11 @@ def profile_model(
             out.update(
                 measure_latency(net, imgsz=imgsz, inputs=inputs, source=source, batch=batch, runs=runs)
             )
+            if out.get("ssac_blocks") and inputs is not None:
+                # What the timed pass actually routed, on the same batch it was timed on.
+                # Requires real inputs: routing on noise would report the allocation for a
+                # distribution the model is not deployed on.
+                out["ssac_routing"] = ssac_routing(net, inputs)
         except Exception as exc:
             out["latency_error"] = str(exc)
     out["weights"] = str(weights)

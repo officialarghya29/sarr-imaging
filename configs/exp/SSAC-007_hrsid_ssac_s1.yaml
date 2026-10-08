@@ -1,0 +1,36 @@
+# MULTI-SEED repeat of SSAC-001 (the proposal: adaptive allocation) at seed 1.
+#
+# SSAC-001 beat its matched fixed-computation control (SSAC-002) by +0.0063 mAP50:95 at seed 0
+# on 60 test images. Whether that is a signal or a draw is decided by repeating the pair at
+# more seeds, not by arguing about it -- the same standard the augmentation study was held to
+# (AUG-005/006 repeated MSEED-B1/B2's seeds after the seed-0 difference turned out to be
+# comparable to the seed spread).
+#
+# The SSAC pair is exactly the comparison that most needs this treatment: the two arms are
+# parameter-identical by construction, so their difference cannot be capacity, but it can
+# still be the seed. Paired with SSAC-009 (the control at the same seed).
+#
+# Distinct experiment id on purpose: the README pilot table quotes the seed-0 rows, and
+# silently replacing a row with a different seed would make the table describe a run nobody
+# chose.
+#
+#   python -m saryolo train --exp configs/exp/SSAC-007_hrsid_ssac_s1.yaml
+experiment:
+  id: SSAC-007
+  name: seed spread (SSAC proposal, seed 1)
+  description: Multi-seed repeat of SSAC-001 at seed 1; a seed-spread measurement, not a new arm.
+model: ../models/yolo11n_ssac_n.yaml
+dataset: ../datasets/hrsid_real.yaml
+train:
+  epochs: 40
+  imgsz: 320
+  batch: 4
+  seed: 1
+  optimizer: auto
+  cos_lr: true
+  patience: 15
+  workers: 4
+  deterministic: true
+notes: >-
+  Seed spread only. Same arm, dataset and schedule as SSAC-001 (seed 0); the only difference
+  is the training seed.
