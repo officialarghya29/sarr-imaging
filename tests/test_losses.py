@@ -40,6 +40,60 @@ def test_small_area_threshold_matches_coco():
     assert SAR_LOSS_DEFAULTS["small_area"] == 32.0**2
 
 
+def test_the_sar_criterion_with_every_weight_off_is_the_stock_detection_loss():
+    """The claim the module docstring makes, measured end to end rather than asserted.
+
+    It matters beyond tidiness: an arm whose YAML declares **no** ``sar_loss`` block (every
+    CFAR and SSAC arm) has to be unaffected by which criterion the trainer builds, or the
+    prototype's pilot numbers would depend on a loss the arm never asked for. The comparison is
+    against ultralytics' own ``v8DetectionLoss`` on an identical model with identical weights,
+    and it is an equality of tensors -- not of rounded values -- because the property being
+    relied on is numerical identity.
+    """
+    from ultralytics.nn.tasks import DetectionModel
+    from ultralytics.utils.loss import v8DetectionLoss
+
+    torch.manual_seed(0)
+    cfg = build_yaml_dict(VARIANTS["ssac_n"])
+    assert not cfg.get("sar_loss"), "this arm is meant to declare no SAR-loss block"
+    ours_model = SARYOLODetectionModel(cfg, ch=3, nc=1, verbose=False)
+    ours_model.train()
+    stock = DetectionModel(cfg, ch=3, nc=1, verbose=False)
+    stock.load_state_dict(ours_model.state_dict())
+    stock.train()
+    # Ultralytics sets `args` from the training arguments, which a model built here has none of;
+    # the repository's own class falls back to the same defaults, so the comparison uses them
+    # on both sides rather than letting the two differ in their hyperparameters.
+    from types import SimpleNamespace
+
+    stock.args = SimpleNamespace(box=7.5, cls=0.5, dfl=1.5)
+    stock.criterion = v8DetectionLoss(stock)
+
+    batch = {
+        "img": torch.rand(2, 3, 64, 64),
+        "batch_idx": torch.tensor([0.0, 1.0]),
+        "cls": torch.tensor([[0.0], [0.0]]),
+        "bboxes": torch.tensor([[0.5, 0.5, 0.1, 0.08], [0.3, 0.7, 0.05, 0.05]]),
+    }
+    ours, items = ours_model.loss(batch)
+    theirs, theirs_items = stock.loss(batch)
+    # The SAR criterion carries one extra accumulator -- its fourth term -- and its contract is
+    # that the extra entry is *exactly* zero when the term is disabled, so the total the
+    # optimiser sees is unchanged. Both halves are asserted, because a fourth term that was
+    # merely small would still change the gradient.
+    assert ours.shape[0] == theirs.shape[0] + 1, (ours.shape, theirs.shape)
+    assert torch.equal(ours[:3], theirs), (
+        f"the SAR-aware criterion with every weight at zero is not the stock detection loss "
+        f"({float(ours.sum())} vs {float(theirs.sum())}): an arm with no sar_loss block would be "
+        f"training on a different objective than its config describes"
+    )
+    assert float(ours[3]) == 0.0
+    assert float(ours.sum()) == float(theirs.sum())
+    for key in ("box_loss", "cls_loss", "dfl_loss"):
+        assert torch.equal(items[key], theirs_items[key]), key
+    assert float(items["sar_loss"].sum()) == 0.0
+
+
 def test_loss_names_include_the_sar_term(criterion):
     assert criterion.loss_names[-1] == "sar_loss"
     assert len(criterion.loss_names) == 4

@@ -40,8 +40,11 @@ from saryolo.evaluation.efficiency import (
     measure_flops,
     measure_latency,
     model_size_mb,
+    override_ssac_execution,
     profile_model,
     profile_yaml,
+    ssac_blocks,
+    ssac_routing,
     write_profile,
 )
 from saryolo.nn.arch import VARIANTS, build_yaml_dict, variant_filename
@@ -317,3 +320,80 @@ def test_an_unsupported_input_size_reports_an_error_rather_than_a_fabricated_num
     # a silently missing key with no explanation.
     if row.get("flops_G") is None:
         assert "flops_error" in row, "a missing FLOP count must come with its reason"
+
+
+# ============================================================ execution-mode override
+# The cost ablation times one checkpoint in two execution modes. That is only a comparison of
+# execution if (a) the override actually reaches every block, (b) it refuses to pretend when
+# there is nothing to override, and (c) the parameters are identical either way -- otherwise a
+# cost difference could be a different model rather than different arithmetic.
+
+
+def test_the_execution_override_reaches_every_ssac_block_and_refuses_other_models():
+    """A silent no-op here would label a dense measurement as a sparse one."""
+    model = _build("ssac_sparse_n")
+    assert len(ssac_blocks(model)) == 3
+    applied = override_ssac_execution(model, execution="dense")
+    assert applied["ssac_blocks"] == 3
+    assert applied["ssac_execution"] == "dense"
+    assert all(b.execution == "dense" for b in ssac_blocks(model))
+    applied = override_ssac_execution(model, execution="sparse", keep=0.1, tile=8)
+    assert applied["ssac_keep"] == 0.1 and applied["ssac_tile"] == 8
+    assert all(b.keep == 0.1 and b.tile == 8 for b in ssac_blocks(model))
+    with pytest.raises(ValueError, match="no ScatterSelectiveRefinement blocks"):
+        override_ssac_execution(_build("baseline_n"), execution="sparse")
+
+
+def test_the_execution_override_changes_no_parameter():
+    """Timing cannot be a proxy for capacity: the override must be execution-only."""
+    model = _build("ssac_sparse_n")
+    before = [p.detach().clone() for p in model.parameters()]
+    override_ssac_execution(model, execution="dense", keep=1.0, tile=32)
+    after = list(model.parameters())
+    assert len(before) == len(after)
+    assert all(torch.equal(a, b) for a, b in zip(before, after, strict=True)), (
+        "switching execution mode changed a parameter value"
+    )
+
+
+def test_routing_reports_every_level_and_matches_the_block_it_describes():
+    """The reported routing must be the one the graph used, per level."""
+    model = _build("ssac_sparse_n")
+    x = torch.rand(1, 3, 320, 320)
+    report = ssac_routing(model, x)
+    assert len(report["levels"]) == len(ssac_blocks(model)) == 3
+    for row in report["levels"]:
+        assert {"tiles", "selected_tiles", "executed_rich_fraction", "halo"} <= set(row)
+        assert row["halo"] == 2, "the halo in the report must be the one the gather used"
+        assert row["selected_tiles"] >= 1
+        assert 0.0 < row["executed_rich_fraction"] <= 1.0
+    assert ssac_routing(_build("baseline_n"), x) == {}, (
+        "a model with no mechanism should report no routing, not a fabricated row"
+    )
+
+
+def test_the_flop_counter_cannot_see_the_sparsity_and_says_so_by_being_no_lower():
+    """Sparse execution removes arithmetic that a graph FLOP counter still counts.
+
+    This is why the efficiency claim rests on measured wall-clock and not on a FLOP ratio:
+    the counters trace the *kernels*, and a gathered tile still looks like a convolution of
+    its own size -- with the halo added, and with the router's indexing counted as work. The
+    sparse build is therefore expected to report a FLOP count that is **not lower** than the
+    dense one. If a counter ever did report a lower number here it would be reporting the
+    routing budget rather than the graph, and the ledger's ``flops_G`` column would need a
+    different reading.
+    """
+    def profile(variant: str) -> dict:
+        path = REPO_ROOT / "configs" / "models" / variant_filename(VARIANTS[variant])
+        return profile_yaml(path, imgsz=320, nc=1)
+
+    dense = profile("ssac_n")
+    sparse = profile("ssac_sparse_n")
+    assert dense["params"] == sparse["params"], "the two builds are not parameter-matched"
+    if dense.get("flops_G") is not None and sparse.get("flops_G") is not None:
+        assert sparse["flops_G"] >= dense["flops_G"] * 0.95, (
+            f"the FLOP counter reported less work for sparse execution "
+            f"({sparse['flops_G']} vs {dense['flops_G']} G); it is reading the routing "
+            f"budget, not the executed kernel arithmetic"
+        )
+        assert sparse.get("flops_G_counter"), "a FLOP count without its counter cannot be read"

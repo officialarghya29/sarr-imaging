@@ -21,6 +21,8 @@ from saryolo.nn.register import registered_modules
 
 torch.manual_seed(0)
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
 
 def _build(spec: ModelSpec, nc: int = 1, ch: int = 3) -> SARYOLODetectionModel:
     model = SARYOLODetectionModel(build_yaml_dict(spec), ch=ch, nc=nc, verbose=False)
@@ -1050,6 +1052,101 @@ def test_input_adapter_identity_arm_has_no_parameters():
     for mode in ("local", "learned", "hybrid"):
         module = SARInputAdapter(3, mode=mode)
         assert sum(p.numel() for p in module.parameters()) > 0, mode
+
+
+# ------------------------------------------- the custom layers must reach the custom trainer
+# A defect found in this section, and the reason the first test here exists: `is_saryolo_yaml`
+# decided which facade to train with from a *hand-written* tuple of layer names, which had
+# drifted -- it omitted `RatioSpaceCFARFrontEnd` and `ScatterSelectiveRefinement`, the
+# repository's own two prototype mechanisms. Their arms therefore trained on ultralytics'
+# `DetectionModel` with ultralytics' own loss, so `SARYOLODetectionModel.loss` (the SAR-aware
+# criterion and the allocation-sparsity penalty) never ran. Nothing failed: the runs converged
+# and produced plausible numbers. The symptom was that a penalty arm came out bit-for-bit
+# identical to its unpenalised twin.
+
+
+def test_every_custom_layer_name_forces_the_custom_facade():
+    """The name list is derived from the registry, and it covers every registered layer.
+
+    Read from ``CUSTOM_MODULES`` -- the single place that defines what may appear in a model
+    YAML -- so adding a mechanism can never again leave the trainer building the stock model.
+    """
+    from saryolo.nn.modules import CUSTOM_MODULES
+    from saryolo.training.trainer import custom_layer_names, is_saryolo_yaml, resolve_model_class
+
+    assert custom_layer_names() == tuple(sorted(CUSTOM_MODULES))
+    for name in ("RatioSpaceCFARFrontEnd", "ScatterSelectiveRefinement"):
+        assert name in custom_layer_names(), (
+            f"{name} is one of this repository's own mechanisms and must force the custom facade"
+        )
+    # A YAML that names *any* registered layer resolves to the custom facade, and the stock
+    # baseline does not: a false positive here would change what every baseline arm trains on.
+    text = "\n".join(f"- [-1, 1, {name}, [1]]" for name in CUSTOM_MODULES)
+    for name in CUSTOM_MODULES:
+        assert name in text
+    assert is_saryolo_yaml("configs/models/yolo11n_baseline_n.yaml") is False
+    assert resolve_model_class("configs/models/yolo11n_baseline_n.yaml").__name__ == "YOLO"
+    for arm in ("ssac_n", "ssac_pen_n", "cfar_s"):
+        path = REPO_ROOT / "configs" / "models" / variant_filename(VARIANTS[arm])
+        assert is_saryolo_yaml(path) is True, f"{arm} would be trained by the stock model"
+        assert resolve_model_class(str(path)).__name__ == "SARYOLO"
+
+
+def test_every_variant_that_needs_the_custom_model_gets_it():
+    """For all 110 variants: a graph with a custom layer must not resolve to stock YOLO.
+
+    Compared against the *architecture dictionary* rather than against the YAML text, so the
+    check cannot agree with a wrong ``is_saryolo_yaml`` by construction: the rows come from the
+    builder and the names come from the module registry, and only the facade lookup ties them
+    together.
+    """
+    from saryolo.nn.modules import CUSTOM_MODULES
+    from saryolo.training.trainer import is_saryolo_yaml
+
+    models_dir = REPO_ROOT / "configs" / "models"
+    checked = 0
+    for name, spec in sorted(VARIANTS.items()):
+        path = models_dir / variant_filename(spec)
+        if not path.exists():
+            continue
+        rows = build_yaml_dict(spec)
+        modules = {row[2] for row in [*rows["backbone"], *rows["head"]]}
+        needs_custom = bool(modules & set(CUSTOM_MODULES))
+        if needs_custom:
+            assert is_saryolo_yaml(path), (
+                f"{name} builds {sorted(modules & set(CUSTOM_MODULES))} but resolves to the "
+                f"stock facade, which would silently replace the SAR-aware loss with "
+                f"ultralytics' own"
+            )
+            checked += 1
+    assert checked > 50, f"only {checked} variants exercise the custom facade; the check is weak"
+
+
+def test_every_variant_that_declares_a_sar_loss_block_gets_the_sar_loss():
+    """A YAML that declares ``sar_loss`` must not be trained by a criterion that ignores it.
+
+    This is the sharp end of the defect above. Sixty-eight variants declare a ``sar_loss``
+    block, and for any one of them resolving to the stock facade would mean training without
+    the term the config names — a published ablation row measuring something other than what it
+    is labelled with, with no error anywhere. The check is therefore stated as: **every**
+    variant with a non-empty ``sar_loss`` resolves to the custom facade.
+    """
+    from saryolo.training.trainer import is_saryolo_yaml
+
+    models_dir = REPO_ROOT / "configs" / "models"
+    declaring = 0
+    for name, spec in sorted(VARIANTS.items()):
+        if not spec.sar_loss:
+            continue
+        path = models_dir / variant_filename(spec)
+        if not path.exists():
+            continue
+        declaring += 1
+        assert is_saryolo_yaml(path), (
+            f"{name} declares {spec.sar_loss} but resolves to the stock facade, so the term "
+            f"would never be computed"
+        )
+    assert declaring > 60, f"only {declaring} variants declare a sar_loss block; the check is weak"
 
 
 def test_input_adapter_sits_at_the_image_not_at_a_feature():

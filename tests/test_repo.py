@@ -521,6 +521,13 @@ README_REAL_ROWS: dict[str, str] = {
     "SSAC-001 · SARVO core mechanism (SSAC)": "SSAC-001",
     "SSAC-002 · control (fixed computation)": "SSAC-002",
     "SSAC-003 · control (raw-feature assessment)": "SSAC-003",
+    # The two cost-ablation arms are *runs*, not settings, so they hold rows of their own: the
+    # sparse build answers the efficiency question and the narrow expensive path answers how
+    # much of the mechanism's parameter price the accuracy needs. Both are parameter-counted
+    # against the proposal in the same table.
+    "SSAC-004 · prototype, sparse execution": "SSAC-004",
+    "SSAC-005 · prototype, expand=1 expensive path": "SSAC-005",
+    "SSAC-006 · prototype + sparsity penalty": "SSAC-006",
 }
 
 #: Column name in the README pilot table -> metric key in ``facts.json``. ``epochs`` is a
@@ -596,6 +603,95 @@ def test_readme_real_data_table_matches_the_measured_arms():
             assert abs(shown - expected) < 5e-4 or abs(shown - round(expected, 3)) < 1e-9, (
                 f"{label} · {column}: README says {shown}, ledger says {expected}"
             )
+
+
+def _readme_ssac_execution_table() -> list[dict]:
+    """Parse the dense/sparse timing table out of the README's core-mechanism section.
+
+    Anchored on the section heading rather than on the table's own header row, because the
+    header is prose that may be reworded while the *numbers* must not drift: an anchor that
+    was itself the thing being edited would let the table be rewritten without the guard
+    noticing.
+    """
+    readme = (REPO_ROOT / "README.md").read_text()
+    parts = readme.split("Does the allocation convert into a wall-clock saving?", 1)
+    assert len(parts) == 2, "the README has no dense/sparse execution section to check"
+    rows: list[dict] = []
+    for line in parts[1].splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) == 5 and cells[0] in ("dense", "sparse"):
+            rows.append(
+                {
+                    "execution": cells[0],
+                    "keep": cells[1],
+                    "levels": [float(v) for v in cells[2].split("/")],
+                    "ms": float(cells[3]),
+                    "fps": float(cells[4]),
+                }
+            )
+    return rows
+
+
+def test_readme_dense_vs_sparse_table_matches_the_measured_sweep():
+    """The execution table is a measurement, so it is checked against the measurement.
+
+    It is also the one table in the README whose conclusion is a *negative*, which is exactly
+    where a hand-edited number would be least likely to be noticed. Two things are therefore
+    asserted: every cell equals the profiled value, and the inequality the prose rests on
+    still holds in the numbers.
+    """
+    facts = json.loads((REPO_ROOT / "docs" / "assets" / "facts.json").read_text())
+    runs = facts.get("ssac_execution") or {}
+    assert runs, (
+        "facts.json carries no dense/sparse timing, so the README table cannot be checked; "
+        "run `python scripts/make_readme_assets.py` where the sweep profiles exist"
+    )
+    data = next(iter(runs.values()))
+    rows = _readme_ssac_execution_table()
+    assert len(rows) == 1 + len(data["sparse"]), (
+        f"the README lists {len(rows)} execution rows for {1 + len(data['sparse'])} measured ones"
+    )
+    dense = rows[0]
+    assert dense["execution"] == "dense" and dense["keep"] == "—"
+    assert abs(dense["ms"] - data["dense"]["latency_ms"]) < 5e-4, (
+        f"README says the dense latency is {dense['ms']} ms; the profile says "
+        f"{data['dense']['latency_ms']}"
+    )
+    assert abs(dense["fps"] - data["dense"]["fps"]) < 5e-3
+    assert dense["levels"] == [1.0, 1.0, 1.0], (
+        "dense execution runs the whole expensive path at every level by construction"
+    )
+    for row, measured in zip(rows[1:], data["sparse"], strict=True):
+        assert row["execution"] == "sparse"
+        assert float(row["keep"]) == float(measured["keep"]), (
+            f"the README's budget {row['keep']} is not the measured one {measured['keep']}"
+        )
+        assert abs(row["ms"] - measured["latency_ms"]) < 5e-4, (
+            f"keep={row['keep']}: README says {row['ms']} ms, the profile says {measured['latency_ms']}"
+        )
+        assert abs(row["fps"] - measured["fps"]) < 5e-3
+        for shown, actual in zip(row["levels"], measured["executed_rich_fraction"], strict=True):
+            # The README prints two decimals here and the profile keeps four, so the check is
+            # made at the precision the table shows (the same rule the pilot-table guard uses).
+            assert abs(shown - actual) < 5e-3, (
+                f"keep={row['keep']}: README prints {shown} of the expensive path executed, "
+                f"the routing report says {actual}"
+            )
+    # The conclusion, as an inequality over the measured rows: routing costs at least a
+    # quarter more than dense execution when nothing is skipped, and no budget beats dense
+    # execution by more than a rounding margin. If either fails, the prose above the table
+    # has become a claim the numbers no longer support.
+    dense_ms = data["dense"]["latency_ms"]
+    worst = max(r["ms"] for r in rows[1:])
+    best = min(r["ms"] for r in rows[1:])
+    assert worst > dense_ms * 1.2, (
+        f"the routing overhead is no longer visible ({worst} ms vs dense {dense_ms} ms), so the "
+        "table no longer shows what the section says it shows"
+    )
+    assert best > dense_ms * 0.9, (
+        f"a sparse budget now beats dense execution by {(1 - best / dense_ms) * 100:.1f}%, so the "
+        "'no wall-clock saving' conclusion must be rewritten from the measurement"
+    )
 
 
 def test_the_facts_file_lists_exactly_the_arms_the_pilot_table_declares():
