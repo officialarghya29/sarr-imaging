@@ -36,7 +36,8 @@ actually executed on this machine and its result observed.
 | Command-line entry point | **Verified** | `saryolo predict` prints and writes the same JSON a direct pipeline call produces (`tests/test_cli.py`). |
 | Streamlit application | **Verified locally** | `streamlit run app.py` starts, loads the checkpoint, and completes upload → Run Detection → display; the shown detections equal a direct pipeline call (`tests/test_app.py`). Startup, missing-checkpoint, unloadable-checkpoint, and unusable-upload paths are all covered. |
 | Model caching and resource control | **Verified** | The checkpoint is cached per `(path, mtime)` and reused for the session; uploads are size-, type-, and dimension-checked before a decode; the profiler records CPU peak RSS. |
-| Hosted public demo | **Untested — blocked** | Publishing requires an interactive Streamlit Community Cloud account authorised against this GitHub account, which only the repository owner can do. No public URL is claimed. Everything the host needs is in place and documented in [`../docs/DEPLOYMENT.md`](../docs/DEPLOYMENT.md). |
+| Deploy contract (what a host needs) | **Verified** | `tests/test_deploy.py` — the real `streamlit run app.py` entry point boots and answers `/_stcore/health` with a served page; the configured upload limit equals the code's; `runtime.txt` satisfies the declared Python floor; the committed checkpoint matches its published SHA-256 and size; a fresh interpreter serving the demo peaks at ~452 MB against the documented 1536 MB budget. |
+| Hosted public demo | **Untested — blocked** | Publishing requires an interactive Streamlit Community Cloud account authorised against this GitHub account, which only the repository owner can do; no workflow or token can create the app. No public URL is claimed. Everything the host needs is in place and documented in [`../docs/DEPLOYMENT.md`](../docs/DEPLOYMENT.md). |
 | Optional separate front end | **Not started** | Depends on the Streamlit version being deployed and verified first; nothing has been built or hosted. |
 
 ## Not covered here — the honest gaps
@@ -51,7 +52,7 @@ These are **untested** or **blocked**, not passed. They are carried in `../paper
 | **Full-release training, multi-seed at scale, cross-sensor / cross-resolution (LOSO) on real data** | Compute- and data-bound; the pilot on a 200/60/60 HRSID subset is the largest run performed. |
 | **Second architecture (RT-DETR) training end to end** | The arm builds and is shape-tested (`tests/test_rtdetr_arm.py`), but no trained result exists. |
 | **The hosted demo** | Requires interactive account authorisation against this GitHub account; cannot be performed from this environment. The application is verified locally instead. |
-| **Cold-start and steady-state memory on a small hosted container** | Measured here on a 30 GB CPU host (peak RSS recorded per profile), not inside a free-tier container's memory limit. |
+| **Cold-start and steady-state memory on a small hosted container** | The envelope *is* now measured in a fresh interpreter and gated at 1536 MB (`tests/test_deploy.py`), but on a 30 GB CPU host — not inside a container whose cgroup limit would enforce it. |
 
 ## How to reproduce these checks
 

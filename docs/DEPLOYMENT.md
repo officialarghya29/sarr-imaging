@@ -164,9 +164,16 @@ inference run:
 
 Two caveats, stated rather than implied: the dominant term is the *import* of the deep-learning
 stack, not the model, so the figure moves with the library version; and this was measured on the
-16-core CPU host above, not inside a free-tier container's memory limit, which is why the hosted
-figure is listed as a gap in [`release_readiness.md`](../reports/release_readiness.md). Within a
-1 GB container the 446 MB peak leaves headroom for one session's image buffers.
+16-core CPU host above rather than inside a hosted container, so it is an envelope and not a
+platform guarantee.
+
+**The budget this repository requires is 1536 MB of peak RSS for one session**, leaving the
+measured figure roughly 3× of headroom for a second concurrent session's image buffers. That
+number is not decorative: `tests/test_deploy.py` re-measures the envelope in a *fresh interpreter*
+and fails if it crosses it, and it currently reports ~452 MB — agreeing with the 446 MB above,
+which was measured the same way but with a decoded HRSID chip instead of a synthetic one. The
+hosting platform's own limit is not something this repository can verify, so the guide states the
+requirement it can hold itself to instead of quoting a specification it has not tested against.
 
 The model is cached with `st.cache_resource` keyed on the checkpoint's modification time, so
 weights are loaded once per session and a re-trained file is picked up rather than served stale.
@@ -181,6 +188,25 @@ weights are loaded once per session and a re-trained file is picked up rather th
 | "the file is N MB, over the 8 MB limit" | upload too large | downscale or re-encode |
 | "could not be decoded as an image" | corrupt or mislabelled file | re-export as PNG/JPG |
 | App starts but shows no boxes | no detections above the threshold | lower the confidence slider; an empty result is a valid pilot result |
+
+### Publishing on push
+
+There is **no CLI, token, or API that creates a Community Cloud app** — the first deployment is
+necessarily an interactive sign-in, and no workflow file can substitute for it. What *is*
+platform behaviour is the update path: once the app exists, Streamlit sets a webhook on the
+connected repository and **every push to the connected branch re-deploys it automatically**
+(Streamlit's own description: "any time you do a git push, your app will update immediately").
+
+That makes correctness *before* the push the only control that matters, which is why the deploy
+contract is enforced by the test suite rather than by a deploy workflow:
+
+| Guard (`tests/test_deploy.py`) | The hosted failure it prevents |
+| --- | --- |
+| The entry point boots and answers `/_stcore/health` | a missing dependency or malformed config shipping straight to the public URL |
+| The config's upload limit equals `MAX_UPLOAD_BYTES` | the app advertising a limit it does not enforce |
+| `runtime.txt` satisfies the declared Python floor | an incompatible runtime pinned for the host |
+| The committed checkpoint matches its published SHA-256 and size | a swapped or stale binary serving different weights than the numbers describe |
+| A fresh interpreter stays inside the 1536 MB budget | a memory blow-up on a small container |
 
 ### Step-by-step publish (owner action)
 
