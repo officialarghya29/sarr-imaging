@@ -508,6 +508,44 @@ def _cmd_eval(args) -> int:
     return 0
 
 
+def _cmd_predict(args) -> int:
+    """Single-image inference: the same pipeline the demo app uses, without the app."""
+    from saryolo.inference import (
+        CheckpointError,
+        InferenceError,
+        InvalidImageError,
+        load_detector,
+        predict_image,
+        validate_and_decode,
+    )
+
+    source = Path(args.source)
+    if not source.is_file():
+        raise SystemExit(f"--source {source} is not a file")
+    try:
+        image = validate_and_decode(source.read_bytes(), source.name)
+    except InvalidImageError as exc:
+        raise SystemExit(f"invalid image: {exc}") from None
+    try:
+        model = load_detector(args.weights, device=args.device or "cpu")
+    except CheckpointError as exc:
+        raise SystemExit(str(exc)) from None
+    try:
+        result = predict_image(
+            model, image.array, imgsz=args.imgsz, conf=args.conf, iou=args.iou,
+            device=args.device or "cpu", weights=args.weights,
+        )
+    except InferenceError as exc:
+        raise SystemExit(str(exc)) from None
+    payload = {"source": str(source), **result.as_dict()}
+    print(json.dumps(payload, indent=2))
+    if args.out:
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(payload, indent=2))
+    return 0
+
+
 def _cmd_robustness(args) -> int:
     from saryolo.evaluation.robustness import robustness_sweep
 
@@ -1113,6 +1151,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--device", default=None)
     p.add_argument("--out", default="results/eval")
     p.set_defaults(func=_cmd_eval)
+
+    p = sub.add_parser("predict", help="run one image through a checkpoint and print the detections")
+    p.add_argument("--weights", required=True)
+    p.add_argument("--source", required=True, help="path to a single image")
+    p.add_argument("--imgsz", type=int, default=640)
+    p.add_argument("--conf", type=float, default=0.25)
+    p.add_argument("--iou", type=float, default=0.7)
+    p.add_argument("--device", default=None)
+    p.add_argument("--out", default=None, help="optional path to write the JSON result")
+    p.set_defaults(func=_cmd_predict)
 
     p = sub.add_parser("robustness", help="corruption robustness sweep")
     p.add_argument("--weights", required=True)

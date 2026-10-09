@@ -1,0 +1,16 @@
+# Runtime configuration for the SARVO demo (`streamlit run app.py`).
+#
+# Streamlit Community Cloud reads this file at deploy time, so the limits documented in the
+# repository are the limits the hosted instance actually enforces -- rather than the platform
+# default, which would accept a 200 MB upload and only then let the app refuse it.
+
+[server]
+# Matches `saryolo.inference.MAX_UPLOAD_BYTES` (8 MB). Keeping the two equal means an oversized
+# file is rejected before it is read into memory, on the platform and in the app alike.
+maxUploadSize = 8
+# Required for a non-interactive host: without it Streamlit tries to open a browser.
+headless = true
+
+[browser]
+# No usage telemetry is sent from a research demo.
+gatherUsageStats = false

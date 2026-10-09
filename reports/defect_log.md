@@ -32,6 +32,7 @@ silently. Open work and unsupported configurations are not defects and live in
 | D-08 | **High** | A **non-finite training loss** was backpropagated: once the loss is NaN/inf the gradient is corrupt, so the optimiser would write garbage into every weight while the run kept printing plausible numbers. | No numerical-state check existed in the loss path. Fixed: `SARYOLODetectionModel.loss` refuses a non-finite loss and names the offending value and components. | `tests/test_reliability.py::test_a_non_finite_loss_is_refused_rather_than_backpropagated`, with non-vacuity pinned by `::test_a_finite_batch_gives_a_finite_loss_before_the_guard_is_trusted` | **Verified** (2026-10-09) |
 | D-09 | **Medium** | The sparse-execution **scope** was pinned only by input scale. The tile size is a second axis — coarser tiles pay relatively less of the fixed 2 px halo (so execute less of the rich path) until the tile reaches the map size, where the level collapses to a single tile and cannot be spared at all. Untested, this invited a wrong "how much would it save?" claim. | Coverage gap in `tests/test_efficiency.py`; the arithmetic was correct, the guard was missing. | `tests/test_efficiency.py::test_the_tile_size_trades_halo_overhead_against_granularity_with_a_hard_ceiling`, `::test_a_governed_level_can_never_be_spared_below_one_halo_padded_tile`, `::test_the_budget_spares_exactly_the_levels_that_offer_more_than_one_tile` | **Verified** (2026-10-09) |
 | D-10 | **Low** | `reports/reproduction_status.md` carried **stale counts** (92 variants, 18 table files) while the repository held 98 and 20. | Hand-maintained numbers with nothing checking them. Fixed, and every stated count is now a claim the suite verifies. | `tests/test_repo.py::test_document_counts_match_the_collection`, `::test_readme_counts_match_the_repository` | **Verified** |
+| D-11 | **High** | The single-image pipeline converted the detector's boxes and scores to plain floats **without checking that they were finite**, so a `nan` coordinate or an `inf` score became a `Detection`. Nothing failed: a `nan` box renders as a stray mark and an `nan` label reads as a low-confidence detection, and the run reports success. | The box-to-`Detection` conversion trusted the head's output. Fixed: `predict_image` refuses a non-finite detection and names the values, rather than dropping it (dropping would hide a genuine numerical fault in the forward pass). | `tests/test_inference.py::test_a_non_finite_detection_is_refused_rather_than_reported`, with non-vacuity pinned by `::test_a_finite_detector_output_is_converted_before_the_guard_is_trusted` | **Verified** (2026-10-09) |
 
 ## Process
 
@@ -39,3 +40,12 @@ Each row was verified by rerunning the named tests, and the whole suite on every
 [`reproduction_status.md`](reproduction_status.md)). The rule the log enforces is the directive's
 own: a defect is not closed until a test exists that fails without the fix. Where a defect is
 only *mitigated* rather than fixed, the row says so — none currently are.
+
+Two classes of finding are deliberately **not** listed above, because neither reached a commit
+and listing them would inflate the record:
+
+* **Lint-gate catches** in new code (an unused import, a dead local assignment) — caught by
+  `ruff check .` before the change was staged, so no committed artefact was ever wrong.
+* **Test-double mistakes** — a fake object shaped differently from the real one. These are errors
+  in the *test*, found because the test failed, and they are fixed by correcting the double
+  rather than by weakening the assertion.

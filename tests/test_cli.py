@@ -665,6 +665,62 @@ def test_probe_leaves_an_unconditioned_model_unconditioned(tmp_path, capsys):
     assert report["conditioned"] is False
 
 
+# ------------------------------------------------------------------- predict (single image)
+# The `predict` command is the non-web entry point to the same pipeline the demo uses. Its
+# refusals must fire *before* any weights are read, so a bad invocation is cheap and says why.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_SSAC_WEIGHTS = _REPO_ROOT / "results" / "runs" / "SSAC-001" / "weights" / "best.pt"
+_VAL_IMAGES = _REPO_ROOT / "datasets" / "processed" / "hrsid_real" / "images" / "val"
+
+
+def test_predict_refuses_a_missing_source_before_reading_any_weights(tmp_path):
+    with pytest.raises(SystemExit) as exc:
+        main([
+            "predict", "--weights", str(tmp_path / "absent.pt"),
+            "--source", str(tmp_path / "absent.png"),
+        ])
+    assert "is not a file" in str(exc.value.code)
+
+
+def test_predict_refuses_an_unsupported_file_before_reading_any_weights(tmp_path):
+    """A GIF is refused by the *validator*, so the error names the format rather than a decode."""
+    source = tmp_path / "scan.gif"
+    source.write_bytes(b"GIF89a" + b"\x00" * 32)
+    with pytest.raises(SystemExit) as exc:
+        main([
+            "predict", "--weights", str(tmp_path / "absent.pt"), "--source", str(source)
+        ])
+    assert "invalid image" in str(exc.value.code)
+    assert "not a supported image type" in str(exc.value.code)
+
+
+@pytest.mark.skipif(not _SSAC_WEIGHTS.exists(), reason="no trained SSAC-001 checkpoint for predict")
+def test_predict_prints_the_same_detections_the_pipeline_computes(tmp_path, capsys):
+    """The CLI must report what the pipeline reports -- one representation, two entry points."""
+    from saryolo.inference import load_detector, predict_image, validate_and_decode
+
+    source = sorted(_VAL_IMAGES.glob("*.jpg"))[0]
+    out = tmp_path / "prediction.json"
+    code = main([
+        "predict", "--weights", str(_SSAC_WEIGHTS), "--source", str(source),
+        "--imgsz", "640", "--conf", "0.25", "--out", str(out),
+    ])
+    assert code == 0, capsys.readouterr().out
+    printed = json.loads(capsys.readouterr().out)
+    assert json.loads(out.read_text()) == printed, "the written JSON differs from the printed one"
+    assert printed["source"] == str(source)
+
+    image = validate_and_decode(source.read_bytes(), source.name)
+    expected = predict_image(
+        load_detector(_SSAC_WEIGHTS, device="cpu"), image.array,
+        imgsz=640, conf=0.25, iou=0.7, device="cpu", weights=str(_SSAC_WEIGHTS),
+    )
+    assert printed["n_detections"] == expected.n_detections
+    assert [row["confidence"] for row in printed["detections"]] == [
+        row["confidence"] for row in expected.as_rows()
+    ]
+
+
 # ------------------------------------------------------------------- arch/registry
 def test_arch_rejects_an_unknown_variant(tmp_path):
     with pytest.raises(SystemExit):

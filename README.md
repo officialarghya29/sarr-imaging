@@ -6,7 +6,7 @@
 <h4 align="center">SAR Acquisition-Robust Visual Optimization — a SAR-native object detector</h4>
 
 <p align="center">
-  <img alt="tests" src="https://img.shields.io/badge/tests-603_passing-22c55e">
+  <img alt="tests" src="https://img.shields.io/badge/tests-631_passing-22c55e">
   <img alt="fabricated results" src="https://img.shields.io/badge/fabricated_results-0-black">
   <img alt="architectures" src="https://img.shields.io/badge/architectures-110_wired-3b82f6">
   <img alt="experiments" src="https://img.shields.io/badge/experiments-134_configured-8b5cf6">
@@ -53,7 +53,7 @@ results.
 | **What this is** | A complete, reproducible research pipeline: dataset audit → baseline → components → ablations → removal tests → robustness → efficiency → cross-dataset → paper. |
 | **Architectures** | 110 variants wired; every one builds and runs a forward pass |
 | **Experiments** | 134 configured; each reproducible from a committed YAML |
-| **Tests** | 603 passing — no dataset download and no GPU needed |
+| **Tests** | 631 passing — no dataset download and no GPU needed |
 | **Proven** | The instrument: the baseline reproduces stock YOLO11 **exactly**, every custom module is an *exact* identity at initialisation and demonstrably not frozen, and the pipeline trains and evaluates on **real** SAR imagery. |
 | **Not yet proven** | Every accuracy number is a **pilot** on a subset. The ablation ladder, cross-sensor generalisation and the full-release benchmark are `TBD`; they need a GPU and the full datasets. |
 
@@ -381,8 +381,21 @@ Each row is an executable check, not a claim. The full list lives in `tests/`.
 git clone https://github.com/officialarghya29/sarr-imaging.git && cd sarr-imaging
 python -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt
 
-pytest tests/ -q                                          # 603 tests
+pytest tests/ -q                                          # 631 tests
 ```
+
+Run the detector on one image, and in a browser:
+
+```bash
+python -m saryolo predict \
+    --weights results/runs/SSAC-001/weights/best.pt \
+    --source datasets/processed/hrsid_real/images/val/P0001_1200_2000_8400_9200.jpg \
+    --imgsz 640 --out /tmp/prediction.json               # one image, one JSON result
+streamlit run app.py                                     # the same pipeline, as a web demo
+```
+
+The demo never substitutes a model: with no checkpoint it says so and disables detection. See
+[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for weight resolution, hosting and troubleshooting.
 
 Train and evaluate on the real subset (no GPU required):
 
@@ -436,7 +449,8 @@ saryolo/
 configs/         datasets/ · models/ (110 generated) · exp/ (EXP-001…019 + ablations + frontier)
 docs/            physics-to-architecture proposals · method drafts · claim-to-evidence audit
 paper/           manuscript skeleton + generated tables + results draft
-tests/           603 checks; the instrument is tested as hard as the model
+app.py           Streamlit demo — draws the pipeline's detections, computes nothing itself
+tests/           631 checks; the instrument is tested as hard as the model
 ```
 
 ---
