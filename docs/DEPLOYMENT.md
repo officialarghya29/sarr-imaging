@@ -140,15 +140,25 @@ into memory.
 
 ### Resource envelope
 
-The app is designed to fit a small free-tier container. Measured locally on CPU:
+The app is designed to fit a small free-tier container. **Measured on this host** (CPU, no GPU),
+resident set of one process with `streamlit` imported, the checkpoint loaded, and one 640 px
+inference run:
 
 | Quantity | Value |
 | --- | --- |
 | Parameters | 3.40 M |
 | Checkpoint on disk | 6.77 MB |
-| Peak process RSS while profiling | recorded per row in `latency_peak_rss_mb` (see `docs/assets/facts.json`) |
-| Warm single-image latency, CPU, 640 px | ~70 ms (first call of a session includes warm-up) |
-| Cold start | checkpoint load into memory; cached per `(path, mtime)` for the session |
+| RSS after importing the stack | 269 MB |
+| … after loading the checkpoint | 293 MB (+25 MB) |
+| … during one 640 px inference | 443 MB (+150 MB, the activations) |
+| **Peak process RSS (high-water)** | **446 MB** |
+| Warm single-image latency, CPU, 640 px | ~70 ms; the first call of a session includes warm-up (~0.9 s cold here) |
+
+Two caveats, stated rather than implied: the dominant term is the *import* of the deep-learning
+stack, not the model, so the figure moves with the library version; and this was measured on the
+16-core CPU host above, not inside a free-tier container's memory limit, which is why the hosted
+figure is listed as a gap in [`release_readiness.md`](../reports/release_readiness.md). Within a
+1 GB container the 446 MB peak leaves headroom for one session's image buffers.
 
 The model is cached with `st.cache_resource` keyed on the checkpoint's modification time, so
 weights are loaded once per session and a re-trained file is picked up rather than served stale.
