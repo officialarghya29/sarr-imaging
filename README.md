@@ -6,7 +6,7 @@
 <h4 align="center">SAR Acquisition-Robust Visual Optimization — a SAR-native object detector</h4>
 
 <p align="center">
-  <img alt="tests" src="https://img.shields.io/badge/tests-596_passing-22c55e">
+  <img alt="tests" src="https://img.shields.io/badge/tests-603_passing-22c55e">
   <img alt="fabricated results" src="https://img.shields.io/badge/fabricated_results-0-black">
   <img alt="architectures" src="https://img.shields.io/badge/architectures-110_wired-3b82f6">
   <img alt="experiments" src="https://img.shields.io/badge/experiments-134_configured-8b5cf6">
@@ -53,7 +53,7 @@ results.
 | **What this is** | A complete, reproducible research pipeline: dataset audit → baseline → components → ablations → removal tests → robustness → efficiency → cross-dataset → paper. |
 | **Architectures** | 110 variants wired; every one builds and runs a forward pass |
 | **Experiments** | 134 configured; each reproducible from a committed YAML |
-| **Tests** | 596 passing — no dataset download and no GPU needed |
+| **Tests** | 603 passing — no dataset download and no GPU needed |
 | **Proven** | The instrument: the baseline reproduces stock YOLO11 **exactly**, every custom module is an *exact* identity at initialisation and demonstrably not frozen, and the pipeline trains and evaluates on **real** SAR imagery. |
 | **Not yet proven** | Every accuracy number is a **pilot** on a subset. The ablation ladder, cross-sensor generalisation and the full-release benchmark are `TBD`; they need a GPU and the full datasets. |
 
@@ -381,7 +381,7 @@ Each row is an executable check, not a claim. The full list lives in `tests/`.
 git clone https://github.com/officialarghya29/sarr-imaging.git && cd sarr-imaging
 python -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt
 
-pytest tests/ -q                                          # 596 tests
+pytest tests/ -q                                          # 603 tests
 ```
 
 Train and evaluate on the real subset (no GPU required):
@@ -416,6 +416,8 @@ python -m saryolo assets                               # regenerate tables and f
 Datasets are **not** committed. Everything in the pilot table is reproducible from a committed
 config plus the HRSID release; see [`docs/DATASETS.md`](docs/DATASETS.md) and
 [`reports/reproduction_status.md`](reports/reproduction_status.md) for the exact commands.
+Reliability evidence is in [`reports/release_readiness.md`](reports/release_readiness.md), and
+every defect found and fixed is recorded in [`reports/defect_log.md`](reports/defect_log.md).
 
 ---
 
@@ -434,7 +436,7 @@ saryolo/
 configs/         datasets/ · models/ (110 generated) · exp/ (EXP-001…019 + ablations + frontier)
 docs/            physics-to-architecture proposals · method drafts · claim-to-evidence audit
 paper/           manuscript skeleton + generated tables + results draft
-tests/           596 checks; the instrument is tested as hard as the model
+tests/           603 checks; the instrument is tested as hard as the model
 ```
 
 ---

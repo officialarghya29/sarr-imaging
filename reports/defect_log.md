@@ -1,0 +1,41 @@
+# Defect log
+
+The master directive (section 5) requires a defect log holding, for each defect, the **issue**,
+its **severity**, the **root cause**, the **fix**, the **regression test** that pins it, and the
+**verification status**. This file is that record.
+
+It lists only defects that were found and fixed, each with the artefact that stops it returning
+silently. Open work and unsupported configurations are not defects and live in
+[`release_readiness.md`](release_readiness.md) and the `blocked-on-run` list in
+[`../paper/OUTLINE.md`](../paper/OUTLINE.md).
+
+## Severity scale
+
+| Level | Meaning |
+| --- | --- |
+| **Critical** | Silently invalidates results: training or evaluation runs to completion on a wrong path and reports plausible numbers. |
+| **High** | Produces a wrong number, or breaks a path a run depends on. |
+| **Medium** | A failure mode is hidden, or a guard does not actually guard. |
+| **Low** | Documentation, count, or usability drift. |
+
+## Fixed defects
+
+| ID | Sev | Issue | Root cause → fix | Regression test | Status |
+| --- | --- | --- | --- | --- | --- |
+| D-01 | **Critical** | The CFAR and SSAC arms trained through ultralytics' **stock** facade, so `SARYOLODetectionModel.loss` — the SAR-aware criterion and the allocation-sparsity penalty — never ran. Discovered because the sparsity-penalty arm came out **bit-for-bit identical** to the unpenalised proposal. | `is_saryolo_yaml` chose the facade from a **hand-written tuple of layer names** that omitted the two prototype mechanisms, so it drifted the moment they were added. Fixed by deriving the list from `saryolo.nn.modules.CUSTOM_MODULES`. | `tests/test_arch.py::test_every_custom_layer_name_forces_the_custom_facade`, `::test_every_variant_that_needs_the_custom_model_gets_it`, `::test_every_variant_that_declares_a_sar_loss_block_gets_the_sar_loss` | **Verified** — end-to-end re-run reproduced the earlier weights bit-for-bit with the same validator metrics (0.566 / 0.303), and the penalty arm was re-run; analysis in [`../docs/ssac_design.md`](../docs/ssac_design.md) §5 S0 |
+| D-02 | **High** | `SARYOLOTrainer` defaulted `cfg` to the **string** `"default.yaml"`, which ultralytics then looked up as a *path*, dying with `FileNotFoundError` before training. Invisible for baseline arms (stock facade → stock trainer); fatal for every custom-module arm. | The default must be the resolved Ultralytics config object, not a filename. Fixed in `SARYOLOTrainer.__init__`. | `tests/test_peft.py::test_the_trainer_constructs_without_an_explicit_cfg` | **Verified** |
+| D-03 | **High** | The hard-example miner ranked images by spurious detections against an **empty reference**: most predicted images had no labels and most labelled images had no predictions. | `load_yolo_ground_truth` was hard-coded to the val split while `mine-hard` predicted on train. Fixed by parameterising the split and raising when a prediction has no ground truth. | `tests/test_hard_examples.py::test_an_image_with_no_ground_truth_still_scores_its_false_positives`, `::test_hard_image_from_another_split_is_an_error_not_a_silent_no_op` | **Verified** |
+| D-04 | **High** | Two evaluators were mixed without saying so: the ledger recorded ultralytics' training-time validator, while `eval` / `robustness` / `cross-dataset` used this repository's COCO implementation. The same checkpoint read 0.5706 / **0.3012** and 0.5709 / **0.2901**. | The gap is the two *inference paths* differing in the low-confidence tail, not an AP bug. Fixed by recording an `eval_protocol` field with every metric and pinning the repository evaluator to pycocotools. | `tests/test_metrics.py::test_the_ap_implementation_reproduces_pycocotools`, `::test_the_reported_protocol_field_says_how_the_number_was_measured` | **Verified** |
+| D-05 | **High** | Grad-CAM was **dead**, and where it produced a figure the "attribution" was the decoded **box coordinates**, not a gradient. | The model object is not indexable (a forward over the raw layer list raises at the first `Concat`), and the signal read the eval head's decoded tensor with the training layout's offset. Fixed: layout chosen by the head's declared width, a zero signal refuses instead of publishing a black square, the adapter is a valid target, and both figure paths condition on acquisition and clear it afterwards. | `tests/test_visualization.py::test_gradcam_refuses_a_zero_signal_instead_of_rendering_black` (and the module's other checks) | **Verified** |
+| D-06 | **Medium** | The component-numbering guard was **vacuous**: it parsed a table row that never matched, so it passed on an empty list and could not fail whatever the README said. | Anchored on a stale row shape. Fixed to parse the numbered table and refuse an empty one. | `tests/test_repo.py` (component-numbering guard) | **Verified** |
+| D-07 | **Medium** | An **undecodable image** was skipped by the real-input efficiency loader, leaving a preallocated **zero row** in a batch labelled `"real"` — the degenerate first-layer branch the loader exists to avoid. | The loop `continue`d on a failed `cv2.imdecode` instead of surfacing it. Fixed to raise, matching the loader's own empty-directory refusal. | `tests/test_efficiency_real.py::test_the_loader_replicates_one_channel_and_fills_a_batch_from_few_files` | **Verified** (2026-10-09) |
+| D-08 | **High** | A **non-finite training loss** was backpropagated: once the loss is NaN/inf the gradient is corrupt, so the optimiser would write garbage into every weight while the run kept printing plausible numbers. | No numerical-state check existed in the loss path. Fixed: `SARYOLODetectionModel.loss` refuses a non-finite loss and names the offending value and components. | `tests/test_reliability.py::test_a_non_finite_loss_is_refused_rather_than_backpropagated`, with non-vacuity pinned by `::test_a_finite_batch_gives_a_finite_loss_before_the_guard_is_trusted` | **Verified** (2026-10-09) |
+| D-09 | **Medium** | The sparse-execution **scope** was pinned only by input scale. The tile size is a second axis — coarser tiles pay relatively less of the fixed 2 px halo (so execute less of the rich path) until the tile reaches the map size, where the level collapses to a single tile and cannot be spared at all. Untested, this invited a wrong "how much would it save?" claim. | Coverage gap in `tests/test_efficiency.py`; the arithmetic was correct, the guard was missing. | `tests/test_efficiency.py::test_the_tile_size_trades_halo_overhead_against_granularity_with_a_hard_ceiling`, `::test_a_governed_level_can_never_be_spared_below_one_halo_padded_tile`, `::test_the_budget_spares_exactly_the_levels_that_offer_more_than_one_tile` | **Verified** (2026-10-09) |
+| D-10 | **Low** | `reports/reproduction_status.md` carried **stale counts** (92 variants, 18 table files) while the repository held 98 and 20. | Hand-maintained numbers with nothing checking them. Fixed, and every stated count is now a claim the suite verifies. | `tests/test_repo.py::test_document_counts_match_the_collection`, `::test_readme_counts_match_the_repository` | **Verified** |
+
+## Process
+
+Each row was verified by rerunning the named tests, and the whole suite on every change (see
+[`reproduction_status.md`](reproduction_status.md)). The rule the log enforces is the directive's
+own: a defect is not closed until a test exists that fails without the fix. Where a defect is
+only *mitigated* rather than fixed, the row says so — none currently are.

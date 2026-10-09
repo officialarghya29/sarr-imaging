@@ -213,6 +213,36 @@ class SARYOLODetectionModel(DetectionModel):
             loss = loss + term
             if isinstance(items, dict):
                 items["ssac_sparsity"] = term.detach()
+        # Numerical-state guard. A non-finite loss is never a result to continue from: once it
+        # is NaN or infinite the gradient is corrupt, the optimiser would write garbage into
+        # every weight, and the run would keep printing plausible-looking numbers while the
+        # model was destroyed. The directive is explicit -- do not continue training in an
+        # invalid numerical state -- so this refuses loudly and names the component, rather
+        # than letting the value propagate. Normal runs never reach it (every training test in
+        # this repository exercises this method), so a trigger means something real broke.
+        import torch
+
+        non_finite = ~torch.isfinite(loss)
+        if bool(non_finite.any()):
+            # The message must never itself raise and mask the real failure: loss may be a
+            # scalar or a per-entry tensor, so both the value and the component breakdown are
+            # formatted defensively rather than assumed scalar.
+            with torch.no_grad():
+                try:
+                    first = float(loss.detach().reshape(-1)[0])
+                except (TypeError, ValueError):
+                    first = "unrepresentable"
+            try:
+                detail = (
+                    {k: float(v) for k, v in items.items()} if isinstance(items, dict) else str(items)
+                )
+            except (TypeError, ValueError):
+                detail = str(items)
+            raise RuntimeError(
+                f"the training loss is not finite ({int(non_finite.sum())} of {loss.numel()} "
+                f"entries, first={first!r}); refusing to backpropagate an invalid numerical "
+                f"state. components={detail}"
+            )
         return loss, items
 
     def _ssac_gate_means(self) -> list:

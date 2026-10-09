@@ -1289,7 +1289,7 @@
     }
   },
   "tests": {
-    "total": 596,
+    "total": 603,
     "by_file": {
       "tests/test_arch.py": 64,
       "tests/test_audit_docs.py": 37,
@@ -1300,7 +1300,7 @@
       "tests/test_conditioning.py": 9,
       "tests/test_conditioning_smoke.py": 6,
       "tests/test_data.py": 24,
-      "tests/test_docs.py": 26,
+      "tests/test_docs.py": 28,
       "tests/test_efficiency.py": 29,
       "tests/test_efficiency_frontier.py": 16,
       "tests/test_efficiency_real.py": 10,
@@ -1313,6 +1313,7 @@
       "tests/test_metrics.py": 18,
       "tests/test_peft.py": 32,
       "tests/test_probes.py": 23,
+      "tests/test_reliability.py": 5,
       "tests/test_repo.py": 44,
       "tests/test_rtdetr_arm.py": 6,
       "tests/test_ssac.py": 46,

@@ -28,6 +28,7 @@ __all__ = [
     "measure_latency",
     "model_size_mb",
     "override_ssac_execution",
+    "peak_rss_mb",
     "profile_model",
     "profile_yaml",
     "ssac_blocks",
@@ -83,6 +84,28 @@ def load_image_batch(images_dir: str | Path, imgsz: int = 640, batch: int = 8, l
             img = cv2.resize(img, (imgsz, imgsz), interpolation=cv2.INTER_AREA)
         x[i, :, :, :] = img.astype(np.float32) / 255.0
     return torch.from_numpy(x)
+
+
+def peak_rss_mb() -> float | None:
+    """Process high-water Resident Set Size in MB, or ``None`` where the OS will not say.
+
+    This is the CPU counterpart of ``torch.cuda.max_memory_allocated``: with no GPU available,
+    the practical peak memory a run reaches is the process's own resident set, read from
+    ``resource.getrusage``. It is a *process* high-water mark, not a per-measurement isolation,
+    so it is reported as the peak the run reached rather than as the cost of one forward pass.
+    That is the quantity a resource-stability check wants -- a peak that keeps climbing across
+    repeats is the signal -- and a per-call figure would hide exactly that. ``ru_maxrss`` is in
+    kilobytes on Linux and bytes on macOS, and the module is absent on Windows.
+    """
+    try:
+        import resource
+    except ImportError:  # pragma: no cover - stdlib on POSIX, absent on Windows
+        return None
+    import sys
+
+    usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    divisor = 1024.0 * 1024.0 if sys.platform == "darwin" else 1024.0
+    return round(usage / divisor, 2)
 
 
 def _input_stats(x) -> dict:
@@ -326,6 +349,10 @@ def measure_latency(
         "latency_half": bool(half),
         "latency_device": device.type,
         "latency_source": source,
+        # The peak the process reached by the end of the timing: on a CPU-only host this is the
+        # practical memory figure, and it is recorded next to every latency so a cost number
+        # never arrives without one.
+        "latency_peak_rss_mb": peak_rss_mb(),
         **stats,
     }
     if runs > 1:
