@@ -165,9 +165,12 @@ inference run:
 ### What the envelope is, and what it is not
 
 The measured figure for the demo is **~451 MB** of peak RSS on the CPU-only PyTorch wheel
-(`torch 2.14.0+cpu`), for the workload tabulated above. The model contributes ~25 MB of that; the
-rest is importing the framework and the web stack. Two corrections are worth recording, because
-both came from measurement rather than from reasoning:
+(`torch 2.14.0+cpu`). That is the fresh-interpreter measurement the suite enforces, on a synthetic
+640 px input, and it agrees with the **446 MB** peak in the table above — which was measured
+in-process with a decoded HRSID chip instead. The 5 MB between them is the input, not the model:
+the checkpoint contributes ~25 MB, and the rest is importing the framework and the web stack.
+
+Two corrections are worth recording, because both came from measurement rather than from reasoning:
 
 * **A peak belongs to a process, and it must be the measured one.** The first version of this
   measurement read `getrusage().ru_maxrss`, which is carried across `execve` — so a child forked
