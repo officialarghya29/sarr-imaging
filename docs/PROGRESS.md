@@ -353,6 +353,29 @@ Latest additions (this session):
    mechanism's design — spatial allocation, faithful sparse execution, pushable sparsity — and none
    of the positive accuracy numbers.
 
+17. ~~The SSAC efficiency follow-up at a larger input scale~~ — **measured, and the prediction
+   held** (2026-10-09). Item 16 left the wall-clock question with a measured negative and a named
+   reason: at the pilot's **320 px** the deepest governed level (P5) is a 10×10 map, a *single*
+   16-pixel tile, so no routing budget can skip anything where most of the expensive path's cost
+   sits. `docs/ssac_design.md` §5 S1 called the honest next step a larger input size and said it
+   needed a GPU budget this host lacks. It did not: the same `SSAC-001` checkpoint was timed at
+   **640 px** on the same CPU, batch 4, median of 5 blocks, and the ceiling lifted exactly as
+   predicted.
+
+   | Input | dense ms | `keep = 1.0` | 0.5 | 0.25 | 0.1 | tightest-budget saving |
+   | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+   | 320 px | 51.251 | 63.890 (+29.5 %) | 50.731 | 49.165 | 48.547 | not separable |
+   | 640 px | 266.395 | 293.302 (+10.1 %) | 243.348 | 233.790 | 230.459 | **−13.5 %** |
+
+   At 640 px every governed level has more than one tile (P3 25, P4 9, P5 4), the routing overhead
+   falls from +29.5 % to **+10.1 %**, and at `keep ≤ 0.5` the sparse range sits *entirely below* the
+   dense range (dense 259.9–293.9 ms; sparse at `keep = 0.1`, 229.6–231.4 ms) — a saving that
+   finally exceeds the measurement's own noise, which the 320 px ~5 % gap did not. The claim is
+   labelled **preliminary**, not final: one checkpoint, CPU only, and the budgets are
+   evaluation-time knobs on an arm *trained* at 320 px, so no accuracy number exists at the scale
+   the efficiency number is quoted from. The chart `docs/assets/ssac_execution.svg` now carries
+   both scales, and the committed `facts.json` snapshot keeps each profile next to its protocol.
+
 What remains on the critical path needs a GPU: run `docs/RUNBOOK_SSDD.md` end to end. Every
 CPU-side prerequisite is now in place.
 

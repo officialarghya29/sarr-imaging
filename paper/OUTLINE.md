@@ -36,7 +36,7 @@ Labels follow the repository's vocabulary: **final**, **preliminary**, **control
 | ---: | --- | --- | --- |
 | C1 | **SSAC**: a per-region allocation of expensive feature processing driven by a *SAR-native* analytic statistic (multi-scale CFAR log-ratio + local coefficient of variation), with a **matched fixed-computation control** of exactly equal parameter count | mechanism: **final**; its *accuracy* effect: **withdrawn at pilot scale** | `SSAC-001` vs `SSAC-002` at three seeds (§8.7) |
 | C2 | A **sparse execution** of the same mechanism (tile gather/scatter, kernel-derived halo) that is parameter-identical to the dense form and reproduces it **bit-for-bit at `keep = 1.0`** in eval | **controlled** | `keep = 1.0` equality; `tests/test_ssac.py` |
-| C3 | A **wall-clock measurement** of selective computation that shows where the saving *would* appear and why this pilot's input scale does not reach it | **not supported at 320 px** (measured negative), with the ceiling **measured** as input-scale-bound | CLI routing sweep (§8.5) |
+| C3 | A **wall-clock measurement** of selective computation that shows where the saving appears and why the pilot's input scale is what decides it | **preliminary at 640 px** (measured positive, −13.5 % at `keep = 0.1`), **not separable at 320 px**; the ceiling is **measured** as input-scale-bound | CLI routing sweep at two scales (§8.5) |
 | C4 | A **cost ablation** isolating how much of the mechanism's parameter price the accuracy needs (`expand = 2 → 1` loses the whole benefit) | **controlled** (seed 0) | `SSAC-005` (§8.6) |
 | C5 | The **sparsity premise**: a penalty can push the learned allocation sparse at no measurable accuracy cost, so a sparse build has something to skip | **preliminary** (seed 0) | `SSAC-006` allocation diagnostic (§8.6) |
 
@@ -51,7 +51,8 @@ and its measurement protocol*, not a headline accuracy gain — and the abstract
 - SAR detection spends uniform compute on scenes that are mostly predictable background
   (open sea, flat field) around sparse, weak returns.
 - State the hypothesis and, up front, that the pilot **withdraws** the accuracy claim and
-  reports no wall-clock saving at its input scale. Honesty here is the paper's spine.
+  finds a wall-clock saving only at the larger input scale, not at its training scale.
+  Honesty here is the paper's spine.
 - List C1–C5 with their labels.
 - **Figure 1 (manual):** where the compute goes vs where the targets are.
 
@@ -96,26 +97,30 @@ and its measurement protocol*, not a headline accuracy gain — and the abstract
   control's within-image spread is exactly zero (§8.3). This is what separates the
   mechanism from a per-image difficulty scalar.
 - **5.4 The sparsity premise.** `SSAC-006` allocation diagnostic (§8.6).
-- **5.5 Efficiency on real inputs.** Dense vs sparse on one checkpoint, real val images,
-  named scale (§8.5, `docs/assets/ssac_execution.svg`). Report: routing overhead at
-  `keep = 1.0` (+29.5 %), saving only returning *to* dense latency, and the **scale
-  ceiling** (P5 is a single 16 px tile at 320 px).
+- **5.5 Efficiency on real inputs.** Dense vs sparse on one checkpoint, real val images, at
+  **two named scales** (§8.5, `docs/assets/ssac_execution.svg`). At 320 px: routing overhead
+  at `keep = 1.0` (**+29.5 %**) and no saving outside the dense run's spread. At 640 px:
+  routing overhead falls to **+10.1 %**, and sparse execution clears the dense range at
+  `keep ≤ 0.5` (**−8.7 / −12.2 / −13.5 %**). The **scale ceiling** is the finding — P5 is a
+  single 16 px tile at 320 px and four tiles at 640 px.
 - **5.6 Cost ablation.** `expand = 2 → 1` (§8.6).
 
 ### 6. Failure analysis
 - The two ways the mechanism did not deliver: no accuracy edge that survives seeds; no
-  wall-clock saving at the pilot's input scale.
+  wall-clock saving at the pilot's *training* scale (320 px) — the saving appears only at
+  640 px, reported as the pre-registered test rather than hidden.
 - What the FLOP counters **cannot** see (sparse reports *more* GFLOPs) and why the claim
   rests on measured wall-clock.
 - Measured boundaries: allocation saturates at P4/P5 (fraction > 0.5 is 1.0 there), so the
-  deep levels save nothing at 320 px.
+  deep levels save nothing at 320 px; at 640 px they become routable and the saving appears.
 
 ### 7. Limitations (stated, not implied)
 - One dataset (HRSID), one subset (200/60/60), one class, one machine, **no GPU**.
 - Three seeds is a noise check, not validation.
 - No cross-sensor / cross-resolution result.
-- The wall-clock conclusion is a fact about **320 px**, this tiling, and Python-level
-  routing — not evidence that selective computation cannot be efficient.
+- The wall-clock conclusion is a fact about **320 px and 640 px**, this tiling, and
+  Python-level routing. The 640 px saving is one checkpoint, CPU-only, batch 4, with
+  *evaluation-time* budgets — not evidence about selective computation in general.
 
 ### 8. Conclusion
 - What was built, what was controlled, what was withdrawn, and the one measurement that
@@ -131,7 +136,7 @@ If any row there changes, this outline and the abstract are stale.
 
 | Need | Why it is not optional | Status |
 | --- | --- | --- |
-| **Larger input scale** (e.g. `imgsz ≈ 640`, where the deepest governed level is > 1 tile) | The efficiency verdict is *input-scale-bound*; testing the ceiling is the contribution | **blocked** — no GPU |
+| **Larger input scale** (e.g. `imgsz ≈ 640`, where the deepest governed level is > 1 tile) | The efficiency verdict is *input-scale-bound*; testing the ceiling is the contribution | **done** — the 640 px sweep is measured (§8.5); still one checkpoint, CPU-only |
 | **More training data** (full HRSID release, not the 200-image subset) | A 0.006 mAP difference is not resolvable on 60 test images | **blocked** |
 | **More seeds / longer schedule** | Current three seeds cannot resolve the effect the pilot looked for | **blocked** |
 | **Cross-sensor / cross-resolution folds (LOSO)** | Generalisation is the paper's second axis | **blocked** |
@@ -159,9 +164,11 @@ this outline is built around.
 
 1. Freeze §5's scale and re-run the three-seed pair there — the result decides whether C1 is
    a gain or stays a measurement paper.
-2. Fill the efficiency table at the new scale; the ceiling claim only holds if the deepest
-   level has more than one tile.
-3. Re-run the cost ablation at the new scale.
+2. **The efficiency table at 640 px exists (§8.5)**: the ceiling lifts, the saving appears,
+   and the deepest level has four tiles. Re-run it on more checkpoints and a GPU host to turn
+   the one-checkpoint positive into a claim the paper can lean on.
+3. Re-run the cost ablation at the new scale, and train an arm **at** 640 px so an accuracy
+   comparison exists at the scale the efficiency number is quoted from.
 4. Only then write the abstract and introduction around numbers that exist.
 5. Add the limitations paragraph from what the controls actually showed — not from this
    outline.

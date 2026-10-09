@@ -159,9 +159,11 @@ whether an uninformative allocation can be rescued — not part of the proposal.
 The important honest statement: **the dense implementation runs the expensive path
 everywhere.** The measured FLOPs rise. The mechanism's efficiency case exists only if a
 sparse implementation can actually skip the expensive path — so one was built (§5 S1). It
-does skip the expensive path, but at the pilot's 320 px input scale that skip does not turn
-into a wall-clock saving, because the levels whose expensive path can be routed are single
-tiles at that resolution (§5 S1, `paper/RESULTS.md` §8.5).
+does skip the expensive path. Whether that skip turns into a wall-clock saving is set by the
+input scale, and it was measured at two of them: at the pilot's 320 px training scale it does
+not — the deepest governed level is a single tile there — while at 640 px, where every
+governed level has more than one tile, the same checkpoint is faster than dense at
+`keep ≤ 0.5` (§5 S1, `paper/RESULTS.md` §8.5).
 
 ---
 
@@ -338,8 +340,8 @@ Any of these outcomes is a reportable result. None of them is a reason to skip t
 | --- | --- | --- |
 | **Allocation collapse** | `g` becomes constant across a scene | `gain_map` diagnostic; the `fixed` control *is* the collapsed model, so a collapse makes the proposal identical to the control by construction |
 | **Assessment too expensive** | assessment FLOPs approach the expensive path's | measure the assessment share in the efficiency profile |
-| **No wall-clock saving on CPU** | dense FLOPs fall (in a sparse build) but latency does not | **measured, and it happened**: sparse execution is +29.5 % latency at `keep = 1.0` (routing overhead) and returns only to the dense latency at `keep = 0.1`, where 83 % of the P3 expensive path is skipped — §5. Identical to the 2022 latency-aware-dynamics caveat and to this repo's own CFAR measurement (3.0× latency for +9 % FLOPs) |
-| **Routing cannot bite at small map sizes** | the executed fraction stays 1.0 at the deepest level whatever the budget | **measured**: at 320 px the P5 map is 10×10 — a single 16-pixel tile — so no budget can skip anything there. The limit is the input resolution, not the budget; it is stated as such |
+| **No wall-clock saving at the training scale** | dense FLOPs fall (in a sparse build) but latency does not | **measured, and it happened at 320 px**: sparse execution is +29.5 % latency at `keep = 1.0` (routing overhead) and returns only to the dense latency at `keep = 0.1`, where 83 % of the P3 expensive path is skipped. It is a fact about the input scale, not the mechanism: at **640 px** the same checkpoint is +10.1 % at `keep = 1.0` and **faster than dense at every budget from 0.5 down** (−8.7 / −12.2 / −13.5 %). Same kind of result as the 2022 latency-aware-dynamics caveat and this repo's own CFAR measurement (3.0× latency for +9 % FLOPs) — §5 |
+| **Routing cannot bite at small map sizes** | the executed fraction stays 1.0 at the deepest level whatever the budget | **measured at 320 px, and shown to lift at 640 px**: at 320 px the P5 map is 10×10 — a single 16-pixel tile — so no budget can skip anything there; at 640 px it is 20×20, four tiles, and every governed level's executed fraction falls below 1.0. The limit is the input resolution, not the budget; it is stated as such |
 | **The FLOP counter reports the wrong thing** | a sparse build's GFLOPs are not below the dense build's | they are **above** it (2.293 vs 1.998 G), because the counter traces kernels regardless of which execute. This is why the efficiency claim rests on the wall-clock measurement and the ledger's `flops_G` for a sparse arm is read as a counter value, not as arithmetic performed |
 | **Uniform difficulty** | the dataset's regions are all equally hard, so there is nothing to allocate | `selected_fraction` near 1 at convergence; the HRSID subset is small and homogeneous, so this is a live risk |
 | **Small-object suppression** | scale-wise AP drops | structural (§1.4) plus Experiment 4 |
@@ -354,15 +356,22 @@ at `keep = 1.0` it reproduces dense execution **bit-for-bit** in eval mode, and 
 parameter-identical to the dense build (3,396,329 parameters either way, so a cost difference
 cannot be capacity).
 
-The measured answer, on one trained checkpoint at 320 px, batch 4, median of 5 timed blocks:
+The measured answer, on one trained checkpoint, batch 4, median of 5 timed blocks, at two scales:
 
-dense 51.251 ms · sparse 63.890 ms at `keep = 1.0` · 50.731 at 0.5 · 49.165 at 0.25 · 48.547 at 0.1.
+* **320 px** — dense 51.251 ms · sparse 63.890 ms at `keep = 1.0` · 50.731 at 0.5 · 49.165 at
+  0.25 · 48.547 at 0.1. The routing costs **+29.5 %** when nothing is skipped, the skipping buys
+  that back as the budget falls, and it stops at the dense latency — **no wall-clock saving is
+  claimed at this scale**, and the per-level executed fraction (0.17 / 0.39 / 1.00 at `keep =
+  0.1`) shows why: the P5 map is a single tile at this resolution.
+* **640 px** — dense 266.395 ms · sparse 293.302 ms at `keep = 1.0` · 243.348 at 0.5 · 233.790 at
+  0.25 · 230.459 at 0.1. With every governed level routable (P3 25 tiles, P4 9, P5 4) the routing
+  overhead drops to **+10.1 %** at `keep = 1.0`, and the same checkpoint is **faster than dense at
+  every budget from `keep = 0.5` down** — **−8.7 / −12.2 / −13.5 %** — with the sparse range
+  (229.6–231.4 ms at `keep = 0.1`) entirely below the dense range (259.9–293.9 ms).
 
-So the routing costs **+29.5 %** when nothing is skipped, the skipping buys that back as the
-budget falls, and it stops at the dense latency — **no wall-clock saving is claimed**, and the
-per-level executed fraction (0.17 / 0.39 / 1.00 at `keep = 0.1`) shows why: the P5 map is a
-single tile at this resolution. Recorded here so the prototype cannot be quoted as an efficient
-method on the strength of its arithmetic alone.
+Recorded here so the prototype cannot be quoted as an efficient method on the strength of its
+arithmetic alone: the efficiency positive is one checkpoint on CPU, at a scale the arm was not
+trained at, and the budgets are evaluation-time knobs.
 
 ---
 
@@ -433,20 +442,28 @@ repository's own CFAR measurement (3.0× latency for +9 % FLOPs) both say so.
 
 **Measured.** Correctness: at `keep = 1.0` sparse execution reproduces the dense output
 **bit-for-bit** in eval mode, and the sparse build is parameter-identical (3,396,329) to the dense
-one. Cost: 51.251 ms dense against 63.890 ms at `keep = 1.0` (**+29.5 %** — the routing itself),
-50.731 at 0.5, 49.165 at 0.25, 48.547 at 0.1, where 83 % of the P3 expensive path is skipped.
-Accuracy: the sparse arm (`SSAC-004`) scores mAP50:95 **0.2995** against the dense proposal's
-0.3089 — the accuracy cost of not refining the unselected tiles is about the size of the
-mechanism's own gain over the baseline, and the sparse arm's AP_small (0.0697) stays above the
+one. Cost at 320 px: 51.251 ms dense against 63.890 ms at `keep = 1.0` (**+29.5 %** — the routing
+itself), 50.731 at 0.5, 49.165 at 0.25, 48.547 at 0.1, where 83 % of the P3 expensive path is
+skipped. Accuracy: the sparse arm (`SSAC-004`) scores mAP50:95 **0.2995** against the dense
+proposal's 0.3089 — the accuracy cost of not refining the unselected tiles is about the size of
+the mechanism's own gain over the baseline, and the sparse arm's AP_small (0.0697) stays above the
 control's (0.0647).
 
-**Verdict — rejected as an efficiency claim, kept as an implementation.** The routing does not
-pay for itself at 320 px, for a reason the per-level breakdown makes concrete rather than
-rhetorical: the P5 map is 10×10, a single 16-pixel tile, so no budget can skip anything at the
-level where most of the expensive path's cost sits. This is a statement about this input scale and
-this implementation, not about region-selective computation in general; the honest next step is a
-larger input size (P3 = 160×160, P5 = 40×40, 6 tiles there), which needs the GPU budget this host
-does not have.
+**The follow-up the verdict named, run.** The verdict below originally called for a larger input
+size and said it needed a GPU budget this host lacks. It did not: the same checkpoint was timed at
+**640 px** on the same CPU (slower per batch, but measurable). There the deepest governed level is
+four tiles, not one, and the prediction holds — routing overhead **+10.1 %** at `keep = 1.0`, and
+**faster than dense at `keep = 0.5 / 0.25 / 0.1` by 8.7 / 12.2 / 13.5 %**, the sparse range sitting
+entirely below the dense range. The saving the mechanism was built for appears exactly when the
+input scale lets every governed level be routed.
+
+**Verdict — rejected as an efficiency claim *at the training scale*, confirmed as an
+implementation.** The routing does not pay for itself at 320 px, for a reason the per-level
+breakdown makes concrete rather than rhetorical: the P5 map is 10×10, a single 16-pixel tile, so no
+budget can skip anything at the level where most of the expensive path's cost sits. At 640 px it
+does pay, by up to **13.5 %**. Both are statements about this input scale and this implementation,
+not about region-selective computation in general; the honest next steps are more checkpoints, a
+GPU host, and an arm *trained* at 640 px so the scale with the saving also has an accuracy number.
 
 ### S2 — narrowing the expensive path (`expand = 1`)
 

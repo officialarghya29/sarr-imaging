@@ -899,74 +899,107 @@ def chart_slot_ablations_v2(facts: dict) -> None:
 
 
 def chart_ssac_execution(facts: dict) -> None:
-    """Latency against the routing budget, and the map-size limit that bounds it.
+    """Latency against the routing budget, at every input scale it was measured at.
 
-    The honest half of the mechanism's efficiency question: one trained checkpoint, timed dense
-    and at four routing budgets, with the *same* weights and parameter count either way. The
-    right panel shows why the curve flattens -- at a 320 px input the P5 feature map is a single
-    tile, so no budget can skip anything there. A single number would read as a tuning result;
-    the per-level breakdown shows it is a property of the input scale.
+    The honest half of the mechanism's efficiency question, and the reason the answer depends on
+    the input: one trained checkpoint, timed dense and at four routing budgets, with the *same*
+    weights and parameter count either way. A 16-pixel tile can route a level only if the level's
+    feature map is more than one tile wide, and how many tiles a level holds is set by the input
+    resolution -- so the figure carries both measured scales side by side rather than one. At 320
+    px the deepest governed level is a single tile and no budget can skip it; at 640 px it splits
+    into four and the curve finally crosses below dense. A single scale would read as a fact
+    about the mechanism; the pair shows it is a fact about the input.
 
-    Layout note: the executed fraction is written into the left panel's tick labels rather than
-    drawn as bars behind the latency line. Bars and a line sharing one axes put their data
+    Layout note: the executed fraction is written into the latency panels' tick labels rather
+    than drawn as bars behind the latency line. Bars and a line sharing one axes put their data
     labels in the same place, and the layout linter caught exactly that (an 83 % overlap between
     the budget's own value and the latency above it).
     """
     runs = facts.get("ssac_execution") or {}
     if not runs:
         return
-    exp, data = sorted(runs.items())[0]
-    dense, sparse = data["dense"], data["sparse"]
-    protocol = data["protocol"]
-    keeps = [r["keep"] for r in sparse]
-    latency = [r["latency_ms"] for r in sparse]
-    executed = [sum(r["executed_rich_fraction"]) / len(r["executed_rich_fraction"]) for r in sparse]
-    dense_ms = dense["latency_ms"]
-    xs = list(range(len(keeps)))
+    # Small input first: the reader meets the case the ceiling blocks before the case where
+    # routing finally pays. Sorting on the measured image size keeps that order explicit rather
+    # than resting on how the experiment directories happen to be named.
+    ordered = sorted(runs.items(), key=lambda kv: (kv[1]["protocol"].get("imgsz") or 0, kv[0]))
+    n_scales = len(ordered)
 
-    fig, axes = plt.subplots(1, 2, figsize=(16.6, 7.2), gridspec_kw={"width_ratios": [1.1, 1.0]})
+    fig, axes = plt.subplots(
+        1, n_scales + 1,
+        figsize=(8.2 * n_scales + 6.6, 7.6),
+        gridspec_kw={"width_ratios": [1.05] * n_scales + [0.92]},
+    )
+    axes = list(axes)
 
-    ax = axes[0]
-    ax.plot(xs, latency, "-o", color=CYAN, linewidth=2.6, markersize=10, zorder=3)
-    ax.axhline(dense_ms, color=MAGENTA, linestyle="--", linewidth=2.0, zorder=2)
-    for x, v in zip(xs, latency, strict=True):
-        ax.annotate(f"{v:.1f}", (x, v), textcoords="offset points", xytext=(0, 14),
+    for ax, (exp, data) in zip(axes[:n_scales], ordered, strict=True):
+        dense, sparse = data["dense"], data["sparse"]
+        protocol = data["protocol"]
+        imgsz = protocol["imgsz"]
+        keeps = [r["keep"] for r in sparse]
+        latency = [r["latency_ms"] for r in sparse]
+        executed = [sum(r["executed_rich_fraction"]) / len(r["executed_rich_fraction"])
+                    for r in sparse]
+        dense_ms = dense["latency_ms"]
+        best_ms = min(latency)
+        xs = list(range(len(keeps)))
+
+        # The dense run's own block-to-block range, drawn as a band, so the reader can see
+        # whether the sparse curve leaves it rather than take a verdict on trust.
+        dense_lo = dense.get("latency_ms_min", dense_ms)
+        dense_hi = dense.get("latency_ms_max", dense_ms)
+        ax.axhspan(dense_lo, dense_hi, color=MAGENTA, alpha=0.12, zorder=1)
+        ax.plot(xs, latency, "-o", color=CYAN, linewidth=2.6, markersize=10, zorder=3)
+        ax.axhline(dense_ms, color=MAGENTA, linestyle="--", linewidth=2.0, zorder=2)
+        for x, v in zip(xs, latency, strict=True):
+            ax.annotate(f"{v:.1f}", (x, v), textcoords="offset points", xytext=(0, 14),
+                        ha="center", fontsize=10.5, color=TEXT)
+        overhead = (latency[0] / dense_ms - 1.0) * 100.0
+        # One text box rather than a label on the line plus a second annotation: both of those
+        # landed on the neighbour's data label, which is what the layout linter reported.
+        ax.text(0.98, 0.97,
+                f"dense {dense_ms:.1f} ms (band = its range)\n"
+                f"routing +{overhead:.0f}% at keep=1\n"
+                f"best {best_ms:.1f} ms ({(best_ms / dense_ms - 1.0) * 100:+.1f}%)",
+                transform=ax.transAxes, ha="right", va="top", fontsize=10, color=MAGENTA,
+                linespacing=1.5, zorder=4)
+        # Two short lines per tick, not "... executed": at three panels the wide label hangs off
+        # the axes and collides with the neighbouring panel's y ticks, which the linter caught.
+        ax.set_xticks(xs, [f"{k:g}\n{v:.2f}" for k, v in zip(keeps, executed, strict=True)])
+        ax.set_xlabel("routing budget `keep`  (upper number; the lower is the mean\n"
+                      "share of the expensive path actually executed)")
+        ax.set_ylabel(f"latency per batch of {protocol['batch']} (ms)")
+        ax.set_ylim(min(latency + [dense_lo]) * 0.90, max(latency + [dense_hi]) * 1.20)
+        deepest = data["sparse"][-1]["tiles"][-1]
+        ceiling = ("P5 is a single 16 px tile, so no budget can skip it" if deepest == 1 else
+                   "every governed level holds more than one tile, so every one can be routed")
+        _style(ax, f"{imgsz} px",
+               f"{ceiling}.\n"
+               f"{exp}, identical weights, batch {protocol['batch']}, CPU, "
+               f"median of {protocol['runs']} blocks.")
+
+    ax = axes[-1]
+    deepest_tiles = ordered[-1][1]["sparse"][0]["tiles"]
+    names = ["P3", "P4", "P5"][: len(deepest_tiles)]
+    xs = list(range(len(names)))
+    bar_w = 0.36
+    colors = [AMBER, VIOLET, CYAN, GREEN]
+    for i, (_exp, data) in enumerate(ordered):
+        tiles = data["sparse"][-1]["tiles"]
+        offset = (i - (len(ordered) - 1) / 2.0) * bar_w
+        bars = ax.bar([x + offset for x in xs], tiles, bar_w,
+                      color=colors[i % len(colors)], alpha=0.9,
+                      label=f"{data['protocol']['imgsz']} px")
+        for bar, value in zip(bars, tiles, strict=True):
+            ax.text(bar.get_x() + bar.get_width() / 2, value + 0.5, str(value),
                     ha="center", fontsize=10.5, color=TEXT)
-    overhead = (latency[0] / dense_ms - 1.0) * 100.0
-    # One text box rather than a label on the line plus a second annotation: both of those
-    # landed on the neighbour's data label, which is what the layout linter reported.
-    ax.text(0.98, 0.97, f"dense execution: {dense_ms:.1f} ms\nrouting costs +{overhead:.0f}% at keep=1",
-            transform=ax.transAxes, ha="right", va="top", fontsize=10, color=MAGENTA,
-            linespacing=1.5)
-    ax.set_xticks(xs, [f"{k:g}\n{v:.2f} executed" for k, v in zip(keeps, executed, strict=True)])
-    ax.set_xlabel("routing budget `keep`  (fraction of tiles refined, and the mean share\n"
-                  "of the expensive path actually executed)")
-    ax.set_ylabel("latency per batch of 4 (ms)")
-    ax.set_ylim(min(latency + [dense_ms]) * 0.72, max(latency + [dense_ms]) * 1.16)
-    _style(ax, "The routing is real; the wall-clock saving is not",
-           f"One trained {exp} checkpoint, timed both ways: identical weights,\n"
-           f"identical {data['params']:,} parameters. {protocol['input']} images at "
-           f"{protocol['imgsz']}px, batch {protocol['batch']},\nmedian of {protocol['runs']} "
-           f"timed blocks on {protocol['device']}, one quiet interval.")
-
-    ax = axes[1]
-    levels = sparse[-1]["executed_rich_fraction"]
-    names = ["P3", "P4", "P5"][: len(levels)]
-    xs = list(range(len(levels)))
-    ax.bar(xs, levels, width=0.5, color=VIOLET, alpha=0.9)
-    ax.set_ylim(0, 1.22)
     ax.set_xticks(xs, names)
-    ax.set_ylabel("share of the expensive path executed")
+    ax.set_ylabel("16 px tiles in the feature map")
     ax.set_xlabel("detection level (P5 is the deepest, smallest feature map)")
-    for x, v, tiles, chosen in zip(xs, levels, sparse[-1]["tiles"], sparse[-1]["selected_tiles"],
-                                   strict=True):
-        ax.text(x, v + 0.05, f"{v:.2f}", ha="center", fontsize=10.5, color=TEXT)
-        ax.text(x, v / 2, f"{chosen} of {tiles}\ntiles", ha="center", va="center",
-                fontsize=10, color=BG)
-    _style(ax, "Why it cannot save on this input",
-           f"The same checkpoint at keep={keeps[-1]:g}. At {protocol['imgsz']}px the P5 map is\n"
-           "10x10, a single 16px tile, so no budget can skip anything there,\nand P4 has only "
-           "four tiles to choose from.")
+    ax.set_ylim(0, max(max(d["sparse"][-1]["tiles"]) for _, d in ordered) * 1.30)
+    ax.legend(loc="upper right", frameon=False, fontsize=10)
+    _style(ax, "The input scale sets the ceiling",
+           "Tiles per level at the tightest budget.\n"
+           "A single-tile level can never be spared.")
 
     _save(fig, "ssac_execution.svg")
 

@@ -340,7 +340,7 @@ The dense implementation runs the expensive path everywhere, so the measured cos
 This is the price of the dense form and nothing more: it says nothing about the sparse form,
 which is measured in §8.5.
 
-### 8.5 Does the allocation convert into a wall-clock saving? (measured: no)
+### 8.5 Does the allocation convert into a wall-clock saving? (measured: at 640 px, not at 320 px)
 
 Sparse execution was built for exactly this question: 16-pixel tiles, the top `keep` fraction
 by mean evidence refined per image, each gathered tile carrying a 2-pixel halo (the receptive
@@ -349,42 +349,70 @@ timing experiment: the sparse build is **parameter-identical** to the dense one 
 parameters either way, so the difference is arithmetic and not capacity), and at `keep = 1.0`
 sparse execution reproduces dense execution **bit-for-bit** in eval mode, which is what proves
 the halo and the gather are right. One trained checkpoint (`SSAC-001`), identical weights,
-timed both ways on real val images at 320 px, batch 4, median of 5 blocks per row:
+timed both ways on real val images at two input scales, batch 4, median of 5 blocks per row.
 
-| Execution | `keep` | Expensive path executed (P3 / P4 / P5) | ms / batch of 4 | FPS |
-| --- | ---: | --- | ---: | ---: |
-| dense | — | 1.00 / 1.00 / 1.00 | 51.251 | 78.05 |
-| sparse | 1.0 | 1.00 / 1.00 / 1.00 | 63.890 | 62.61 |
-| sparse | 0.5 | 0.87 / 0.78 / 1.00 | 50.731 | 78.85 |
-| sparse | 0.25 | 0.52 / 0.39 / 1.00 | 49.165 | 81.36 |
-| sparse | 0.1 | 0.17 / 0.39 / 1.00 | 48.547 | 82.39 |
+**The pilot's training scale, 320 px — no saving is claimed:**
 
-Three findings, in the order they matter.
+| Execution | `keep` | Expensive path executed (P3 / P4 / P5) | tiles/level | ms / batch of 4 | FPS |
+| --- | ---: | --- | --- | ---: | ---: |
+| dense | — | 1.00 / 1.00 / 1.00 | 9 / 4 / 1 | 51.251 | 78.05 |
+| sparse | 1.0 | 1.00 / 1.00 / 1.00 | 9 / 4 / 1 | 63.890 | 62.61 |
+| sparse | 0.5 | 0.87 / 0.78 / 1.00 | 9 / 4 / 1 | 50.731 | 78.85 |
+| sparse | 0.25 | 0.52 / 0.39 / 1.00 | 9 / 4 / 1 | 49.165 | 81.36 |
+| sparse | 0.1 | 0.17 / 0.39 / 1.00 | 9 / 4 / 1 | 48.547 | 82.39 |
 
-1. **Routing has a real overhead.** At `keep = 1.0` every tile is still gathered and scattered,
-   so the mechanism does strictly more work than the dense form: **+29.5 %** latency for no
-   saving at all. Any claim that the routing is free is false at this tile size.
-2. **Skipping pays the overhead back and then stops.** Latency falls monotonically with the
-   budget and lands *at* the dense level: at `keep = 0.1`, 83 % of the P3 expensive path is
+**The scale the pre-registered design named as the test, 640 px — the saving appears:**
+
+| Execution | `keep` | Expensive path executed (P3 / P4 / P5) | tiles/level | ms / batch of 4 | FPS | vs dense |
+| --- | ---: | --- | --- | ---: | ---: | ---: |
+| dense | — | 1.00 / 1.00 / 1.00 | 25 / 9 / 4 | 266.395 | 15.02 | — |
+| sparse | 1.0 | 1.00 / 1.00 / 1.00 | 25 / 9 / 4 | 293.302 | 13.64 | **+10.10 %** |
+| sparse | 0.5 | 0.81 / 0.87 / 0.78 | 25 / 9 / 4 | 243.348 | 16.44 | **−8.65 %** |
+| sparse | 0.25 | 0.44 / 0.52 / 0.39 | 25 / 9 / 4 | 233.790 | 17.11 | **−12.24 %** |
+| sparse | 0.1 | 0.19 / 0.17 / 0.39 | 25 / 9 / 4 | 230.459 | 17.36 | **−13.49 %** |
+
+Findings, in the order they matter.
+
+1. **Routing has a real overhead, and it shrinks as the timing batch grows.** At `keep = 1.0`
+   every tile is still gathered and scattered, so the mechanism does strictly more work than
+   the dense form: **+29.5 %** latency at 320 px and **+10.1 %** at 640 px for no saving at all.
+   Any claim that the routing is free is false at this tile size.
+2. **The saving appears exactly where the pre-registered design said it would.** At 320 px the
+   skipping buys the overhead back and stops: at `keep = 0.1`, 83 % of the P3 expensive path is
    skipped and the result is 48.5 ms against the dense 51.3 ms — a ~5 % difference whose
-   magnitude is inside the dense measurement's own block-to-block spread (50.6–61.1 ms). **No
-   wall-clock saving is claimed.**
+   magnitude is inside the dense measurement's own block-to-block spread (50.6–61.1 ms), so **no
+   wall-clock saving is claimed at that scale**. At 640 px the same checkpoint at `keep ≤ 0.5`
+   lands *below* the entire dense range (dense 259.9–293.9 ms; sparse at `keep = 0.1`,
+   229.6–231.4 ms) and the saving grows monotonically as the budget tightens — **8.7 / 12.2 /
+   13.5 %** at `keep = 0.5 / 0.25 / 0.1` — while the sparse runs are themselves tight (spread
+   0.8–1.9 % against the dense run's 12.7 %). The margin now exceeds the measurement's own
+   noise, which is the property `docs/ssac_design.md` §4 named as the test.
 3. **The ceiling is the input scale, not the budget.** At 320 px the P5 feature map is 10×10,
-   which is a *single* tile of 16: no budget can skip anything there, and P4 has four tiles. The
-   per-level column shows the executed fraction pinned at 1.00 for P5 at every budget. The
-   mechanism's expensive path is concentrated in exactly the levels a 16-pixel tile cannot
-   route at this resolution.
+   which is a *single* tile of 16: no budget can skip anything there, and P4 has four tiles, so
+   the executed fraction is pinned at 1.00 for P5 at every budget. At 640 px every governed
+   level has more than one tile (P3 25, P4 9, P5 4) and the executed fraction falls below 1.00
+   at all three. The mechanism's expensive path is concentrated in exactly the levels a 16-pixel
+   tile cannot route at 320 px — and can, at 640 px.
 
 A methodological point that the cost columns alone would hide: **FLOP counters cannot see the
-sparsity.** They trace dense kernels regardless of which ones execute, so the sparse build
-reports **2.293 GFLOPs** against the dense 1.998 G. The efficiency claim therefore rests on
-the measured wall-clock, not on a FLOP ratio — and the ledger's `flops_G` column for the sparse
-arm must be read as the counter's value for the graph, not as the arithmetic performed.
+sparsity.** They trace dense kernels regardless of which ones execute, so the trained sparse
+arm's ledger row carries **2.293 GFLOPs** against the dense 1.998 G, and the 640 px sweep's
+counter reports the dense **8.038 G** for every sparse budget. The efficiency claim therefore
+rests on the measured wall-clock, not on a FLOP ratio — and the ledger's `flops_G` column for a
+sparse arm must be read as the counter's value for the graph, not as the arithmetic performed.
 
-This is the outcome `docs/ssac_design.md` §4 pre-registered as the expected one on a CPU-only
-host, and it matches the latency-aware-dynamics literature. It is a statement about this pilot's
-input scale and this implementation (Python-level routing, 16-pixel tiles, `imgsz = 320`), not
-evidence that region-selective computation cannot be efficient.
+The 320 px result is the outcome `docs/ssac_design.md` §4 pre-registered as the expected one on
+a CPU-only host, and it matches the latency-aware-dynamics literature. The 640 px result is the
+outcome the same section named as the *test* of the ceiling: with every governed level routable,
+the saving appears. Both are statements about this implementation (Python-level routing,
+16-pixel tiles) at a named input scale, not evidence about region-selective computation in
+general.
+
+What the 640 px saving does **not** establish, and is therefore not claimed: one checkpoint, one
+host, CPU only, batch 4; the budgets are *evaluation-time* knobs, so no arm was trained for a
+target budget; and the absolute saving is modest — about 36 ms per batch of four, or +2.3 FPS, at
+the tightest budget. It is a measured, reproducible property of this mechanism at this scale and
+nothing more.
 
 ### 8.6 The cost ablation: how much of the +31 % parameter price is load-bearing
 
@@ -481,13 +509,15 @@ this pilot cannot resolve. It stays in the table, labelled as what it is.
 | The mechanism does not harm small-object performance | **preliminary** | AP_small 0.0737 vs 0.0647 at seed 0; not seed-checked |
 | How much of the +31 % parameter price the accuracy needs | **controlled** (seed 0) | `SSAC-005` (`expand=1`) loses the whole benefit: 0.2871, below the stock baseline |
 | A sparsity penalty can push the allocation sparse at no measurable accuracy cost | **preliminary** (seed 0) | `SSAC-006`: mean `g` 0.670 → 0.236 at P4, fraction > 0.5 → 0.000 at P3/P4, accuracy 0.3126 vs 0.3089 — a difference this pilot cannot resolve, so it is not claimed as a gain (§8.6) |
-| SSAC is computationally efficient | **not supported — measured negative** | sparse execution (same weights, parameter-identical) is +29.5 % at keep=1.0 and returns only to the dense latency at keep=0.1; FLOP counters cannot see the sparsity |
+| SSAC is computationally efficient | **preliminary — measured positive at 640 px, scale-bound** | sparse execution (same weights, parameter-identical) clears the whole dense range at `keep ≤ 0.5` at 640 px (−8.7 / −12.2 / −13.5 %) but not at 320 px; `keep = 1.0` costs +10.1 % (routing); FLOP counters cannot see the sparsity (§8.5) |
 | Sparse execution is a faithful implementation of the dense mechanism | **controlled** | keep=1.0 sparse == dense bit-for-bit in eval; halo derived from the expensive path; asserted in `tests/test_ssac.py` |
 | SSAC is a novel mechanism | **not claimed** | the principle is SACT/SplatNet/region-selection; see `docs/ssac_assessment.md` |
 
 ## 9. Limitations (stated, not implied)
 
 * One dataset (HRSID), one subset (200/60/60), one machine, **no GPU**.
+* The efficiency positive is one checkpoint evaluated at **640 px on CPU** (batch 4); no arm was
+  *trained* at 640 px, so the accuracy comparison at that scale does not exist.
 * The primary comparison is **three seeds** — a noise check, not validation.
 * No cross-sensor or cross-resolution result; the LOSO machinery is untested on real data.
 * The ladder ablations, the tuned LoRA sweep and the full-release numbers remain `TBD`.

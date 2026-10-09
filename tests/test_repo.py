@@ -643,93 +643,121 @@ def test_readme_real_data_table_matches_the_measured_arms():
             )
 
 
-def _readme_ssac_execution_table() -> list[dict]:
-    """Parse the dense/sparse timing table out of the README's core-mechanism section.
+def _readme_ssac_execution_table() -> dict[int, list[dict]]:
+    """Parse the dense/sparse timing tables out of the README's core-mechanism section.
 
-    Anchored on the section heading rather than on the table's own header row, because the
-    header is prose that may be reworded while the *numbers* must not drift: an anchor that
-    was itself the thing being edited would let the table be rewritten without the guard
-    noticing.
+    Anchored on the section heading rather than on the tables' own header rows, because the
+    headers are prose that may be reworded while the *numbers* must not drift: an anchor that
+    was itself the thing being edited would let a table be rewritten without the guard
+    noticing. The section now carries one table per measured input scale, so the parser tracks
+    the scale it is inside (a row whose first cell reads ``<n> px``) and files the execution
+    rows under it, keyed by that scale.
     """
     readme = (REPO_ROOT / "README.md").read_text()
     parts = readme.split("Does the allocation convert into a wall-clock saving?", 1)
     assert len(parts) == 2, "the README has no dense/sparse execution section to check"
-    rows: list[dict] = []
+    tables: dict[int, list[dict]] = {}
+    scale: int | None = None
     for line in parts[1].splitlines():
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
-        if len(cells) == 5 and cells[0] in ("dense", "sparse"):
-            rows.append(
+        marker = re.fullmatch(r"(\d+)\s*px", cells[0]) if cells else None
+        if marker:
+            scale = int(marker.group(1))
+            tables.setdefault(scale, [])
+            continue
+        if scale is not None and len(cells) >= 5 and cells[0] in ("dense", "sparse"):
+            tables[scale].append(
                 {
                     "execution": cells[0],
                     "keep": cells[1],
                     "levels": [float(v) for v in cells[2].split("/")],
-                    "ms": float(cells[3]),
-                    "fps": float(cells[4]),
+                    "tiles": [int(v) for v in cells[3].split("/")],
+                    "ms": float(cells[4]),
+                    "fps": float(cells[5]) if len(cells) > 5 else None,
                 }
             )
-    return rows
+    return tables
 
 
 def test_readme_dense_vs_sparse_table_matches_the_measured_sweep():
-    """The execution table is a measurement, so it is checked against the measurement.
+    """The execution tables are measurements, so they are checked against the measurements.
 
-    It is also the one table in the README whose conclusion is a *negative*, which is exactly
-    where a hand-edited number would be least likely to be noticed. Two things are therefore
-    asserted: every cell equals the profiled value, and the inequality the prose rests on
-    still holds in the numbers.
+    They are also the tables whose conclusion is *scale-dependent* — an efficiency negative at
+    320 px and a positive at 640 px — which is exactly where a hand-edited number would be
+    least likely to be noticed. Every measured scale is checked: each cell equals the profiled
+    value, the dense row runs the whole expensive path, and the tiles/level column matches the
+    routing the profile recorded.
     """
     facts = json.loads((REPO_ROOT / "docs" / "assets" / "facts.json").read_text())
     runs = facts.get("ssac_execution") or {}
     assert runs, (
-        "facts.json carries no dense/sparse timing, so the README table cannot be checked; "
+        "facts.json carries no dense/sparse timing, so the README tables cannot be checked; "
         "run `python scripts/make_readme_assets.py` where the sweep profiles exist"
     )
-    data = next(iter(runs.values()))
-    rows = _readme_ssac_execution_table()
-    assert len(rows) == 1 + len(data["sparse"]), (
-        f"the README lists {len(rows)} execution rows for {1 + len(data['sparse'])} measured ones"
+    by_scale = {int(d["protocol"]["imgsz"]): d for d in runs.values()}
+    tables = _readme_ssac_execution_table()
+    assert set(tables) == set(by_scale), (
+        f"the README times {sorted(tables)} px but the profiles are at {sorted(by_scale)} px"
     )
-    dense = rows[0]
-    assert dense["execution"] == "dense" and dense["keep"] == "—"
-    assert abs(dense["ms"] - data["dense"]["latency_ms"]) < 5e-4, (
-        f"README says the dense latency is {dense['ms']} ms; the profile says "
-        f"{data['dense']['latency_ms']}"
-    )
-    assert abs(dense["fps"] - data["dense"]["fps"]) < 5e-3
-    assert dense["levels"] == [1.0, 1.0, 1.0], (
-        "dense execution runs the whole expensive path at every level by construction"
-    )
-    for row, measured in zip(rows[1:], data["sparse"], strict=True):
-        assert row["execution"] == "sparse"
-        assert float(row["keep"]) == float(measured["keep"]), (
-            f"the README's budget {row['keep']} is not the measured one {measured['keep']}"
+    for scale, data in sorted(by_scale.items()):
+        rows = tables[scale]
+        assert len(rows) == 1 + len(data["sparse"]), (
+            f"at {scale} px the README lists {len(rows)} execution rows for "
+            f"{1 + len(data['sparse'])} measured ones"
         )
-        assert abs(row["ms"] - measured["latency_ms"]) < 5e-4, (
-            f"keep={row['keep']}: README says {row['ms']} ms, the profile says {measured['latency_ms']}"
+        dense = rows[0]
+        assert dense["execution"] == "dense" and dense["keep"] == "—"
+        assert abs(dense["ms"] - data["dense"]["latency_ms"]) < 5e-4, (
+            f"at {scale} px README says the dense latency is {dense['ms']} ms; the profile says "
+            f"{data['dense']['latency_ms']}"
         )
-        assert abs(row["fps"] - measured["fps"]) < 5e-3
-        for shown, actual in zip(row["levels"], measured["executed_rich_fraction"], strict=True):
-            # The README prints two decimals here and the profile keeps four, so the check is
-            # made at the precision the table shows (the same rule the pilot-table guard uses).
-            assert abs(shown - actual) < 5e-3, (
-                f"keep={row['keep']}: README prints {shown} of the expensive path executed, "
-                f"the routing report says {actual}"
+        assert dense["fps"] is not None and abs(dense["fps"] - data["dense"]["fps"]) < 5e-3
+        assert dense["levels"] == [1.0, 1.0, 1.0], (
+            "dense execution runs the whole expensive path at every level by construction"
+        )
+        for row, measured in zip(rows[1:], data["sparse"], strict=True):
+            assert row["execution"] == "sparse"
+            assert float(row["keep"]) == float(measured["keep"]), (
+                f"the README's budget {row['keep']} is not the measured one {measured['keep']}"
             )
-    # The conclusion, as an inequality over the measured rows: routing costs at least a
-    # quarter more than dense execution when nothing is skipped, and no budget beats dense
-    # execution by more than a rounding margin. If either fails, the prose above the table
-    # has become a claim the numbers no longer support.
-    dense_ms = data["dense"]["latency_ms"]
-    worst = max(r["ms"] for r in rows[1:])
-    best = min(r["ms"] for r in rows[1:])
-    assert worst > dense_ms * 1.2, (
-        f"the routing overhead is no longer visible ({worst} ms vs dense {dense_ms} ms), so the "
-        "table no longer shows what the section says it shows"
-    )
-    assert best > dense_ms * 0.9, (
-        f"a sparse budget now beats dense execution by {(1 - best / dense_ms) * 100:.1f}%, so the "
-        "'no wall-clock saving' conclusion must be rewritten from the measurement"
-    )
+            assert abs(row["ms"] - measured["latency_ms"]) < 5e-4, (
+                f"keep={row['keep']}: README says {row['ms']} ms, the profile says "
+                f"{measured['latency_ms']}"
+            )
+            assert row["tiles"] == measured["tiles"], (
+                f"keep={row['keep']}: README tiles/level {row['tiles']} != measured "
+                f"{measured['tiles']}"
+            )
+            assert row["fps"] is not None and abs(row["fps"] - measured["fps"]) < 5e-3
+            for shown, actual in zip(row["levels"], measured["executed_rich_fraction"], strict=True):
+                # The README prints two decimals here and the profile keeps four, so the check
+                # is made at the precision the table shows (the same rule the pilot guard uses).
+                assert abs(shown - actual) < 5e-3, (
+                    f"keep={row['keep']}: README prints {shown} of the expensive path executed, "
+                    f"the routing report says {actual}"
+                )
+        # The conclusion, as an inequality over the measured rows, is *scale-dependent* and the
+        # table must keep showing that: routing always costs more than dense when nothing is
+        # skipped, and a budget that beats dense by more than a rounding margin is a wall-clock
+        # saving — which the record says happens only at the larger scale.
+        dense_ms = data["dense"]["latency_ms"]
+        worst = max(r["ms"] for r in rows[1:])
+        best = min(r["ms"] for r in rows[1:])
+        assert worst > dense_ms, (
+            f"at {scale} px the routing overhead is no longer visible ({worst} ms vs dense "
+            f"{dense_ms} ms), so the table no longer shows what the section says it shows"
+        )
+        saving = 1.0 - best / dense_ms
+        if scale <= 320:
+            assert saving < 0.10, (
+                f"a sparse budget at {scale} px now beats dense by {saving * 100:.1f}%, so the "
+                f"'no wall-clock saving at 320 px' conclusion must be rewritten"
+            )
+        else:
+            assert saving > 0.10, (
+                f"no sparse budget at {scale} px beats dense by more than {saving * 100:.1f}%, "
+                f"so the 'the saving appears at 640 px' conclusion must be rewritten"
+            )
 
 
 def test_the_facts_file_lists_exactly_the_arms_the_pilot_table_declares():
@@ -1137,15 +1165,19 @@ def test_the_real_arms_chart_keeps_label_headroom_before_the_ticks_collide():
 
 
 def test_the_measured_sweep_can_only_spare_levels_with_more_than_one_tile():
-    """Why the sparse sweep reports no decisive saving is a fact the ledger can prove.
+    """Why the sparse saving depends on the input scale, and is a fact the ledger proves.
 
     Sparsity is a budget over *tiles*, so a level whose feature map fits in a single tile can
     never be spared: its executed fraction is 1.0 at every keep. At the 320 px this project
-    trains and times at, the deepest of the three mechanism levels is exactly that -- one
-    tile -- and the other two are 9 and 4 tiles. The measured sweep must show the boundary:
-    the last level unchanged at 1.0 for every budget, and selected tiles falling as the budget
-    tightens. This is the honest ceiling on the wall-clock story, and it is checked against
-    the measurement rather than restated in prose.
+    trains and times at, the deepest of the three mechanism levels is exactly that -- one tile
+    -- and the other two are 9 and 4 tiles, so no budget can reach the level that carries most
+    of the expensive path. At 640 px that same level splits into four tiles and every governed
+    level can finally be routed; the sweep was repeated there, and the committed profiles now
+    carry both scales. The guard therefore checks the boundary at *every* measured scale: a
+    one-tile level is never spared, the budget reduces work monotonically, the deepest level is
+    a single tile exactly where the scale makes it one, and it is more than one tile at 640.
+    This is the honest ceiling on the wall-clock story, and it is checked against the
+    measurement rather than restated in prose.
     """
     import json
 
@@ -1155,29 +1187,46 @@ def test_the_measured_sweep_can_only_spare_levels_with_more_than_one_tile():
         "facts.json carries no dense/sparse sweep, so the scope of the result cannot be "
         "checked; run `python scripts/make_readme_assets.py` where the profiles exist"
     )
-    data = next(iter(runs.values()))
-    for value in data["dense"]["executed_rich_fraction"]:
-        assert value == 1.0, "dense execution executes the whole expensive path by construction"
-    previous = None
-    for row in data["sparse"]:
-        tiles, fraction = row["tiles"], row["executed_rich_fraction"]
-        assert len(tiles) == len(fraction) >= 3
-        # A one-tile level cannot be spared, whatever the budget.
-        for n_tiles, executed in zip(tiles, fraction, strict=True):
-            if n_tiles == 1:
-                assert executed == 1.0, (
-                    f"a single-tile level reports {executed} of its expensive path executed at "
-                    f"keep={row['keep']}, but a lone tile cannot be skipped"
+    scales: set[int] = set()
+    for data in runs.values():
+        imgsz = data["protocol"].get("imgsz")
+        if imgsz is not None:
+            scales.add(imgsz)
+        for value in data["dense"]["executed_rich_fraction"]:
+            assert value == 1.0, "dense execution executes the whole expensive path by construction"
+        previous = None
+        for row in data["sparse"]:
+            tiles, fraction = row["tiles"], row["executed_rich_fraction"]
+            assert len(tiles) == len(fraction) >= 3
+            # A one-tile level cannot be spared, whatever the budget.
+            for n_tiles, executed in zip(tiles, fraction, strict=True):
+                if n_tiles == 1:
+                    assert executed == 1.0, (
+                        f"a single-tile level reports {executed} of its expensive path executed "
+                        f"at keep={row['keep']}, but a lone tile cannot be skipped"
+                    )
+            # The budget must actually reduce work as it tightens, monotonically.
+            selected = sum(row["selected_tiles"])
+            if previous is not None:
+                assert selected <= previous, (
+                    f"keep={row['keep']} selects {selected} tiles, more than the larger budget "
+                    f"before it ({previous})"
                 )
-        assert tiles[-1] == 1, (
-            f"at this input scale the deepest level was expected to be a single tile, found "
-            f"{tiles[-1]}; if the scale changed, the 'no saving at 320 px' reading must be revisited"
-        )
-        # The budget must actually reduce work as it tightens, monotonically.
-        selected = sum(row["selected_tiles"])
-        if previous is not None:
-            assert selected <= previous, (
-                f"keep={row['keep']} selects {selected} tiles, more than the larger budget before "
-                f"it ({previous})"
+            previous = selected
+        deepest = data["sparse"][-1]["tiles"][-1]
+        if imgsz is not None and imgsz <= 320:
+            assert deepest == 1, (
+                f"at {imgsz} px the deepest level was expected to be a single tile, found "
+                f"{deepest}; if the scale changed, the 'no saving at 320 px' reading must be "
+                f"revisited"
             )
-        previous = selected
+        if imgsz is not None and imgsz >= 640:
+            assert deepest > 1, (
+                f"at {imgsz} px the deepest level should offer more than one tile to route, "
+                f"found {deepest}; the scale ceiling is the whole point of timing there"
+            )
+    # The sweep must cover the scale where the ceiling lifts, not only 320 px.
+    assert any(s >= 640 for s in scales), (
+        f"the committed sweep measures only {sorted(scales)} px; the input-scale ceiling claim "
+        f"needs the larger scale timed too"
+    )

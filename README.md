@@ -123,8 +123,11 @@ resolution and seed, so a row differs from its neighbours only in **what is trai
   (mean **+0.0220 ± 0.0373**), so the seed-0 gain is not reproduced and the claim is **withdrawn
   as unsupported at this scale**. What the pilot does support is negative and precise: the
   allocation is real and spatial, sparse execution is a faithful implementation, and it does
-  **not** convert into a wall-clock saving at 320 px (**+29.5 %** at `keep = 1.0`, returning only
-  to the dense latency at `keep = 0.1`). Three follow-ups, three measured answers. See below.
+  **not** convert into a wall-clock saving at the pilot's 320 px training scale (**+29.5 %** at
+  `keep = 1.0`, and only back to the dense latency at `keep = 0.1`). Timed again at **640 px**,
+  where every governed level becomes routable, the same checkpoint finally *does* save wall-clock:
+  **−13.5 %** at `keep = 0.1`, and −8.7 / −12.2 % at `keep = 0.5 / 0.25`, every timed budget below
+  the whole dense range. The saving is scale-bound, one checkpoint, CPU only. See below.
 - **Negative results are kept, not buried.** Two synthetic acquisition-shift axes (global
   radiometric gain, along-track resolution loss) do **not** separate the arms. Reported as nulls.
 
@@ -179,42 +182,59 @@ live: at the **P3** level only **4.4 %** of locations sit above 0.5, and the wit
 exceeds the between-image spread at every level. At P4/P5 the model raised the allocation nearly
 uniformly, so **those levels save nothing** — reported rather than hidden.
 
-### Does the allocation convert into a wall-clock saving? No — and the mechanism is why
+### Does the allocation convert into a wall-clock saving? At 640 px, yes — and the input scale is why
 
 A dense implementation cannot answer that question, so sparse execution was built: the same
 graph, the same **3,396,329** parameters, the same trained weights, with the expensive path run
 only on the selected 16-pixel tiles, each gathered with a 2-pixel halo so a selected tile sees
 exactly the context it saw in the dense pass (at `keep = 1.0` the two modes agree bit-for-bit,
-which is what makes the sparse mode trustworthy enough to time). One checkpoint, both ways:
+which is what makes the sparse mode trustworthy enough to time). One checkpoint, both ways, timed
+at **two scales**. At the pilot's 320 px training scale the answer stops at the dense level:
 
-| Execution | `keep` | Expensive path executed (P3 / P4 / P5) | ms / batch of 4 | FPS |
-| --- | ---: | --- | ---: | ---: |
-| dense | — | 1.00 / 1.00 / 1.00 | 51.251 | 78.05 |
-| sparse | 1.0 | 1.00 / 1.00 / 1.00 | 63.890 | 62.61 |
-| sparse | 0.5 | 0.87 / 0.78 / 1.00 | 50.731 | 78.85 |
-| sparse | 0.25 | 0.52 / 0.39 / 1.00 | 49.165 | 81.36 |
-| sparse | 0.1 | 0.17 / 0.39 / 1.00 | 48.547 | 82.39 |
+| 320 px | `keep` | Expensive path executed (P3 / P4 / P5) | tiles/level | ms / batch of 4 | FPS |
+| --- | ---: | --- | --- | ---: | ---: |
+| dense | — | 1.00 / 1.00 / 1.00 | 9 / 4 / 1 | 51.251 | 78.05 |
+| sparse | 1.0 | 1.00 / 1.00 / 1.00 | 9 / 4 / 1 | 63.890 | 62.61 |
+| sparse | 0.5 | 0.87 / 0.78 / 1.00 | 9 / 4 / 1 | 50.731 | 78.85 |
+| sparse | 0.25 | 0.52 / 0.39 / 1.00 | 9 / 4 / 1 | 49.165 | 81.36 |
+| sparse | 0.1 | 0.17 / 0.39 / 1.00 | 9 / 4 / 1 | 48.547 | 82.39 |
 
-The answer is **no**. Routing has a real overhead — at `keep = 1.0` every tile is still gathered
-and the latency is **+29.5 %** for nothing — the skipping does buy that overhead back as the
-budget falls, and then it stops: at `keep = 0.1`, with **83 % of the P3 expensive path skipped**,
-the latency returns to the dense level and goes no lower. The per-level column shows the ceiling:
-at 320 px the P5 map is 10×10, a **single** tile, so no budget can skip anything there, and P4
-has four tiles. The mechanism's expensive path is concentrated in exactly the levels a 16-pixel
-tile cannot route at this input scale. That is the outcome `docs/ssac_design.md` §4 pre-registered
-as the expected one on CPU, and it is reported as a limit of the pilot's input scale rather than
-as evidence about the idea.
+At **640 px**, where the deepest governed level is four tiles instead of one, the same checkpoint
+finally clears the dense range:
+
+| 640 px | `keep` | Expensive path executed (P3 / P4 / P5) | tiles/level | ms / batch of 4 | FPS | vs dense |
+| --- | ---: | --- | --- | ---: | ---: | ---: |
+| dense | — | 1.00 / 1.00 / 1.00 | 25 / 9 / 4 | 266.395 | 15.02 | — |
+| sparse | 1.0 | 1.00 / 1.00 / 1.00 | 25 / 9 / 4 | 293.302 | 13.64 | +10.10 % |
+| sparse | 0.5 | 0.81 / 0.87 / 0.78 | 25 / 9 / 4 | 243.348 | 16.44 | **−8.65 %** |
+| sparse | 0.25 | 0.44 / 0.52 / 0.39 | 25 / 9 / 4 | 233.790 | 17.11 | **−12.24 %** |
+| sparse | 0.1 | 0.19 / 0.17 / 0.39 | 25 / 9 / 4 | 230.459 | 17.36 | **−13.49 %** |
+
+Routing always has a real overhead — at `keep = 1.0` every tile is still gathered, **+29.5 %** at
+320 px and **+10.1 %** at 640 px for nothing. At 320 px the skipping buys that overhead back and
+then stops: at `keep = 0.1`, with **83 % of the P3 expensive path skipped**, the latency returns
+to the dense level and goes no lower, and the leftover ~5 % gap is inside the dense run's own
+block-to-block spread — so **no saving is claimed there**. The per-level column shows the ceiling:
+at 320 px the P5 map is 10×10, a **single** tile, so no budget can skip anything there. At 640 px
+the same map is 20×20 — **four** tiles — every governed level can be routed, and the latency drops
+cleanly below the whole dense range, by **8.7 / 12.2 / 13.5 %** at `keep = 0.5 / 0.25 / 0.1` with
+the sparse runs themselves far tighter (0.8–1.9 % spread against the dense run's 12.7 %). That is
+the test `docs/ssac_design.md` §4 pre-registered: the ceiling is a property of the input scale,
+and when the scale lifts, the saving it predicted appears.
 
 Two further measured caveats, because they decide how the number may be read. The FLOP counters
 **cannot see the sparsity**: they trace dense kernels regardless of which ones execute, so the
-sparse arm reports **2.293 G** against the dense **1.998 G**. And the routing's saving is bounded
+trained sparse arm's ledger row carries **2.293 G** against the dense **1.998 G**, and the 640 px
+sweep's counter reports the dense **8.038 G** at every budget. And the routing's saving is bounded
 below by the routing itself: at these map sizes the router is never free.
 
-![Dense versus sparse execution of the same checkpoint](docs/assets/ssac_execution.svg)
+![Dense versus sparse execution of the same checkpoint, at 320 and 640 px](docs/assets/ssac_execution.svg)
 
 **What this does not claim.** One checkpoint for the timing, three builds for the accuracy, 60 test
-images, one CPU, and one input scale. The efficiency claim is measured and **negative** on this
-host. The accuracy claim is **withdrawn**: the withdrawal conditions (no gain over the control;
+images, one CPU — and, for the 640 px saving, evaluation-time budgets on an arm trained at 320 px;
+no arm was trained at 640 px. The efficiency positive is therefore **preliminary**: measured,
+reproducible and predicted, but one checkpoint on CPU and worth about +2.3 FPS at the tightest
+budget. The accuracy claim is **withdrawn**: the withdrawal conditions (no gain over the control;
 the raw-feature alternative matching the proposal; a small-object drop), written in
 `docs/ssac_design.md` §3.2 **before** the runs, did their job — condition 1 fires at seed 2, where
 the proposal no longer beats the parameter-identical control on mAP50:95. The small-object
@@ -380,6 +400,12 @@ python -m saryolo efficiency --weights results/runs/SSAC-001/weights/best.pt \
     --ssac-execution sparse --ssac-keep 1.0 --ssac-keep 0.5 --ssac-keep 0.25 --ssac-keep 0.1
     # the same trained weights timed dense (default) and at four routing budgets;
     # writes ssac_execution_sweep.json and reports what each level actually routed
+python -m saryolo efficiency --weights results/runs/SSAC-001/weights/best.pt \
+    --imgsz 640 --real --data configs/datasets/hrsid_real.yaml --batch 4 --runs 5 \
+    --ssac-execution sparse --ssac-keep 1.0 --ssac-keep 0.5 --ssac-keep 0.25 --ssac-keep 0.1 \
+    --out results/efficiency/SSAC-001_640
+    # the same sweep at 640 px, where the deepest governed level is four tiles and a
+    # saving appears at keep <= 0.5; --out keeps it beside the 320 px profile
 python -m saryolo gain --weights results/runs/REAL-004/weights/best.pt \
     --data configs/datasets/hrsid_real.yaml            # is the learned gain a per-pixel map?
 python -m saryolo robustness --weights results/runs/REAL-004/weights/best.pt \
