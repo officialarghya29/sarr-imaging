@@ -170,7 +170,9 @@ def _free_port() -> int:
 
 
 @contextlib.contextmanager
-def _plain_html_server(body: bytes, header_name: str = "Content-type"):
+def _plain_html_server(
+    body: bytes, header_name: str = "Content-type", status_code: int = 200, location: str | None = None
+):
     """A minimal **non-Streamlit** HTTP server, with a deliberately capitalised header name.
 
     The casing is the point. HTTP header names are case-insensitive, and servers differ: Streamlit
@@ -183,6 +185,17 @@ def _plain_html_server(body: bytes, header_name: str = "Content-type"):
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):  # noqa: N802  (the stdlib names these after HTTP verbs)
+            if status_code >= 300:
+                # Redirect to *ourselves*, so the client hits urllib's loop limit and raises an
+                # HTTPError carrying this status. That is the shape the real host produces (it was
+                # a 303 loop that exposed the misreport this test pins), and it keeps the check
+                # hermetic: pointing Location at an external site would make the suite depend on
+                # the network and on whatever that site happens to answer.
+                self.send_response(status_code)
+                self.send_header("Location", location or "/again")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             if self.path != "/":
                 self.send_error(404)
                 return
@@ -419,6 +432,28 @@ def test_the_verifier_reports_an_unreachable_host_and_exits_nonzero():
     for name in ("health endpoint", "runtime identity", "application shell"):
         assert statuses[name] == verify_deploy.UNVERIFIED
     assert verify_deploy.main(["--url", url]) == 1
+
+
+def test_the_verifier_distinguishes_a_redirect_from_an_unreachable_host():
+    """A 303 is an *answer*, not silence -- and on Community Cloud it has a specific meaning.
+
+    The first version reported a 303 as "no response", which sends a reader hunting for a dead
+    host when the app is simply not publicly reachable: a different problem with a different fix
+    (publish the app, name it correctly, or sign out of a private workspace). Pinned here so the
+    diagnosis keeps naming the redirect and its target.
+    """
+    target = "/again"
+    with _plain_html_server(b"", status_code=303, location=target) as url:
+        report = verify_deploy.verify(url)
+    statuses = {name: status for name, status, _ in report.rows}
+    detail = next(d for name, _s, d in report.rows if name == "reachable")
+    assert statuses["reachable"] == verify_deploy.FAIL
+    assert "303" in detail and "redirect" in detail and "not reachable anonymously" in detail, detail
+    assert target in detail, detail
+    assert "no response" not in detail, "a redirect is being reported as silence again"
+    # The checks behind the redirect cannot be verified, so they are not reported as failures.
+    for name in ("health endpoint", "runtime identity", "application shell"):
+        assert statuses[name] == verify_deploy.UNVERIFIED, report.rows
 
 
 def test_the_verifier_never_reports_the_in_app_inference_check_as_passed():

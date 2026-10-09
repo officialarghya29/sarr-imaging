@@ -73,18 +73,32 @@ class Report:
 
 
 def _get(url: str, timeout: float) -> tuple[int, bytes, dict[str, str]]:
-    """Fetch a URL, returning (status, body, headers). Raises on transport failure.
+    """Fetch a URL, returning (status, body, headers). Raises only on *transport* failure.
 
     Header names are lower-cased on the way out. HTTP header names are case-insensitive but a
     plain ``dict(response.headers)`` preserves whatever case the server used, and servers differ:
     Streamlit sends ``content-type`` while a stdlib test server sends ``Content-type``. A
     case-sensitive lookup therefore passes on one and fails on the other, which is a bug that
     reads as the server's fault.
+
+    An HTTP *error status* is returned rather than raised. The host answered, it just did not
+    succeed, and the difference matters: on Community Cloud a 303 means the app is not reachable
+    anonymously, which is a different problem with a different fix from a host that is down.
+    Conflating them (the first version of this reported a 303 as "no response") sends the reader to
+    the wrong diagnosis.
     """
     request = urllib.request.Request(url, headers={"User-Agent": "sarvo-deploy-verify"})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        headers = {name.lower(): value for name, value in response.headers.items()}
-        return response.status, response.read(), headers
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            headers = {name.lower(): value for name, value in response.headers.items()}
+            return response.status, response.read(), headers
+    except urllib.error.HTTPError as exc:
+        headers = {name.lower(): value for name, value in (exc.headers or {}).items()}
+        try:
+            body = exc.read()
+        except Exception:  # noqa: BLE001 - the body is diagnostic only, never required
+            body = b""
+        return exc.code, body, headers
 
 
 def _is_local(host: str) -> bool:
@@ -121,7 +135,30 @@ def verify(url: str, timeout: float = 60.0) -> Report:
             report.add(name, UNVERIFIED, "not reachable")
         _add_script_reminder(report)
         return report
-    report.add("reachable", PASS, f"HTTP {status} in {first_byte_ms:.0f} ms")
+    if status == 200:
+        report.add("reachable", PASS, f"HTTP 200 in {first_byte_ms:.0f} ms")
+    elif 300 <= status < 400:
+        report.add(
+            "reachable",
+            FAIL,
+            f"HTTP {status} redirect to {headers.get('location', 'an unknown target')!r}; on "
+            "Streamlit Community Cloud this means the app is not reachable anonymously -- it may "
+            "not exist at this name, or it is private",
+        )
+    elif status == 404:
+        report.add("reachable", FAIL, "HTTP 404: nothing is deployed at this path (check the URL)")
+    elif status in {502, 503, 504}:
+        report.add("reachable", FAIL, f"HTTP {status}: the host is up but the app is unavailable")
+    else:
+        report.add("reachable", FAIL, f"HTTP {status} from GET /")
+
+    if status != 200:
+        # Nothing behind a redirect, a 404 or an error page can be verified, and listing three more
+        # failures that share this single cause would bury it. Record them as unverified instead.
+        for name in ("health endpoint", "runtime identity", "application shell"):
+            report.add(name, UNVERIFIED, f"not verifiable: GET / returned HTTP {status}")
+        _add_script_reminder(report)
+        return report
 
     # ------------------------------------------------------------------- /_stcore/health == "ok"
     try:
@@ -151,9 +188,7 @@ def verify(url: str, timeout: float = 60.0) -> Report:
         report.add("runtime identity", FAIL, f"{HOST_CONFIG_PATH} unreachable: {exc}")
 
     # ------------------------------------------------------------------ the shell the user receives
-    if status != 200:
-        report.add("application shell", FAIL, f"GET / returned {status}")
-    elif "text/html" not in headers.get("content-type", ""):
+    if "text/html" not in headers.get("content-type", ""):
         report.add("application shell", FAIL, f"GET / is not HTML: {headers.get('content-type')!r}")
     else:
         text = body.decode("utf-8", "replace").lower()
