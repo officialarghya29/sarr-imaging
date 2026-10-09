@@ -71,7 +71,14 @@ def load_image_batch(images_dir: str | Path, imgsz: int = 640, batch: int = 8, l
     for i, path in enumerate(chosen):
         img = cv2.imdecode(np.fromfile(str(path), dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
         if img is None:
-            continue
+            # Refuse rather than leave the preallocated zero row in place. A zero tile is the
+            # degenerate first-layer branch this loader exists to avoid, so skipping an
+            # undecodable file would quietly time the wrong input -- the same failure the
+            # empty-directory guard refuses, one file in.
+            raise ValueError(
+                f"could not decode {path}; a silent zero tile would time the degenerate "
+                "branch this loader exists to avoid"
+            )
         if img.shape[0] != imgsz or img.shape[1] != imgsz:
             img = cv2.resize(img, (imgsz, imgsz), interpolation=cv2.INTER_AREA)
         x[i, :, :, :] = img.astype(np.float32) / 255.0

@@ -70,6 +70,40 @@ def test_an_empty_image_directory_is_refused_rather_than_timed_on_noise(tmp_path
         load_image_batch(tmp_path / "empty", imgsz=32, batch=2)
 
 
+def test_the_loader_replicates_one_channel_and_fills_a_batch_from_few_files(tmp_path):
+    """Two loader contracts the dataset-backed check cannot pin without a download.
+
+    A SAR chip is one measured channel, so the loader replicates it to the three the backbone
+    takes -- if it instead fed different content per channel, the timing would still "work"
+    while timing a different input than the one the model sees. And a batch larger than the
+    number of files must reuse images rather than leave zero rows, because a zero row is
+    exactly the degenerate first-layer branch this file exists to avoid. The same reasoning
+    makes a file that will not decode a hard error: skipping it would leave a zero row in a
+    batch labelled "real".
+    """
+    import cv2
+    import numpy as np
+
+    for i, side in enumerate((24, 40)):
+        cv2.imwrite(str(tmp_path / f"chip_{i}.png"), np.full((side, side), 60 + 60 * i, np.uint8))
+
+    x = load_image_batch(tmp_path, imgsz=32, batch=10)
+    assert tuple(x.shape) == (10, 3, 32, 32) and x.dtype == torch.float32
+    # One measured channel, replicated: the three channels must be identical, not different.
+    assert torch.equal(x[:, 0], x[:, 1]) and torch.equal(x[:, 1], x[:, 2])
+    assert float(x.min()) >= 0.0 and float(x.max()) <= 1.0
+    # Fewer files than the batch: every slot carries a real image, none is left blank.
+    assert all(float(x[i].max()) > 0.0 for i in range(10)), "a batch slot was left blank"
+    # The bytes are normalised by 255 and the distinct source files are actually distinct.
+    assert x[0].max() != x[1].max(), "the loader repeated one image for every slot"
+    assert 0.45 < float(x[1].max()) < 0.49, "the image was not normalised to [0, 1]"
+
+    # A file that will not decode must raise, not leave a zero row in a batch labelled "real".
+    (tmp_path / "zz_broken.png").write_bytes(b"not a real image")
+    with pytest.raises(ValueError, match="could not decode"):
+        load_image_batch(tmp_path, imgsz=32, batch=10)
+
+
 def test_a_single_run_reports_no_spread_and_a_multi_run_reports_its_spread():
     """A cost number is only trustworthy if the profiler can say how stable it is.
 
@@ -89,6 +123,24 @@ def test_a_single_run_reports_no_spread_and_a_multi_run_reports_its_spread():
     assert multi["latency_ms_spread_pct"] >= 0.0
     # The FPS/timing identity must hold for the *reported* median, not the last block.
     assert multi["fps"] == pytest.approx(1000.0 / multi["latency_per_image_ms"], rel=1e-3)
+
+
+def test_the_reported_spread_is_the_block_range_over_the_reported_median():
+    """The spread is the number a reader compares a claimed saving against, so pin its formula.
+
+    ``latency_ms_spread_pct`` must be the min-to-max range of the timed blocks divided by the
+    *reported median* -- the same quantity a reader subtracts a saving from. A spread taken
+    against the mean, or against the last block, would understate or overstate the noise and
+    quietly change whether a measured saving is separable from it, which is exactly the
+    judgement the 320 px / 640 px efficiency result turns on.
+    """
+    model = _cfar_model()
+    row = measure_latency(model, imgsz=32, warmup=1, repeats=3, runs=4)
+    assert row["latency_runs"] == 4
+    assert row["latency_ms_min"] <= row["latency_ms"] <= row["latency_ms_max"]
+    expected = (row["latency_ms_max"] - row["latency_ms_min"]) / row["latency_ms"] * 100.0
+    # The median is rounded to 3 dp and the spread to 1 dp, so allow exactly that rounding.
+    assert row["latency_ms_spread_pct"] == pytest.approx(expected, abs=0.15), (row, expected)
 
 
 def test_measure_latency_rejects_a_batch_that_is_not_rgb_shaped():

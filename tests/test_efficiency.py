@@ -49,6 +49,7 @@ from saryolo.evaluation.efficiency import (
     write_profile,
 )
 from saryolo.nn.arch import VARIANTS, build_yaml_dict, variant_filename
+from saryolo.nn.modules.ssac import ScatterSelectiveRefinement
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -497,3 +498,104 @@ def test_the_sparsity_ceiling_is_set_by_input_scale_not_by_the_mechanism():
     for row in large:
         if row["tiles"] > 1:
             assert row["executed_rich_fraction"] < 1.0
+
+
+def test_the_tile_size_trades_halo_overhead_against_granularity_with_a_hard_ceiling():
+    """The scope of the saving is set by the tile as well as by the input scale.
+
+    On one 128x128 feature map the tile size moves two things at once. A finer tile routes
+    more precisely (more tiles to choose among) but every gathered tile pays the *fixed* 2 px
+    halo, so the halo factor ``((tile + 2*halo)/tile)**2`` grows as the tile shrinks and the
+    executed fraction rises. A coarser tile pays relatively less halo, so the executed
+    fraction falls -- until the tile reaches the map size, where the level collapses to a
+    *single* tile and no budget can spare it at all. The reach of the saving is therefore a
+    property of the (input scale, tile) pair, with a hard ceiling at one tile per level; there
+    is no tile size that makes a single-tile level cheaper.
+    """
+    block = ScatterSelectiveRefinement(8)
+    x = torch.rand(1, 8, 128, 128)
+
+    def routed(tile: int) -> dict:
+        block.tile, block.keep = tile, 0.25
+        return block.routing_stats(x)
+
+    tiles = (8, 16, 32, 64)
+    rows = {tile: routed(tile) for tile in tiles}
+    for tile, row in rows.items():
+        # These tiles divide the map exactly, so the tile count is the square of the quotient.
+        assert row["tiles"] == (128 // tile) ** 2, (tile, row)
+    # Coarser tiles pay relatively less halo, so each executes strictly less of the rich path.
+    fractions = [rows[tile]["executed_rich_fraction"] for tile in tiles]
+    assert fractions == sorted(fractions, reverse=True), fractions
+    assert len(set(fractions)) == len(fractions), f"the halo trade-off is flat: {fractions}"
+    # ... up to the map size, where the level is a single tile and cannot be spared at all.
+    whole = routed(128)
+    assert whole["tiles"] == 1 and whole["selected_tiles"] == 1
+    assert whole["executed_rich_fraction"] == 1.0, (
+        "a level that fits in a single tile reported less than the whole rich path executed, "
+        "which is impossible -- there is no second tile to skip"
+    )
+    assert whole["executed_rich_fraction"] > fractions[0], (
+        "the one-tile level was not the worst case, so the ceiling is not where it is claimed"
+    )
+
+
+def test_a_governed_level_can_never_be_spared_below_one_halo_padded_tile():
+    """Structural preservation: the tightest budget still executes one halo-padded tile.
+
+    This is the property that keeps selective computation from *erasing* a weak target: the
+    expensive path is only ever added, never subtracted, and even the smallest budget refines
+    at least one tile of every governed level, with the halo that keeps that tile's receptive
+    field the same one it had in the dense pass. So the executed fraction has a floor of
+    ``(1/nTiles) * span**2`` that no budget can go under -- the improvement's reach is bounded
+    below, not just above, and a claimed saving can never come from zeroing a level out.
+    """
+    model = _build("ssac_sparse_n")
+    override_ssac_execution(model, execution="sparse", keep=0.0001, tile=16)
+    report = ssac_routing(model, torch.rand(1, 3, 640, 640))
+    assert len(report["levels"]) == 3
+    for row in report["levels"]:
+        span = (16 + 2 * row["halo"]) / 16
+        floor = min(1.0, (1 / row["tiles"]) * span * span)
+        assert row["selected_tiles"] == 1, (
+            "even the tightest budget must refine one tile of every governed level"
+        )
+        assert row["executed_rich_fraction"] == round(floor, 4), (
+            f"a level with {row['tiles']} tiles executed {row['executed_rich_fraction']} at the "
+            f"tightest budget; the one-tile floor is {floor:.4f}"
+        )
+        assert row["executed_rich_fraction"] > 0.0, "a governed level was spared completely"
+
+
+def test_the_budget_spares_exactly_the_levels_that_offer_more_than_one_tile():
+    """The saving's reach on a real model: a tight budget touches only routable levels.
+
+    Extends the monotonicity check from the shallowest level to *all* of them and pins the
+    scope directly: at a sub-unity budget the set of levels whose executed fraction falls
+    below 1.0 must equal the set of levels holding more than one tile. A single-tile level is
+    reported at 1.0 however tight the budget -- so a saving can never be attributed to a level
+    the tiling cannot reach, and the deepest level is the first to become unsparable as the
+    input shrinks and the last to become routable as it grows.
+    """
+    model = _build("ssac_sparse_n")
+    # 640 px: the deepest governed level has four tiles here, so all three levels are routable.
+    x = torch.rand(1, 3, 640, 640)
+    per_level: dict[int, list[float]] = {0: [], 1: [], 2: []}
+    for keep in (0.1, 0.25, 0.5, 1.0):
+        override_ssac_execution(model, execution="sparse", keep=keep, tile=16)
+        levels = ssac_routing(model, x)["levels"]
+        assert len(levels) == 3
+        for i, row in enumerate(levels):
+            per_level[i].append(row["executed_rich_fraction"])
+        if keep < 1.0:
+            spared = {i for i, row in enumerate(levels) if row["executed_rich_fraction"] < 1.0}
+            routable = {i for i, row in enumerate(levels) if row["tiles"] > 1}
+            assert spared == routable, (
+                f"keep={keep}: the budget spared levels {sorted(spared)} but only "
+                f"{sorted(routable)} hold more than one tile"
+            )
+    for level, series in per_level.items():
+        assert series == sorted(series), f"level {level} is not monotone in the budget: {series}"
+        assert series[-1] == 1.0, f"level {level} did not execute the whole path at keep=1.0"
+    # Every governed level is routable at 640 px, so the tightest budget must reduce all three.
+    assert all(series[0] < 1.0 for series in per_level.values()), per_level

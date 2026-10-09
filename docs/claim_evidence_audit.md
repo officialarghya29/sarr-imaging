@@ -15,7 +15,7 @@ on a subset is never presented as the benchmark result.
 
 | # | Claim | Label | Evidence (artifact / test) |
 | --- | --- | --- | --- |
-| 1 | The test suite passes and needs neither a GPU nor a download | **final** | `pytest -q` → 591 passed; `reports/reproduction_status.md` |
+| 1 | The test suite passes and needs neither a GPU nor a download | **final** | `pytest -q` → 596 passed; `reports/reproduction_status.md` |
 | 2 | The architecture vocabulary is wired and self-consistent | **final** | 110 variants; `tests/test_arch.py` (64 tests) |
 | 3 | Every custom module is an **exact** identity at initialisation | **final** | `docs/assets/facts.json` → `identity`, all `max|f(x)−x| = 0.0e+00`; `tests/test_arch.py` |
 | 4 | No module is frozen at init (identity comes from the gate, not a dead branch) | **final** | `tests/test_arch.py::test_no_module_is_frozen_at_init` |
