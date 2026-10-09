@@ -47,6 +47,11 @@ validation_reports/
 *.coreml
 *.h5
 *.pb
+# One exception, deliberately narrow: the pilot checkpoint the demo serves is committed so a
+# hosted instance has weights with no configuration, because `results/**` is excluded and a
+# training artefact therefore never reaches a deploy. Everything else stays out. Provenance and
+# checksum in weights/README.md; resolution order in docs/DEPLOYMENT.md.
+!weights/sarvo_ssac001.pt
 
 # ---- Secrets (NEVER commit tokens) ----
 .env

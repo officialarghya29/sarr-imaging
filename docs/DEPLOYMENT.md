@@ -33,9 +33,13 @@ on the same chip.
 
 ## 2. Model weights
 
-The trained checkpoint is a **training artefact and is not committed by default** — the
-repository's `.gitignore` excludes `results/**`. `saryolo.inference.resolve_weights` therefore
-looks in this order:
+The demo's checkpoint **is committed**, at `weights/sarvo_ssac001.pt` — deliberately, and as the
+only weight in the repository, so a hosted instance has one with no configuration. Other
+training artefacts are not committed: `.gitignore` excludes `results/**` and ignores `*.pt`, with
+a single narrow negation for that file. Provenance and checksum are in
+[`../weights/README.md`](../weights/README.md).
+
+`saryolo.inference.resolve_weights` therefore looks in this order:
 
 1. an explicit path (`saryolo predict --weights …`, or the sidebar field);
 2. the `SARVO_WEIGHTS` environment variable;
@@ -61,19 +65,23 @@ export SARVO_WEIGHTS=/absolute/path/to/best.pt
 streamlit run app.py
 ```
 
-**Option C — commit the weights so a hosted instance has them with no configuration.** Copy
-the 6.77 MB checkpoint to the documented location, which `resolve_weights` already discovers:
+**Option C — use the committed weights (the default, and what a hosted deploy relies on).**
+`weights/sarvo_ssac001.pt` is in the repository, so a Streamlit Community Cloud instance gets it
+by cloning — no secret, no upload, no environment variable:
 
 ```bash
-mkdir -p weights
+sha256sum weights/sarvo_ssac001.pt   # c8128733...45a98a5, per weights/README.md
+```
+
+To refresh it from a re-trained arm:
+
+```bash
 cp results/runs/SSAC-001/weights/best.pt weights/sarvo_ssac001.pt
 ```
 
-Option C is what makes a Streamlit Community Cloud deployment self-contained: the platform
-clones the repository, so a file present in git is present in the running app. The file is well
-inside GitHub's 100 MB per-file limit and Streamlit's repository-size guidance. If the artefact
-is instead kept out of git, the app on the host will correctly report that no checkpoint is
-configured — it will not fabricate output.
+The file is well inside GitHub's 100 MB per-file limit and Streamlit's repository-size guidance.
+If the artefact were instead kept out of git, the app on the host would correctly report that no
+checkpoint is configured — it would not fabricate output.
 
 The checkpoint `results/runs/SSAC-001/weights/best.pt` is **3,396,329 parameters**, 6.77 MB on
 disk, one class (`ship`), trained on the 200/60/60 HRSID subset at 320 px for 40 epochs on CPU.
@@ -132,7 +140,7 @@ entry point.
 | Python version | 3.12, pinned by `runtime.txt` |
 | Dependencies | `requirements.txt` (includes `streamlit>=1.30.0`) |
 | Runtime configuration | `.streamlit/config.toml` (upload limit 8 MB, headless, telemetry off) |
-| Secrets / environment | `SARVO_WEIGHTS` — only needed if the weights are **not** committed (Option C in §2) |
+| Secrets / environment | **none required** — the checkpoint is committed at `weights/sarvo_ssac001.pt`. Set `SARVO_WEIGHTS` only to serve a different checkpoint |
 
 Streamlit reads `.streamlit/config.toml` from the repository, so the 8 MB upload limit there
 matches `saryolo.inference.MAX_UPLOAD_BYTES` and an oversized file is refused before it is read
@@ -167,20 +175,61 @@ weights are loaded once per session and a re-trained file is picked up rather th
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| "No checkpoint is configured" | neither `SARVO_WEIGHTS` nor a default location supplied one | set the secret, or use Option C in §2 |
+| "No checkpoint is configured" | neither `SARVO_WEIGHTS` nor a default location supplied one — e.g. the committed weights are missing from the checkout | restore `weights/sarvo_ssac001.pt`, or set `SARVO_WEIGHTS` |
 | "No checkpoint at `<path>`" | a configured path does not exist on the host | correct the path; the message names it |
 | "could not load the checkpoint" | the file is not a detector checkpoint | re-export or re-train; the loader never substitutes a fresh model |
 | "the file is N MB, over the 8 MB limit" | upload too large | downscale or re-encode |
 | "could not be decoded as an image" | corrupt or mislabelled file | re-export as PNG/JPG |
 | App starts but shows no boxes | no detections above the threshold | lower the confidence slider; an empty result is a valid pilot result |
 
+### Step-by-step publish (owner action)
+
+Publishing requires an interactive sign-in that cannot be performed on the owner's behalf, so
+this is the exact path for the repository owner. Nothing in the repository needs to change first.
+
+1. Sign in at `https://share.streamlit.io` **with GitHub**, and authorise the app for this
+   repository (private-account permissions are not needed; the repository is public).
+2. **Create app → Deploy a public app from GitHub.**
+3. Set exactly these three fields:
+
+   | Field | Value |
+   | --- | --- |
+   | Repository | `officialarghya29/sarr-imaging` |
+   | Branch | `main` |
+   | Main file path | `app.py` |
+
+4. Open **Advanced settings** and confirm **Python 3.12** (matches `runtime.txt`). No secrets are
+   required — the checkpoint is committed.
+5. **Deploy** and wait for the build to finish. A non-zero-exit build shows its log in the UI;
+   the most common cause is a missing dependency, which `requirements.txt` covers.
+
+### Verifying the live app
+
+Run every line of this on the **deployed** URL, not locally. Each check names what failure it
+would catch.
+
+| # | Do this | Pass looks like |
+| --- | --- | --- |
+| 1 | Open the URL | The title renders and the model panel shows Parameters **3.40 M**, Checkpoint **6.77 MB**, Device **cpu**, Classes **ship** — proving the committed weights loaded |
+| 2 | Upload a SAR image and press **Run Detection** | Two images (input, annotated) and a Detections/Latency/Throughput row. A chip from the HRSID val split is the cheapest check; the app's local-sample picker will be absent on the host, because the dataset is not committed |
+| 3 | Cross-check one detection against the pipeline | `.venv/bin/python -m saryolo predict --weights weights/sarvo_ssac001.pt --source <same file> --imgsz 640` gives the same count and confidences (the confidence field has 4 dp) |
+| 4 | Upload a `.gif`, then a file over 8 MB | "That file cannot be used: … not a supported image type", and "over the 8 MB limit" respectively, each with a Recovery note — no detection control appears |
+| 5 | Type a path that does not exist into the sidebar | "No checkpoint at `<path>`" plus Recovery guidance, and no **Run Detection** button |
+| 6 | Reload the page | The app returns to state 1 without re-uploading — weights are cached per `(path, mtime)` |
+| 7 | Watch the app's resource panel while running a few images | Latency is stated in ms and the app does not restart — a memory-crash shows as a restart, and the local peak was 446 MB |
+
+If every row passes, record the URL in this file and in the README. If a row fails, the failure is
+reported as a failed check rather than omitted; rows 4 and 5 in particular are the ones a demo
+typically skips and a reviewer typically tries.
+
 ### Current deployment status
 
 **Not deployed from this machine.** Publishing requires an interactive Streamlit Community
 Cloud account authorised against this GitHub account, which is an action only the repository
 owner can take. Everything the host needs — entry point, dependency file, runtime config,
-weight-resolution contract, and the tests above — is in place; the deployment step itself is
-the outstanding item, and no public URL is claimed here.
+committed weights, and the tests above — is in place; the deployment step itself is the
+outstanding item, and no public URL is claimed here. Verify with the table above before
+recording one.
 
 ---
 

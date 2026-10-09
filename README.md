@@ -394,7 +394,10 @@ python -m saryolo predict \
 streamlit run app.py                                     # the same pipeline, as a web demo
 ```
 
-The demo never substitutes a model: with no checkpoint it says so and disables detection. See
+Both run with no configuration: the demo's pilot checkpoint is committed at
+`weights/sarvo_ssac001.pt` (the only weight in the repository — `results/**` stays out), so
+`streamlit run app.py` detects immediately. The demo never substitutes a model: if a checkpoint is
+missing it says so and disables detection rather than showing untrained output. See
 [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for weight resolution, hosting and troubleshooting.
 
 Train and evaluate on the real subset (no GPU required):
@@ -450,6 +453,7 @@ configs/         datasets/ · models/ (110 generated) · exp/ (EXP-001…019 + a
 docs/            physics-to-architecture proposals · method drafts · claim-to-evidence audit
 paper/           manuscript skeleton + generated tables + results draft
 app.py           Streamlit demo — draws the pipeline's detections, computes nothing itself
+weights/         the one committed checkpoint the demo serves, with its provenance and checksum
 tests/           631 checks; the instrument is tested as hard as the model
 ```
 
