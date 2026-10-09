@@ -6,7 +6,7 @@
 <h4 align="center">SAR Acquisition-Robust Visual Optimization — a SAR-native object detector</h4>
 
 <p align="center">
-  <img alt="tests" src="https://img.shields.io/badge/tests-639_passing-22c55e">
+  <img alt="tests" src="https://img.shields.io/badge/tests-643_passing-22c55e">
   <img alt="fabricated results" src="https://img.shields.io/badge/fabricated_results-0-black">
   <img alt="architectures" src="https://img.shields.io/badge/architectures-110_wired-3b82f6">
   <img alt="experiments" src="https://img.shields.io/badge/experiments-134_configured-8b5cf6">
@@ -53,7 +53,7 @@ results.
 | **What this is** | A complete, reproducible research pipeline: dataset audit → baseline → components → ablations → removal tests → robustness → efficiency → cross-dataset → paper. |
 | **Architectures** | 110 variants wired; every one builds and runs a forward pass |
 | **Experiments** | 134 configured; each reproducible from a committed YAML |
-| **Tests** | 639 passing — no dataset download and no GPU needed |
+| **Tests** | 643 passing — no dataset download and no GPU needed |
 | **Proven** | The instrument: the baseline reproduces stock YOLO11 **exactly**, every custom module is an *exact* identity at initialisation and demonstrably not frozen, and the pipeline trains and evaluates on **real** SAR imagery. |
 | **Not yet proven** | Every accuracy number is a **pilot** on a subset. The ablation ladder, cross-sensor generalisation and the full-release benchmark are `TBD`; they need a GPU and the full datasets. |
 
@@ -381,7 +381,7 @@ Each row is an executable check, not a claim. The full list lives in `tests/`.
 git clone https://github.com/officialarghya29/sarr-imaging.git && cd sarr-imaging
 python -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt
 
-pytest tests/ -q                                          # 639 tests
+pytest tests/ -q                                          # 643 tests
 ```
 
 Run the detector on one image, and in a browser:
@@ -399,6 +399,13 @@ Both run with no configuration: the demo's pilot checkpoint is committed at
 `streamlit run app.py` detects immediately. The demo never substitutes a model: if a checkpoint is
 missing it says so and disables detection rather than showing untrained output. See
 [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for weight resolution, hosting and troubleshooting.
+
+Once deployed, the live URL is checked the same way the rest of the repository is — by measurement,
+not by a successful build:
+
+```bash
+python scripts/verify_deploy.py --url https://<app>.streamlit.app   # exits non-zero on failure
+```
 
 Train and evaluate on the real subset (no GPU required):
 
@@ -454,7 +461,7 @@ docs/            physics-to-architecture proposals · method drafts · claim-to-
 paper/           manuscript skeleton + generated tables + results draft
 app.py           Streamlit demo — draws the pipeline's detections, computes nothing itself
 weights/         the one committed checkpoint the demo serves, with its provenance and checksum
-tests/           639 checks; the instrument is tested as hard as the model
+tests/           643 checks; the instrument is tested as hard as the model
 ```
 
 ---

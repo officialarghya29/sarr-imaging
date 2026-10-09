@@ -28,12 +28,15 @@ measuring an envelope rather than an accuracy.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import http.server
 import os
 import re
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -42,6 +45,10 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+import verify_deploy  # noqa: E402  (the scripts directory is not a package, so it is put on sys.path)
+
 APP = REPO_ROOT / "app.py"
 CONFIG = REPO_ROOT / ".streamlit" / "config.toml"
 RUNTIME = REPO_ROOT / "runtime.txt"
@@ -160,6 +167,42 @@ def _free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
+
+
+@contextlib.contextmanager
+def _plain_html_server(body: bytes, header_name: str = "Content-type"):
+    """A minimal **non-Streamlit** HTTP server, with a deliberately capitalised header name.
+
+    The casing is the point. HTTP header names are case-insensitive, and servers differ: Streamlit
+    sends ``content-type`` in lower case while a stdlib server sends ``Content-type``. A verifier
+    that looks the header up case-sensitively therefore passes on one and fails on the other -- and
+    reports the failure as the *server's* fault. That was a real bug in `scripts/verify_deploy.py`,
+    found by pointing the tool at a running instance rather than at a mock; this fixture keeps it
+    from returning.
+    """
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802  (the stdlib names these after HTTP verbs)
+            if self.path != "/":
+                self.send_error(404)
+                return
+            self.send_response(200)
+            self.send_header(header_name, "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):  # keep the test output clean
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}"
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def _budget_for(build: str) -> int:
@@ -321,6 +364,13 @@ def test_the_streamlit_entry_point_boots_and_answers_its_health_check(tmp_path):
             body = response.read()
             assert response.status == 200
             assert b"<title>" in body, "the server answered without serving a page"
+
+        # The tool used to verify the *deployed* app is pointed at this same live instance. That is
+        # its acceptance test: a verifier that has only ever been run against a mock is a script
+        # nobody has checked, and it is the thing that decides whether a deploy is called verified.
+        report = verify_deploy.verify(f"http://127.0.0.1:{port}")
+        assert report.failed == [], report.rows
+        assert report.as_dict()["ok"] is True
     finally:
         proc.terminate()
         try:
@@ -331,6 +381,73 @@ def test_the_streamlit_entry_point_boots_and_answers_its_health_check(tmp_path):
 
     # A process that ignores SIGTERM would leave a port squatted on the host; assert it is gone.
     assert proc.poll() is not None, "the server did not exit after SIGTERM"
+
+
+# -------------------------------------------------------------------- the deployment verifier
+def test_the_verifier_rejects_a_server_that_is_not_the_streamlit_runtime():
+    """A 200 from *any* server must not pass, and the failure must name the real reason.
+
+    Two properties are pinned together, because they were the same bug: a non-runtime server fails,
+    and it fails for the *missing shell markers* rather than for a content type it did send. The
+    fixture capitalises the header name; the check must not notice, because HTTP header names are
+    case-insensitive and Streamlit sends the lower-case spelling.
+    """
+    body = b"<html><head><title>hello</title></head><body>not a Streamlit app</body></html>"
+    with _plain_html_server(body) as url:
+        report = verify_deploy.verify(url)
+        statuses = {name: status for name, status, _ in report.rows}
+        assert statuses["reachable"] == verify_deploy.PASS
+        assert statuses["health endpoint"] == verify_deploy.FAIL
+        assert statuses["runtime identity"] == verify_deploy.FAIL
+        assert statuses["application shell"] == verify_deploy.FAIL
+        shell_detail = next(detail for name, _s, detail in report.rows if name == "application shell")
+        assert "not look like the runtime" in shell_detail, shell_detail
+        assert "not HTML" not in shell_detail, "the content-type lookup is case-sensitive again"
+        # The exit code is the contract CI and a release check depend on.
+        assert verify_deploy.main(["--url", url]) == 1
+
+
+def test_the_verifier_reports_an_unreachable_host_and_exits_nonzero():
+    """One dead host is one problem, not five -- and the exit code must say so."""
+    port = _free_port()  # bound, then released: nothing is listening there now
+    url = f"http://127.0.0.1:{port}"
+    report = verify_deploy.verify(url)
+    statuses = {name: status for name, status, _ in report.rows}
+    assert statuses["reachable"] == verify_deploy.FAIL
+    # The checks that needed a response are explicitly *unverified*, not failed: reporting five
+    # failures for one unreachable host would misstate what is known.
+    for name in ("health endpoint", "runtime identity", "application shell"):
+        assert statuses[name] == verify_deploy.UNVERIFIED
+    assert verify_deploy.main(["--url", url]) == 1
+
+
+def test_the_verifier_never_reports_the_in_app_inference_check_as_passed():
+    """The honesty property: an HTTP 200 must never be reported as "the model runs".
+
+    Interaction in Streamlit travels over a websocket, so a script that raises on its first run
+    still serves a 200. The verifier has to say that out loud rather than let a table of green rows
+    imply a working demo -- the same rule that keeps every other claim in this repository tied to
+    its evidence rather than to a successful build.
+    """
+    with _plain_html_server(b"<html></html>") as url:
+        report = verify_deploy.verify(url)
+    rows = [row for row in report.rows if "inference" in row[0]]
+    assert len(rows) == 1, report.rows
+    _name, status, detail = rows[0]
+    assert status == verify_deploy.UNVERIFIED
+    assert "browser" in detail and "docs/DEPLOYMENT.md" in detail
+    # And it must not be counted as a failure either: it is not a verdict on the application.
+    assert all(row[1] != verify_deploy.UNVERIFIED for row in report.failed)
+
+
+def test_the_verifier_requires_https_on_a_public_host():
+    """A public deploy on plain HTTP is a failure; on a local instance it is expected."""
+    public = verify_deploy.verify("http://example.invalid", timeout=5.0)
+    scheme = next(status for name, status, _ in public.rows if name == "scheme")
+    assert scheme == verify_deploy.FAIL, public.rows
+    local = verify_deploy.verify(f"http://127.0.0.1:{_free_port()}", timeout=5.0)
+    local_scheme = next(status for name, status, _ in local.rows if name == "scheme")
+    assert local_scheme == verify_deploy.PASS, local.rows
 
 
 # ------------------------------------------------------------------------ the memory envelope

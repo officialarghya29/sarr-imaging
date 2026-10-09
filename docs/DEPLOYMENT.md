@@ -241,13 +241,14 @@ connected repository and **every push to the connected branch re-deploys it auto
 That makes correctness *before* the push the only control that matters, which is why the deploy
 contract is enforced by the test suite rather than by a deploy workflow:
 
-| Guard (`tests/test_deploy.py`) | The hosted failure it prevents |
+| Guard | The hosted failure it prevents |
 | --- | --- |
 | The entry point boots and answers `/_stcore/health` | a missing dependency or malformed config shipping straight to the public URL |
 | The config's upload limit equals `MAX_UPLOAD_BYTES` | the app advertising a limit it does not enforce |
 | `runtime.txt` satisfies the declared Python floor | an incompatible runtime pinned for the host |
 | The committed checkpoint matches its published SHA-256 and size | a swapped or stale binary serving different weights than the numbers describe |
 | A fresh interpreter stays inside its build's memory budget (1024 MB CPU wheel / 3072 MB CUDA wheel) | a memory blow-up on a small container |
+| `scripts/verify_deploy.py` accepts a live instance (`tests/test_deploy.py`) | shipping a verifier that has never been run against a real deployment — and it has already earned its keep: pointed at a running instance it exposed a case-sensitive HTTP header lookup that would have reported a healthy app as broken |
 
 ### Step-by-step publish (owner action)
 
@@ -272,8 +273,21 @@ this is the exact path for the repository owner. Nothing in the repository needs
 
 ### Verifying the live app
 
-Run every line of this on the **deployed** URL, not locally. Each check names what failure it
-would catch.
+First, the part a machine can check. Point the verifier at the deployed URL:
+
+```bash
+python scripts/verify_deploy.py --url https://<app>.streamlit.app
+python scripts/verify_deploy.py --url https://<app>.streamlit.app --json   # for a pipeline
+```
+
+It exits non-zero on failure and confirms the host is up, that the thing answering is genuinely the
+Streamlit runtime, and that nothing is a 404 or a sleeping 503. It **does not** and cannot confirm
+that `app.py` ran: interaction in Streamlit travels over a websocket, so a script that raises on
+its first run still serves a green 200. That is why its report always carries an explicit
+`UNVERIFIED` row for the in-app inference rather than implying it — a passing report is not a
+verdict on the model, and the table below is what establishes that.
+
+Then run the browser checks. Each names the failure it would catch.
 
 | # | Do this | Pass looks like |
 | --- | --- | --- |
