@@ -126,6 +126,20 @@ HRSID subset is absent, so the suite runs on a clean machine; a skip is reported
 here", never as a pass. The current measured state is recorded in
 `reports/release_readiness.md`.
 
+### Verified from a clean clone
+
+Because a deployment is a fresh checkout, the suite was run against one — `git clone` into an
+empty directory, so no `results/`, no `datasets/processed/`, and no untracked file of any kind:
+
+```
+627 passed, 17 skipped
+```
+
+The 17 skips are the dataset- and GPU-gated checks, which is the intended behaviour: they say "not
+run here" rather than passing. The committed checkpoint is discovered with no configuration in
+that checkout, and the demo's CLI produces the same detections there as in the development tree
+(9 boxes on the same chip, same confidences). That is the condition a host actually runs in.
+
 ---
 
 ## 5. Hosted deployment (Streamlit Community Cloud)

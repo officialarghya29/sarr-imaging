@@ -23,7 +23,7 @@ Ryzen 7 8840HS with 30 GB RAM, Python 3.12, Ultralytics 8.4.x, PyTorch CPU build
 | **Recovery** | **Passed** | Checkpoint writing and restoration are covered by `tests/test_peft.py::test_the_save_time_merge_makes_a_loadable_graph_and_restores_the_adapters` and `::test_a_lora_arm_end_to_end_trains_adapters_and_writes_a_usable_checkpoint`; corrupt or incompatible checkpoints are refused rather than half-loaded (`tests/test_reliability.py`, `tests/test_init.py`). |
 | **Performance** | **Passed** | Parameters, FLOPs, latency, throughput, checkpoint size, and CPU peak memory are measured under a recorded protocol by `saryolo.evaluation.efficiency`; the measured values and their protocol are in [`reproduction_status.md`](reproduction_status.md) and `docs/assets/facts.json`. |
 | **Low-resource compatibility** | **Passed (CPU) / Untested (GPU)** | The minimum configuration is CPU-only and is what the suite and every pilot run use; no component requires a GPU (`saryolo` imports and runs without CUDA). GPU execution is untested here because no CUDA device is available. |
-| **Reproducibility** | **Passed** | Dependencies are declared in `requirements.txt`; the environment and the exact setup / train / eval / inference commands are documented in [`../README.md`](../README.md) and `docs/DATASETS.md`; generated figures are byte-stable across runs (fixed matplotlib hash salt, no timestamp); CI reproduces lint + test on a clean runner. |
+| **Reproducibility** | **Passed** | Dependencies are declared in `requirements.txt`; the environment and the exact setup / train / eval / inference commands are documented in [`../README.md`](../README.md) and `docs/DATASETS.md`; generated figures are byte-stable across runs (fixed matplotlib hash salt, no timestamp); CI reproduces lint + test on a clean runner. The suite was also run against a fresh `git clone` — no `results/`, no `datasets/`, no untracked file — giving **627 passed, 17 skipped** (the 17 are the dataset/GPU-gated checks, reported as "not run here"), and the demo's CLI produced identical detections there. |
 
 ## Application and deployment
 
@@ -32,7 +32,7 @@ actually executed on this machine and its result observed.
 
 | Stage | Status | Evidence |
 | --- | --- | --- |
-| Single-image inference pipeline | **Verified** | `saryolo/inference.py`; real detections from the SSAC-001 checkpoint on held-out HRSID chips, boxes inside the image at the stated threshold (`tests/test_inference.py`). |
+| Single-image inference pipeline | **Verified** | `saryolo/inference.py`; real detections from the SSAC-001 checkpoint on held-out HRSID chips, boxes inside the image at the stated threshold (`tests/test_inference.py`). Also verified from a clean `git clone` with no `results/` or `datasets/`, where the committed checkpoint is discovered with no configuration. |
 | Command-line entry point | **Verified** | `saryolo predict` prints and writes the same JSON a direct pipeline call produces (`tests/test_cli.py`). |
 | Streamlit application | **Verified locally** | `streamlit run app.py` starts, loads the checkpoint, and completes upload → Run Detection → display; the shown detections equal a direct pipeline call (`tests/test_app.py`). Startup, missing-checkpoint, unloadable-checkpoint, and unusable-upload paths are all covered. |
 | Model caching and resource control | **Verified** | The checkpoint is cached per `(path, mtime)` and reused for the session; uploads are size-, type-, and dimension-checked before a decode; the profiler records CPU peak RSS. |
