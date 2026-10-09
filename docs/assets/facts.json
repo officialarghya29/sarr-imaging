@@ -1138,7 +1138,7 @@
     }
   },
   "tests": {
-    "total": 590,
+    "total": 591,
     "by_file": {
       "tests/test_arch.py": 64,
       "tests/test_audit_docs.py": 37,
@@ -1162,7 +1162,7 @@
       "tests/test_metrics.py": 18,
       "tests/test_peft.py": 32,
       "tests/test_probes.py": 23,
-      "tests/test_repo.py": 43,
+      "tests/test_repo.py": 44,
       "tests/test_rtdetr_arm.py": 6,
       "tests/test_ssac.py": 46,
       "tests/test_tables.py": 14,

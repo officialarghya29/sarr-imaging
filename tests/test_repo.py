@@ -155,6 +155,44 @@ def test_working_files_never_name_an_ai_coding_tool():
     )
 
 
+def test_the_license_reserves_every_right_to_the_repository_owner():
+    """The repository is proprietary: all rights are the owner's, and the metadata agrees.
+
+    This is a legal and provenance claim in the same family as the authorship and AI-tool
+    guards above, so it is checked the same way -- mechanically, so it cannot drift back. A
+    permissive grant reappearing in ``LICENSE`` (or a badge, classifier or CFF field that still
+    says MIT) would silently give away rights the owner has reserved; the guard fails on the
+    grant itself, not merely on the file's name, so a reworded permissive license is caught too.
+    """
+    license_text = (REPO_ROOT / "LICENSE").read_text()
+    assert "Arghya Bose" in license_text, "the license does not name the rights holder"
+    assert "All rights reserved" in license_text, "the license does not reserve the rights"
+    # The licenses this repository previously carried must be gone, grants and all.
+    for grant in ("Permission is hereby granted, free of charge", "MIT License", "Apache License"):
+        assert grant not in license_text, (
+            f"LICENSE contains a permissive grant ({grant!r}); the project is proprietary"
+        )
+    # Every other place the license is stated must agree with the LICENSE file, so a partial
+    # change (the file edited, the classifiers forgotten) cannot pass as done.
+    readme = (REPO_ROOT / "README.md").read_text()
+    assert re.search(r"license-Proprietary", readme), "the README badge does not say Proprietary"
+    assert not re.search(r"license-MIT", readme), "the README badge still says MIT"
+    assert "all rights reserved" in readme.lower(), (
+        "the README License section does not state that the rights are reserved"
+    )
+    pyproject = (REPO_ROOT / "pyproject.toml").read_text()
+    assert re.search(r'license\s*=\s*\{\s*text\s*=\s*"Proprietary"', pyproject), (
+        "pyproject.toml does not declare the proprietary license"
+    )
+    assert "License :: Other/Proprietary License" in pyproject, (
+        "pyproject.toml still advertises an open-source license classifier"
+    )
+    citation = (REPO_ROOT / "CITATION.cff").read_text()
+    assert re.search(r"^license:\s*LicenseRef-Proprietary\s*$", citation, flags=re.MULTILINE), (
+        "CITATION.cff does not declare the proprietary license"
+    )
+
+
 def test_generated_model_yamls_match_the_builder():
     """The committed YAMLs must be exactly what the builder produces.
 

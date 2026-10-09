@@ -10,7 +10,7 @@ abstract: >-
   reproducible pipeline from dataset validation through ablation, robustness,
   efficiency, and cross-dataset generalization studies.
 type: software
-license: MIT
+license: LicenseRef-Proprietary
 authors:
   - family-names: Bose
     given-names: Arghya

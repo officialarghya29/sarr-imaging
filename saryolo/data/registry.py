@@ -10,7 +10,8 @@ iterate on a small dataset until the pipeline and modules are trustworthy, then
 scale to the large multi-class benchmark for the final numbers.
 
 Every entry records its licence and citation because none of these datasets may
-be redistributed by this repository — only the *code* is MIT licensed.
+be redistributed by this repository — only the *code*, which is the author's own
+work, is covered by this repository's proprietary license (see `LICENSE`).
 """
 
 from __future__ import annotations

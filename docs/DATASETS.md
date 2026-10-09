@@ -1,7 +1,8 @@
 # Datasets
 
-> **None of these datasets are redistributed by this repository.** Only the code
-> is MIT licensed. Obtain each dataset from its official source under its own
+> **None of these datasets are redistributed by this repository.** Only the code,
+> which is the author's own work, is covered by this repository's proprietary
+> license (`LICENSE`). Obtain each dataset from its official source under its own
 > terms, and cite the original paper in any publication.
 
 There is no widely used public dataset named "SARR". The pipeline is therefore

@@ -8,13 +8,13 @@ version = "0.1.0"
 description = "SAR-YOLO: speckle-aware feature representation for robust SAR object detection"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = { text = "Proprietary" }
 authors = [{ name = "Arghya Bose", email = "officialarghya29@gmail.com" }]
 keywords = ["SAR", "object detection", "YOLO", "speckle", "remote sensing"]
 classifiers = [
   "Programming Language :: Python :: 3",
   "Topic :: Scientific/Engineering :: Image Recognition",
-  "License :: OSI Approved :: MIT License",
+  "License :: Other/Proprietary License",
 ]
 dependencies = [
   "ultralytics>=8.3.0",

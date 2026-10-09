@@ -6,12 +6,12 @@
 <h4 align="center">SAR Acquisition-Robust Visual Optimization — a SAR-native object detector</h4>
 
 <p align="center">
-  <img alt="tests" src="https://img.shields.io/badge/tests-590_passing-22c55e">
+  <img alt="tests" src="https://img.shields.io/badge/tests-591_passing-22c55e">
   <img alt="fabricated results" src="https://img.shields.io/badge/fabricated_results-0-black">
   <img alt="architectures" src="https://img.shields.io/badge/architectures-110_wired-3b82f6">
   <img alt="experiments" src="https://img.shields.io/badge/experiments-134_configured-8b5cf6">
   <img alt="cost" src="https://img.shields.io/badge/SARVO--Lite-32.55_GFLOPs-0891b2">
-  <img alt="license" src="https://img.shields.io/badge/license-MIT-94a3b8">
+  <img alt="license" src="https://img.shields.io/badge/license-Proprietary-red">
 </p>
 
 ---
@@ -53,7 +53,7 @@ results.
 | **What this is** | A complete, reproducible research pipeline: dataset audit → baseline → components → ablations → removal tests → robustness → efficiency → cross-dataset → paper. |
 | **Architectures** | 110 variants wired; every one builds and runs a forward pass |
 | **Experiments** | 134 configured; each reproducible from a committed YAML |
-| **Tests** | 590 passing — no dataset download and no GPU needed |
+| **Tests** | 591 passing — no dataset download and no GPU needed |
 | **Proven** | The instrument: the baseline reproduces stock YOLO11 **exactly**, every custom module is an *exact* identity at initialisation and demonstrably not frozen, and the pipeline trains and evaluates on **real** SAR imagery. |
 | **Not yet proven** | Every accuracy number is a **pilot** on a subset. The ablation ladder, cross-sensor generalisation and the full-release benchmark are `TBD`; they need a GPU and the full datasets. |
 
@@ -361,7 +361,7 @@ Each row is an executable check, not a claim. The full list lives in `tests/`.
 git clone https://github.com/officialarghya29/sarr-imaging.git && cd sarr-imaging
 python -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt
 
-pytest tests/ -q                                          # 590 tests
+pytest tests/ -q                                          # 591 tests
 ```
 
 Train and evaluate on the real subset (no GPU required):
@@ -408,7 +408,7 @@ saryolo/
 configs/         datasets/ · models/ (110 generated) · exp/ (EXP-001…019 + ablations + frontier)
 docs/            physics-to-architecture proposals · method drafts · claim-to-evidence audit
 paper/           manuscript skeleton + generated tables + results draft
-tests/           590 checks; the instrument is tested as hard as the model
+tests/           591 checks; the instrument is tested as hard as the model
 ```
 
 ---
@@ -444,7 +444,10 @@ needs a GPU.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+**Proprietary — all rights reserved.** The code, model definitions, configs, documentation and
+figures are the property of Arghya Bose; see [LICENSE](LICENSE). Third-party datasets and
+software dependencies remain under their own terms (the project depends on Ultralytics YOLO,
+which is AGPL-3.0).
 
 ## Citation
 

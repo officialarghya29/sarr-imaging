@@ -1,28 +1,47 @@
-MIT License
+Proprietary License — All Rights Reserved
 
-Copyright (c) 2026 Arghya Bose
+Copyright (c) 2026 Arghya Bose. All rights reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+This repository — including its source code, model architectures and their
+definitions, configuration files, documentation, figures and tables, and any
+model weights created by the author (together, the "Work") — is the exclusive
+property of Arghya Bose (the "Author"). All intellectual property rights in
+the Work are reserved by the Author.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+No permission or license, express or implied, is granted to any person or
+entity to use, copy, reproduce, modify, adapt, translate, distribute, publish,
+sublicense, sell, or otherwise exploit the Work, in whole or in part, in any
+form or by any means, without the prior written permission of the Author. No
+rights are granted by implication, estoppel, or otherwise.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+For permission requests, contact the Author at the address recorded in
+`CITATION.cff` and `pyproject.toml`.
+
+THE WORK IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE WORK OR THE USE OR OTHER DEALINGS IN THE WORK.
 
 ---
 
-Third-party datasets used by this project (SSDD, HRSID, SARDet-100K,
-SAR-Ship-Dataset, and any others) are NOT covered by this license. They remain
-the property of their original authors and are subject to their own terms.
-See `docs/DATASETS.md` for attribution and citation requirements.
+Third-party components are not covered by this license
+
+This license covers only the Work authored by Arghya Bose. Third-party
+software and datasets remain under their own terms, and nothing in this file
+overrides them:
+
+* **Datasets.** The SAR datasets this project runs on (SSDD, HRSID,
+  SRSDD-v1.0, SAR-Ship-Dataset, SARDet-100K, and any others) are **not**
+  redistributed by this repository. They remain the property of their original
+  authors and are subject to their own terms; see `docs/DATASETS.md` for
+  attribution and citation requirements.
+* **Software dependencies.** Every dependency keeps its own license, and using
+  or distributing this repository means complying with each of them. One is
+  worth naming explicitly because it is copyleft: this project depends on
+  **Ultralytics YOLO, which is licensed AGPL-3.0** (verified against the
+  installed package metadata). The AGPL is a strong copyleft license and can
+  impose obligations on a combined or network-served work that incorporates
+  it. Meeting those obligations is the responsibility of anyone who distributes
+  or deploys the Work.
