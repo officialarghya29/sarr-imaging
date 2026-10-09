@@ -29,6 +29,7 @@ The properties pinned below are the ones that decide whether a cost number means
 from __future__ import annotations
 
 import dataclasses
+import math
 from pathlib import Path
 
 import pytest
@@ -397,3 +398,102 @@ def test_the_flop_counter_cannot_see_the_sparsity_and_says_so_by_being_no_lower(
             f"budget, not the executed kernel arithmetic"
         )
         assert sparse.get("flops_G_counter"), "a FLOP count without its counter cannot be read"
+
+
+# ========================================= allocation scope: how much *could* be saved
+# Sparsity here is a budget over ``tile x tile`` patches of a feature map, so what it can
+# remove is bounded by the input scale, not by anything the mechanism chooses. These tests
+# pin the routing arithmetic and its ceiling, because the honest answer to "how much would
+# this save?" is a range that depends on the input size -- and because a FLOP counter
+# provably cannot answer it here (see the test above).
+
+
+def test_the_routing_budget_controls_the_executed_fraction_monotonically():
+    """A larger budget must never execute less, and must actually change execution.
+
+    ``keep`` is the whole interface to the saving, so its effect has to be monotone and
+    visible: if tightening the budget did not reduce the executed fraction, the mechanism
+    would be a re-parameterisation with a knob that does nothing.
+    """
+    model = _build("ssac_sparse_n")
+    x = torch.rand(1, 3, 320, 320)
+    fractions = []
+    for keep in (0.1, 0.25, 0.5, 1.0):
+        override_ssac_execution(model, execution="sparse", keep=keep, tile=16)
+        row = ssac_routing(model, x)["levels"][0]
+        # The selection rule the block documents: at least one tile, then the ceiling of the
+        # budget times the tile count.
+        assert row["selected_tiles"] == max(1, math.ceil(keep * row["tiles"]))
+        fractions.append(row["executed_rich_fraction"])
+    assert fractions == sorted(fractions), (
+        f"the executed fraction is not monotone in the budget: {fractions}"
+    )
+    assert fractions[-1] == 1.0, "keep=1.0 must execute the whole expensive path"
+    assert fractions[0] < 1.0, "the tightest budget executed nothing less than the full path"
+
+
+def test_the_routing_is_a_deterministic_function_of_the_input():
+    """The same batch must route identically on a second pass.
+
+    The gather order is sorted on purpose so that a run is reproducible; an unsorted topk
+    would make the measured routing -- and therefore any timing taken on it -- depend on
+    tie-breaking that varies between calls.
+    """
+    model = _build("ssac_sparse_n")
+    x = torch.rand(1, 3, 320, 320)
+    assert ssac_routing(model, x) == ssac_routing(model, x), (
+        "the same input routed differently on a second forward pass"
+    )
+
+
+def test_the_reported_executed_fraction_is_the_tile_arithmetic_it_claims():
+    """The number the ledger stores must be reproducible from tiles, halo and tile size.
+
+    ``executed_rich_fraction`` is documented as ``k/nTiles * ((tile + 2*halo)/tile)^2``. If
+    that were only approximately what the block does, the table would quote one quantity and
+    the graph would perform another. Recomputing it here from the reported tiles keeps the
+    formula and the code tied together.
+    """
+    model = _build("ssac_sparse_n")
+    override_ssac_execution(model, execution="sparse", keep=0.25, tile=16)
+    report = ssac_routing(model, torch.rand(1, 3, 320, 320))
+    for row in report["levels"]:
+        span = (16 + 2 * row["halo"]) / 16
+        expected = min(1.0, row["selected_tiles"] / row["tiles"] * span * span)
+        assert abs(row["executed_rich_fraction"] - round(expected, 4)) < 5e-5, (
+            f"reported {row['executed_rich_fraction']} of the expensive path executed, but the "
+            f"tile, halo and selection imply {expected:.4f}"
+        )
+
+
+def test_the_sparsity_ceiling_is_set_by_input_scale_not_by_the_mechanism():
+    """At 320 px the deepest level is one tile, so no budget can reduce its work.
+
+    This is the honest boundary on the efficiency claim, and it is why the measured sweep
+    reports no decisive wall-clock saving: of the three levels the mechanism governs, the
+    deepest (smallest feature map) is a single 16 px tile at this project's 320 px input, and
+    the other two are few tiles each. The test shows the boundary *moves with the input*: at
+    640 px the deepest level splits into four tiles and can finally be spared. A saving claim
+    from this mechanism must therefore always name the input size it was measured at.
+    """
+    model = _build("ssac_sparse_n")
+    override_ssac_execution(model, execution="sparse", keep=0.25, tile=16)
+
+    small = ssac_routing(model, torch.rand(1, 3, 320, 320))["levels"]
+    large = ssac_routing(model, torch.rand(1, 3, 640, 640))["levels"]
+
+    # The deepest governed level: one tile at 320 (cannot be skipped), four at 640 (can be).
+    assert small[-1]["tiles"] == 1 and small[-1]["executed_rich_fraction"] == 1.0, (
+        "at 320 px the deepest level was expected to be a single, unsparable tile"
+    )
+    assert large[-1]["tiles"] == 4 and large[-1]["executed_rich_fraction"] < 1.0, (
+        "at 640 px the deepest level has four tiles and should be sparing-able"
+    )
+    # The opportunity grows with input area -- a property of the resolution, not a knob.
+    assert sum(r["tiles"] for r in large) > sum(r["tiles"] for r in small), (
+        "a larger input did not offer more tiles to route, so the ceiling is not scale-dependent"
+    )
+    # Every level with more than one tile must actually be reduced at a sub-unity budget.
+    for row in large:
+        if row["tiles"] > 1:
+            assert row["executed_rich_fraction"] < 1.0

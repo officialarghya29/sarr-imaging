@@ -764,7 +764,52 @@ README_COUNT_CLAIMS: tuple[tuple[str, str], ...] = (
     (r"\| \*\*Experiments\*\* \| (\d+) configured", "experiments"),
     (r"\| \*\*Tests\*\* \| (\d+) passing", "tests"),
     (r"# (\d+) tests$", "tests"),
+    # The badge, the evidence table and the repo map restate the same three numbers in
+    # different words, and they used to be aligned by hand. That is how a count gets
+    # corrected in the Status table and left stale in the badge -- which is the copy a
+    # browser renders first, above the fold, before any prose. Every place the README
+    # states a count is now a claim the suite checks, so the correction cannot be partial.
+    (r"badge/tests-(\d+)_passing", "tests"),
+    (r"badge/architectures-(\d+)_wired", "variants"),
+    (r"badge/experiments-(\d+)_configured", "experiments"),
+    (r"arch \((\d+) variants\)", "variants"),
+    (r"(\d+) checks; the instrument", "tests"),
+    (r"\*\*All (\d+) architectures construct", "variants"),
+    (r"pass \((\d+) variants\)", "variants"),
 )
+
+#: Counts stated in the *live* claim documents (the README is covered above; everything here
+#: is a current statement, not a historical one). ``docs/PROGRESS.md`` is deliberately absent:
+#: it is a dated narrative, so a count in it records what was true when the entry was written
+#: and must not be rewritten as the suite grows. Each tuple is
+#: ``(document, regex, what the number must equal)`` and the target may be a repository count
+#: or a per-file test count, e.g. ``tests/test_ssac.py``.
+DOC_COUNT_CLAIMS: tuple[tuple[str, str, str], ...] = (
+    ("reports/reproduction_status.md", r"\*\*(\d+) passed\*\*", "tests"),
+    ("reports/reproduction_status.md", r"(\d+) variants pass", "variants"),
+    ("reports/reproduction_status.md",
+     r"`pytest tests/test_efficiency\.py` \| (\d+) passed", "tests/test_efficiency.py"),
+    ("docs/claim_evidence_audit.md", r"`pytest -q` → (\d+) passed", "tests"),
+    ("docs/claim_evidence_audit.md", r"(\d+) variants; `tests/test_arch\.py`", "variants"),
+    ("docs/claim_evidence_audit.md", r"`tests/test_arch\.py` \((\d+) tests\)", "tests/test_arch.py"),
+    ("docs/claim_evidence_audit.md",
+     r"`tests/test_cfar_frontend\.py` \((\d+) tests\)", "tests/test_cfar_frontend.py"),
+    ("docs/claim_evidence_audit.md", r"`tests/test_ssac\.py` \((\d+) tests\)", "tests/test_ssac.py"),
+    ("docs/ssac_design.md", r"`tests/test_ssac\.py` \((\d+) tests\)", "tests/test_ssac.py"),
+)
+
+
+def _collected_test_items() -> list[str]:
+    """Every collected test item as ``tests/file.py::test_name``, in collection order."""
+    import subprocess
+    import sys
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q"],
+        cwd=REPO_ROOT, capture_output=True, text=True,
+    )
+    assert proc.returncode == 0, f"pytest could not collect the suite:\n{proc.stderr}"
+    return [ln for ln in proc.stdout.splitlines() if "::" in ln]
 
 
 def _collected_test_count() -> int:
@@ -776,16 +821,20 @@ def _collected_test_count() -> int:
     the direction that matters -- it would call the README correct while the suite grew.
     This is the same measurement ``scripts/make_readme_assets.py`` makes.
     """
-    import subprocess
-    import sys
+    return len(_collected_test_items())
 
-    proc = subprocess.run(
-        [sys.executable, "-m", "pytest", "--collect-only", "-q"],
-        cwd=REPO_ROOT, capture_output=True, text=True,
-    )
-    assert proc.returncode == 0, f"pytest could not collect the suite:\n{proc.stderr}"
-    lines = [ln for ln in proc.stdout.splitlines() if "::" in ln or ln.endswith(".py")]
-    return len(lines)
+
+def _collected_test_count_per_file() -> dict[str, int]:
+    """Collected item count keyed by repo-relative test path, e.g. ``tests/test_ssac.py``.
+
+    Several claim documents cite a per-file count (``tests/test_ssac.py`` (46 tests)), which
+    is a stronger claim than the total: it says how much of the suite guards *that* module.
+    It is measured the same way -- by collection -- so a new ``parametrize`` case in one file
+    moves that file's number and the guard fires even while the total is unchanged.
+    """
+    from collections import Counter
+
+    return dict(Counter(item.split("::", 1)[0].strip() for item in _collected_test_items()))
 
 
 def _measured_counts() -> dict[str, int]:
@@ -807,14 +856,75 @@ def test_readme_counts_match_the_repository():
     measured = _measured_counts()
     problems = []
     for pattern, key in README_COUNT_CLAIMS:
-        for found in re.findall(pattern, readme, flags=re.MULTILINE):
-            if int(found) != measured[key]:
-                problems.append(f"{pattern!r} says {found}, actual {key} is {measured[key]}")
+        found = re.findall(pattern, readme, flags=re.MULTILINE)
+        # A pattern that matches nothing would pass silently while the sentence it was meant
+        # to check was reworded -- which is exactly how an unguarded count survives a rewrite.
+        assert found, (
+            f"README pattern {pattern!r} matched nothing; a stated count was reworded out "
+            "of the guard rather than updated, so this claim is no longer checked"
+        )
+        for value in found:
+            if int(value) != measured[key]:
+                problems.append(f"{pattern!r} says {value}, actual {key} is {measured[key]}")
     assert not problems, (
         "README counts have drifted from the repository:\n  "
         + "\n  ".join(problems)
         + "\nUpdate the README so its stated counts match. This fires whenever the suite "
         "grows, which is the intended coupling: a stated number is a claim about the repo."
+    )
+
+
+def test_document_counts_match_the_collection():
+    """Every count in a *live* claim document must equal what pytest collects now.
+
+    The README guard covers one file; the counts a reviewer is most likely to trust are
+    scattered across the results-of-record and the claim audit, which cite both repository
+    totals and per-file test counts. Those were hand-maintained and unguarded: adding a test
+    to ``tests/test_ssac.py`` moved its real count while ``docs/claim_evidence_audit.md`` and
+    ``docs/ssac_design.md`` went on quoting the old one. This makes each stated number a
+    claim against the current collection, per file where a file is named.
+
+    Only current statements are checked. ``docs/PROGRESS.md`` is a dated narrative and is
+    deliberately excluded -- a count there records what was true at that entry and rewriting
+    it would falsify the history the file exists to preserve.
+    """
+    import re
+
+    measured = {**_measured_counts(), **_collected_test_count_per_file()}
+    problems = []
+    for document, pattern, key in DOC_COUNT_CLAIMS:
+        text = (REPO_ROOT / document).read_text()
+        found = re.findall(pattern, text, flags=re.MULTILINE)
+        assert found, (
+            f"{document}: pattern {pattern!r} matched nothing, so this stated count is not "
+            "being checked -- update the pattern or the sentence, not the guard"
+        )
+        assert key in measured, f"unknown claim target {key!r}; the guard cannot measure it"
+        for value in found:
+            if int(value) != measured[key]:
+                problems.append(f"{document}: {pattern!r} says {value}, actual {key} is {measured[key]}")
+    assert not problems, (
+        "stated counts in the claim documents have drifted from the collection:\n  "
+        + "\n  ".join(problems)
+        + "\nUpdate each document so its stated counts match; a stale count is a small lie "
+        "sitting next to the large claim it is meant to support."
+    )
+
+
+def test_the_document_count_guard_is_not_vacuous():
+    """The per-file measurement must be real, and the excluded narrative must stay excluded."""
+    per_file = _collected_test_count_per_file()
+    assert per_file, "per-file collection returned nothing; the guard would pass vacuously"
+    # The documents that cite per-file counts must be among the files actually collected.
+    cited = {
+        key for _doc, _pattern, key in DOC_COUNT_CLAIMS if key.startswith("tests/")
+    }
+    assert cited, "no per-file claim is checked"
+    missing = sorted(name for name in cited if name not in per_file)
+    assert not missing, f"claim documents cite test files that are not collected: {missing}"
+    # The historical narrative must not be pulled in: it would force a rewrite of its counts.
+    assert all(doc != "docs/PROGRESS.md" for doc, _p, _k in DOC_COUNT_CLAIMS), (
+        "docs/PROGRESS.md is a dated narrative; its counts must not be treated as live claims"
     )
 
 
@@ -903,3 +1013,133 @@ def test_the_config_generator_is_idempotent_and_prunes():
     )
     # The hand-written pipeline smoke configs are not owned by the generator.
     assert (EXP_DIR / "_smoke_v2.yaml").exists()
+
+
+# ---------------------------------------------------- chart layout as the pilot grows
+def _synthetic_real_arms_facts(n_arms: int) -> dict:
+    """Facts for ``chart_real_arms`` with ``n_arms`` arms carrying a full cost label.
+
+    Each synthetic row has the same fields a measured arm does -- id, model, params, GFLOPs,
+    batch size and FPS -- so the x tick label has the width the envelope guard is meant to
+    bound. A shorter label would make the guard easier to pass than the real chart.
+    """
+    return {
+        "real": {
+            f"X-{i:03d}": {
+                "model": "prototype_rs_cfar",
+                "mAP50": 0.56,
+                "mAP50_95": 0.30,
+                "params_M": 3.40,
+                "flops_G": 2.00,
+                "imgsz": 320,
+                "fps": 47.0,
+            }
+            for i in range(n_arms)
+        },
+        "real_subset": {"splits": {"train": 200, "val": 60, "test": 60}},
+    }
+
+
+def _chart_problems(chart_name: str, facts: dict, min_overlap: float = 0.30) -> list[str]:
+    """Run the repository's own chart linter on one chart and return its problems."""
+    import sys
+
+    sys.path.insert(0, str(REPO_ROOT / "scripts"))
+    import check_chart_layout as C
+
+    return C.check(getattr(C.M, chart_name), facts, min_overlap)
+
+
+@pytest.mark.parametrize("n_arms", [1, 8, 12, 16, 20, 24, 40, 80])
+def test_the_real_arms_chart_stays_inside_the_layout_envelope_as_it_grows(n_arms):
+    """The pilot-arm figure must not run away as rows are added.
+
+    The width once grew with the arm count (``max(15.0, 2.0 * n)``), so at sixteen arms the
+    canvas reached 32 in and the tick labels left the 26 in envelope the layout checker
+    enforces -- a chart that renders far wider than the README column and reads as noise.
+    The generator now caps the per-arm width; this renders the figure at a range of arm
+    counts and asserts the *text* stays inside the envelope the checker measures, which is
+    the property the cap exists to guarantee and the one that regressed silently before.
+
+    Only the envelope is asserted here (not collisions): readability at a given arm count is
+    a separate, deliberately coupled property, checked just below.
+    """
+    problems = _chart_problems("chart_real_arms", _synthetic_real_arms_facts(n_arms))
+    runaway = [p for p in problems if "extends beyond" in p]
+    assert not runaway, (
+        f"with {n_arms} arms the real-arms chart's text leaves the layout envelope, so the "
+        f"figure is growing without bound instead of fitting: {runaway[:3]}"
+    )
+
+
+def test_the_real_arms_chart_keeps_label_headroom_before_the_ticks_collide():
+    """The pilot figure must stay readable for several more arms than it currently has.
+
+    Capping the width fixes runaway growth but not readability: past a certain arm count the
+    x tick labels overlap even though the canvas is bounded. The committed figure has sixteen
+    arms; this walks the count upward and asserts at least four more fit without a collision,
+    so the chart is redesigned when the pilot grows rather than when a reviewer notices the
+    labels on top of one another. Fires only when the label capacity itself shrinks.
+    """
+    import json
+
+    facts = json.loads((REPO_ROOT / "docs" / "assets" / "facts.json").read_text())
+    current = max(len(facts.get("real", {})), 1)
+
+    headroom = 0
+    for extra in range(1, 12):
+        problems = _chart_problems("chart_real_arms", _synthetic_real_arms_facts(current + extra))
+        if any("text overlap" in p for p in problems):
+            break
+        headroom = extra
+    assert headroom >= 4, (
+        f"the real-arms chart holds only {headroom} more arms (currently {current}) before its "
+        "tick labels collide; thin or rotate the labels before the pilot table grows again"
+    )
+
+
+def test_the_measured_sweep_can_only_spare_levels_with_more_than_one_tile():
+    """Why the sparse sweep reports no decisive saving is a fact the ledger can prove.
+
+    Sparsity is a budget over *tiles*, so a level whose feature map fits in a single tile can
+    never be spared: its executed fraction is 1.0 at every keep. At the 320 px this project
+    trains and times at, the deepest of the three mechanism levels is exactly that -- one
+    tile -- and the other two are 9 and 4 tiles. The measured sweep must show the boundary:
+    the last level unchanged at 1.0 for every budget, and selected tiles falling as the budget
+    tightens. This is the honest ceiling on the wall-clock story, and it is checked against
+    the measurement rather than restated in prose.
+    """
+    import json
+
+    facts = json.loads((REPO_ROOT / "docs" / "assets" / "facts.json").read_text())
+    runs = facts.get("ssac_execution") or {}
+    assert runs, (
+        "facts.json carries no dense/sparse sweep, so the scope of the result cannot be "
+        "checked; run `python scripts/make_readme_assets.py` where the profiles exist"
+    )
+    data = next(iter(runs.values()))
+    for value in data["dense"]["executed_rich_fraction"]:
+        assert value == 1.0, "dense execution executes the whole expensive path by construction"
+    previous = None
+    for row in data["sparse"]:
+        tiles, fraction = row["tiles"], row["executed_rich_fraction"]
+        assert len(tiles) == len(fraction) >= 3
+        # A one-tile level cannot be spared, whatever the budget.
+        for n_tiles, executed in zip(tiles, fraction, strict=True):
+            if n_tiles == 1:
+                assert executed == 1.0, (
+                    f"a single-tile level reports {executed} of its expensive path executed at "
+                    f"keep={row['keep']}, but a lone tile cannot be skipped"
+                )
+        assert tiles[-1] == 1, (
+            f"at this input scale the deepest level was expected to be a single tile, found "
+            f"{tiles[-1]}; if the scale changed, the 'no saving at 320 px' reading must be revisited"
+        )
+        # The budget must actually reduce work as it tightens, monotonically.
+        selected = sum(row["selected_tiles"])
+        if previous is not None:
+            assert selected <= previous, (
+                f"keep={row['keep']} selects {selected} tiles, more than the larger budget before "
+                f"it ({previous})"
+            )
+        previous = selected
