@@ -162,18 +162,56 @@ inference run:
 | **Peak process RSS (high-water)** | **446 MB** |
 | Warm single-image latency, CPU, 640 px | ~70 ms; the first call of a session includes warm-up (~0.9 s cold here) |
 
+### What the envelope is, and what it is not
+
+The measured figure for the demo is **~451 MB** of peak RSS on the CPU-only PyTorch wheel
+(`torch 2.14.0+cpu`), for the workload tabulated above. The model contributes ~25 MB of that; the
+rest is importing the framework and the web stack. Two corrections are worth recording, because
+both came from measurement rather than from reasoning:
+
+* **A peak belongs to a process, and it must be the measured one.** The first version of this
+  measurement read `getrusage().ru_maxrss`, which is carried across `execve` — so a child forked
+  from a large parent inherits the parent's high-water mark. The same trivial child reported **11 MB**
+  from a small parent and **911 MB** from one holding 900 MB, which means the first published
+  envelope described the *measuring* process, not the demo. The measurement now reads `VmHWM` from
+  `/proc/self/status`, which is per-address-space and is reset when `execve` installs the new image,
+  and `tests/test_deploy.py` pins the difference with a two-sided check.
+* **The wheel matters more than the model.** A host that installs from `requirements.txt` on Linux
+  resolves `torch` to the **CUDA-enabled** wheel, and pulling the CUDA libraries into a CPU-only
+  container buys nothing. That wheel is **not installed on this development host**, so its envelope
+  is *stated as a requirement* rather than measured here, and it is CI — which does install it —
+  that enforces the ceiling.
+
+If the host has no GPU, install the CPU wheel instead:
+
+```text
+# pip install, CPU-only host
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+```
+
+`requirements.txt` is deliberately left as the general-purpose training environment (it must serve
+a GPU host too), so this is a deployment instruction rather than a repository-wide pin.
+
 Two caveats, stated rather than implied: the dominant term is the *import* of the deep-learning
 stack, not the model, so the figure moves with the library version; and this was measured on the
 16-core CPU host above rather than inside a hosted container, so it is an envelope and not a
 platform guarantee.
 
-**The budget this repository requires is 1536 MB of peak RSS for one session**, leaving the
-measured figure roughly 3× of headroom for a second concurrent session's image buffers. That
-number is not decorative: `tests/test_deploy.py` re-measures the envelope in a *fresh interpreter*
-and fails if it crosses it, and it currently reports ~452 MB — agreeing with the 446 MB above,
-which was measured the same way but with a decoded HRSID chip instead of a synthetic one. The
-hosting platform's own limit is not something this repository can verify, so the guide states the
-requirement it can hold itself to instead of quoting a specification it has not tested against.
+**The budgets this repository requires for one session are 1024 MB on a CPU-only wheel and
+3072 MB on a CUDA-enabled wheel.** The first is about 2.3× the measured 451 MB, leaving room for a
+second session's image buffers. The second is a *requirement, not a measurement*, and is
+deliberately generous precisely because the wheel it covers cannot be installed here.
+
+Both are enforced: `tests/test_deploy.py` measures the envelope in a fresh interpreter, keys the
+budget by the build it reports, and exercises both boundaries — including the one whose wheel this
+repository cannot install. Stating both here is not decoration. Enforcing a number the guide does
+not mention is how the first version of this budget ended up wrong for the wheel a host actually
+installs, and CI caught that rather than a reader.
+
+The hosting platform's own limit is still not something this repository can verify, so the guide
+states the requirement it can hold itself to instead of quoting a specification it has not tested
+against.
 
 The model is cached with `st.cache_resource` keyed on the checkpoint's modification time, so
 weights are loaded once per session and a re-trained file is picked up rather than served stale.
@@ -206,7 +244,7 @@ contract is enforced by the test suite rather than by a deploy workflow:
 | The config's upload limit equals `MAX_UPLOAD_BYTES` | the app advertising a limit it does not enforce |
 | `runtime.txt` satisfies the declared Python floor | an incompatible runtime pinned for the host |
 | The committed checkpoint matches its published SHA-256 and size | a swapped or stale binary serving different weights than the numbers describe |
-| A fresh interpreter stays inside the 1536 MB budget | a memory blow-up on a small container |
+| A fresh interpreter stays inside its build's memory budget (1024 MB CPU wheel / 3072 MB CUDA wheel) | a memory blow-up on a small container |
 
 ### Step-by-step publish (owner action)
 
