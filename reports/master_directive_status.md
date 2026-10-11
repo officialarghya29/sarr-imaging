@@ -49,7 +49,7 @@ the registry:
 | --- | --- | --- |
 | Architecture variants wired | 110 | `saryolo.nn.arch.VARIANTS` (`tests/test_repo.py`) |
 | Experiment configs | 134 | `saryolo.training.config.list_experiments` |
-| Tests | **655 tests** | `pytest --collect-only -q` (`tests/test_repo.py`) |
+| Tests | **668 tests** | `pytest --collect-only -q` (`tests/test_repo.py`) |
 | Datasets on disk | HRSID subset, 200 / 60 / 60, one class (`ship`) | `docs/assets/facts.json` → `real_subset` |
 
 **The architecture ladder.** Every module is an **exact identity at initialisation** and is
@@ -199,5 +199,5 @@ as an explicit gap rather than omitted.
 | Deployment | `docs/DEPLOYMENT.md`; `tests/test_deploy.py` |
 | Counts (variants / experiments / tests) | `tests/test_repo.py` guards; `docs/assets/facts.json` |
 
-This report adds no number of its own; the one count it states — **655 tests** — is the
+This report adds no number of its own; the one count it states — **668 tests** — is the
 same one the suite's own count guards check.

@@ -36,8 +36,12 @@ def class_compatibility(source_yaml: str | Path, target_yaml: str | Path) -> dic
 
     Returns:
         Dict with ``compatible``, ``shared``, ``source_only`` and ``target_only``
-        class lists. ``compatible`` requires the source classes to be a subset of
-        the target classes, since evaluation is scored on target ground truth.
+        class lists. ``compatible`` means the two label spaces **share at least one class**,
+        which is the minimum for a score to mean anything. It is deliberately *not* a subset
+        test: evaluation is scored on the target ground truth, so a source class that does not
+        appear in the target simply never enters the score. The stricter risk -- a target class
+        the model cannot possibly predict -- is the separate ``target_only`` condition that
+        :func:`cross_dataset_eval` enforces.
     """
     src, tgt = _names(source_yaml), _names(target_yaml)
     shared = sorted(set(src) & set(tgt))
@@ -98,6 +102,12 @@ def cross_dataset_eval(
     metrics = evaluate_detections(weights, target_data_yaml, imgsz=imgsz, device=device, out_dir=out_dir)
     metrics["compatibility"] = compatibility
     metrics["domain_shift"] = True
+    # Create the directory here rather than inherit it from the evaluator. In the current path
+    # ``evaluate_detections`` happens to create it (Ultralytics' ``project=`` does), so this was
+    # never reached; but every other writer in this repository creates its own output directory,
+    # and relying on a callee's side effect makes this function fail at its very last step --
+    # after a full evaluation -- the moment that callee changes. A no-op when the directory exists.
+    out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "cross_dataset.json").write_text(json.dumps(metrics, indent=2, default=float))
     return metrics
 

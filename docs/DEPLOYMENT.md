@@ -132,7 +132,7 @@ Because a deployment is a fresh checkout, the suite was run against one — `git
 empty directory, so no `results/`, no `datasets/processed/`, and no untracked file of any kind:
 
 ```
-638 passed, 17 skipped
+651 passed, 17 skipped
 ```
 
 The 17 skips are the dataset- and GPU-gated checks, which is the intended behaviour: they say "not

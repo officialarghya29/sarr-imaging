@@ -30,7 +30,8 @@ def read_official_split(path: str | Path) -> dict[str, list[str]]:
     """Read an official split file, inferring which split each entry belongs to.
 
     Accepts either a directory containing ``train.txt``/``val.txt``/``test.txt``,
-    or a single file (in which case the split name is taken from its file name).
+    or a single file, whose name must itself be one of ``train``/``val``/``test``
+    (``valid``/``validation`` are normalised to ``val``).
     """
     path = Path(path)
     out: dict[str, list[str]] = {}
@@ -43,6 +44,17 @@ def read_official_split(path: str | Path) -> dict[str, list[str]]:
     else:
         name = path.stem.lower()
         name = {"valid": "val", "validation": "val"}.get(name, name)
+        if name not in ("train", "val", "test"):
+            # The directory branch above refuses an unrecognised name by filtering to the three
+            # splits the rest of the pipeline knows. A single file used to be accepted under
+            # *any* name, so a wrong file (say ``splits.txt``) was returned as ``{"splits": ...}``
+            # -- a split no consumer reads -- instead of being refused. Aligned with the branch
+            # above: an unknown name is an error, not a new split.
+            raise FileNotFoundError(
+                f"{path} does not name a split: a single split file must be train/val/test (or "
+                f"valid), got {name!r}. Pass a directory holding the split lists if the file "
+                "names are not split names."
+            )
         out[name] = [line.strip() for line in path.read_text().split() if line.strip()]
     if not out:
         raise FileNotFoundError(f"No usable split lists found at {path}")
