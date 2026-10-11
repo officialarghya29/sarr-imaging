@@ -1289,7 +1289,7 @@
     }
   },
   "tests": {
-    "total": 644,
+    "total": 647,
     "by_file": {
       "tests/test_app.py": 6,
       "tests/test_arch.py": 64,
@@ -1301,11 +1301,11 @@
       "tests/test_conditioning.py": 9,
       "tests/test_conditioning_smoke.py": 6,
       "tests/test_data.py": 24,
-      "tests/test_deploy.py": 13,
+      "tests/test_deploy.py": 14,
       "tests/test_docs.py": 29,
-      "tests/test_efficiency.py": 29,
+      "tests/test_efficiency.py": 30,
       "tests/test_efficiency_frontier.py": 16,
-      "tests/test_efficiency_real.py": 10,
+      "tests/test_efficiency_real.py": 11,
       "tests/test_field_mask.py": 9,
       "tests/test_groups.py": 36,
       "tests/test_hard_examples.py": 20,

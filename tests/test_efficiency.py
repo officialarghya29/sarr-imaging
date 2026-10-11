@@ -30,6 +30,10 @@ from __future__ import annotations
 
 import dataclasses
 import math
+import os
+import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -599,3 +603,110 @@ def test_the_budget_spares_exactly_the_levels_that_offer_more_than_one_tile():
         assert series[-1] == 1.0, f"level {level} did not execute the whole path at keep=1.0"
     # Every governed level is routable at 640 px, so the tightest budget must reduce all three.
     assert all(series[0] < 1.0 for series in per_level.values()), per_level
+
+
+# ==================================== peak RSS: the process measured, not the parent that forked it
+# The profiler records ``latency_peak_rss_mb`` beside every latency row, so a figure that actually
+# belongs to the process on the *other* side of a fork would put the wrong number in a cost table
+# under this process's name. ``tests/test_deploy.py`` already pins this distinction for the
+# deployment envelope; the same primitive is checked here for the profiler itself, on the real
+# ``peak_rss_mb``, in a child light enough that a parent's ballast stands out clearly.
+
+#: Loads ``saryolo/evaluation/efficiency.py`` *by path* -- so importing it does not drag in the
+#: deep-learning stack, which would raise the child's own footprint above the parent's ballast and
+#: hide the inheritance under test -- then reports the peak via ``peak_rss_mb`` together with the
+#: two raw primitives for comparison. ``sys.argv[1]`` is the module path passed by the wrapper.
+_LIGHT_PEAK_SCRIPT = r'''
+import importlib.util, resource, sys
+
+spec = importlib.util.spec_from_file_location("efficiency_standalone", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+print("PEAK_MB=%.2f" % module.peak_rss_mb())
+print("RU_MAXRSS_MB=%.2f" % (resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0))
+try:
+    with open("/proc/self/status") as handle:
+        for line in handle:
+            if line.startswith("VmHWM:"):
+                print("VMHWM_MB=%.2f" % (float(line.split()[1]) / 1024.0))
+except OSError:
+    pass
+'''
+
+#: Allocates a known amount of memory in its *own* process, then forks the light child, so the
+#: parent's size is varied deterministically rather than depending on how large pytest happens to
+#: be when the check runs. The child source travels through the environment to avoid quoting a
+#: script inside a script.
+_SPAWN_LIGHT_PEAK_SCRIPT = r'''
+import os, subprocess, sys
+
+ballast_mb = int(os.environ.get("BALLAST_MB", "0"))
+if ballast_mb:
+    ballast = bytearray(ballast_mb * 1024 * 1024)
+    for index in range(0, len(ballast), 4096):  # touch every page, so it is really resident
+        ballast[index] = 1
+child = subprocess.run(
+    [sys.executable, "-c", os.environ["CHILD_SCRIPT"], os.environ["EFFICIENCY_PATH"]],
+    capture_output=True, text=True, check=True,
+)
+sys.stdout.write(child.stdout)
+'''
+
+
+def _reported_light_peak(ballast_mb: int) -> dict[str, float]:
+    """Run the light peak reader from a parent holding ``ballast_mb`` MB, reporting every primitive."""
+    proc = subprocess.run(
+        [sys.executable, "-c", _SPAWN_LIGHT_PEAK_SCRIPT],
+        capture_output=True, text=True, timeout=180,
+        env={
+            **os.environ,
+            "BALLAST_MB": str(ballast_mb),
+            "CHILD_SCRIPT": _LIGHT_PEAK_SCRIPT,
+            "EFFICIENCY_PATH": str(REPO_ROOT / "saryolo" / "evaluation" / "efficiency.py"),
+        },
+    )
+    assert proc.returncode == 0, f"the measuring harness failed:\n{proc.stderr[-1000:]}"
+    found = dict(re.findall(r"(PEAK_MB|RU_MAXRSS_MB|VMHWM_MB)=([\d.]+)", proc.stdout))
+    assert {"PEAK_MB", "RU_MAXRSS_MB"} <= set(found), (
+        "the harness did not report both primitives, so the comparison would be vacuous:\n"
+        + proc.stdout
+    )
+    return {key: float(value) for key, value in found.items()}
+
+
+def test_the_peak_memory_helper_reports_this_process_not_the_parent_that_forked_it():
+    """``peak_rss_mb`` must describe the process that ran, not the one that forked it.
+
+    This was a real defect: the helper read ``ru_maxrss``, which lives in the task struct and
+    survives ``execve``, so a child forked from a large parent inherits the parent's high-water
+    mark. Measured directly, the same light child reported ~213 MB from a small parent and
+    ~411 MB from one holding 400 MB -- so the ``latency_peak_rss_mb`` a worker profile published
+    was the *parent's* footprint under the worker's name. The fix prefers ``VmHWM``, which is
+    per-address-space and reset by ``execve``.
+
+    The assertion is two-sided on purpose: the reported peak must agree across parents of
+    different sizes, *and* the rejected primitive must visibly disagree -- otherwise the check
+    could pass by measuring a value that never inherited in the first place.
+    """
+    small = _reported_light_peak(0)
+    large = _reported_light_peak(400)
+
+    drift = abs(large["PEAK_MB"] - small["PEAK_MB"])
+    assert drift < 64.0, (
+        f"the reported peak moved with the parent's size ({small['PEAK_MB']:.0f} MB -> "
+        f"{large['PEAK_MB']:.0f} MB); the helper is reporting the parent, not the child"
+    )
+    inherited = large["RU_MAXRSS_MB"] - small["RU_MAXRSS_MB"]
+    assert inherited > 200.0, (
+        f"`ru_maxrss` did not inherit the parent's 400 MB footprint as expected "
+        f"({small['RU_MAXRSS_MB']:.0f} MB -> {large['RU_MAXRSS_MB']:.0f} MB), so the check above "
+        "proves nothing about parent-independence"
+    )
+    # Where the OS exposes VmHWM, the reported value must *be* it, not merely agree with a peer.
+    if "VMHWM_MB" in small:
+        for row in (small, large):
+            assert row["PEAK_MB"] == pytest.approx(row["VMHWM_MB"], abs=4.0), (
+                f"peak_rss_mb reported {row['PEAK_MB']} MB but VmHWM is {row['VMHWM_MB']} MB; "
+                "the helper is not reading the parent-independent primitive"
+            )

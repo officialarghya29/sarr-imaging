@@ -9,8 +9,9 @@ the preprocessing, or the box rendering. That is deliberate -- a demo that built
 inference could display boxes the model never produced, and no test would see it. Everything
 numeric or geometric shown here comes from the pipeline function that the test suite exercises.
 
-Weights are **not** committed (they are a training artefact and the repository keeps them out of
-git). Point the sidebar at a checkpoint, or set ``SARVO_WEIGHTS``. With no checkpoint the app
+The repository commits **one** checkpoint -- ``weights/sarvo_ssac001.pt`` -- so a hosted instance
+has weights with no configuration; every other training artefact stays out of git. Point the
+sidebar at a different checkpoint, or set ``SARVO_WEIGHTS``. With no checkpoint at all the app
 says so and offers no detection, rather than showing predictions from an untrained model.
 """
 
@@ -153,7 +154,9 @@ def main() -> None:
         st.error(load_error)
         st.info(
             "**Recovery:** check the path in the sidebar, or set `SARVO_WEIGHTS` to your "
-            "checkpoint. The repository intentionally does not commit trained weights."
+            "checkpoint. The repository commits one default checkpoint at "
+            "`weights/sarvo_ssac001.pt`; if it is missing from this checkout, restore it or "
+            "point at another."
         )
     else:
         info = describe_model(model, cfg["weights"])

@@ -207,3 +207,41 @@ def test_profiling_a_trained_checkpoint_on_real_images_records_the_source():
     assert 0.0 <= profile["latency_input_min"] <= profile["latency_input_max"] <= 1.0
     assert profile["latency_batch"] == 2
     assert profile["params"] > 0
+
+
+def test_the_loader_limit_caps_the_pool_of_distinct_images_not_the_batch(tmp_path):
+    """``limit`` must bound the *pool*, while a larger batch still fills from that pool.
+
+    ``limit`` is how a caller caps a timing sweep to a handful of chips instead of a whole split.
+    The property that matters is what it caps: the set of *distinct* images drawn on, not the
+    number of rows. If the cap instead truncated the batch, a bounded run would silently time
+    fewer images than its batch claims, and the same chip would not recur at the documented
+    modulo stride -- so a cost number taken with a limit would not describe the batch it names.
+
+    The check uses tiny synthetic chips rather than the HRSID split, so it is not gated on a
+    dataset download; the loader contract it pins is independent of the pixels.
+    """
+    import cv2
+    import numpy as np
+
+    for i, value in enumerate((30, 60, 120, 200)):
+        cv2.imwrite(str(tmp_path / f"chip_{i}.png"), np.full((32, 32), value, np.uint8))
+
+    # Four distinct files, a batch of four, but a pool of two: the first two chips return, and
+    # they return at the modulo stride ``paths[i % n]`` rather than filling blank rows.
+    capped = load_image_batch(tmp_path, imgsz=32, batch=4, limit=2)
+    assert tuple(capped.shape) == (4, 3, 32, 32)
+    assert torch.equal(capped[0], capped[2]) and torch.equal(capped[1], capped[3])
+    assert not torch.equal(capped[0], capped[1])
+    # Every row is one of exactly the two capped chips -- none is a blank filler.
+    assert len({round(float(capped[i].max()), 3) for i in range(4)}) == 2
+
+    # A pool of one collapses to a single repeated chip.
+    single = load_image_batch(tmp_path, imgsz=32, batch=3, limit=1)
+    assert torch.equal(single[0], single[1]) and torch.equal(single[1], single[2])
+
+    # Without the cap the batch draws four *different* chips, so the cap is what caused the reuse.
+    unlimited = load_image_batch(tmp_path, imgsz=32, batch=4)
+    assert not torch.equal(unlimited[0], unlimited[2]), (
+        "the uncapped batch already repeated an image, so the capped reuse proves nothing"
+    )

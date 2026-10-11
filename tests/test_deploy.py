@@ -319,6 +319,38 @@ def test_the_committed_checkpoint_matches_the_checksum_and_size_the_repository_p
     )
 
 
+def test_the_app_does_not_deny_committing_the_checkpoint_the_repository_ships():
+    """The demo's own guidance must match what is committed, or it names the wrong fix.
+
+    ``app.py`` tells a stranded user what to do when no checkpoint loads. That text used to assert
+    the repository never commits weights -- true until ``weights/sarvo_ssac001.pt`` was committed,
+    and false afterward -- so the recovery note pointed at ``SARVO_WEIGHTS`` for a problem whose
+    real fix was "the committed default is missing from your checkout". A user-facing instruction
+    that contradicts the shipped artefact is a defect the deploy contract is the right place to
+    catch, because the deploy is exactly where the instruction is read.
+    """
+    from saryolo.inference import DEFAULT_WEIGHT_CANDIDATES
+
+    shipped = [c for c in DEFAULT_WEIGHT_CANDIDATES if (REPO_ROOT / c).is_file()]
+    assert shipped, (
+        "no default checkpoint is present, so the deployment guide's premise is wrong: the app "
+        "is expected to serve weights with no configuration"
+    )
+    text = APP.read_text()
+    for phrase in (
+        "does not commit trained weights",
+        "not committed (they are a training artefact",
+    ):
+        assert phrase not in text, (
+            f"app.py tells the user {phrase!r} while the repository ships {shipped}; the recovery "
+            "advice therefore names the wrong fix for a missing default"
+        )
+    assert "weights/sarvo_ssac001.pt" in text, (
+        "the app's guidance must name the checkpoint a checkout actually contains, so a user who "
+        "finds it missing knows what to restore"
+    )
+
+
 def test_the_deployment_guide_states_every_memory_budget_this_suite_enforces():
     """Every budget the suite enforces must be a budget the guide tells a deployer to expect.
 

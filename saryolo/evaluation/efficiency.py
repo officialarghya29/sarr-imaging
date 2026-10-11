@@ -90,13 +90,30 @@ def peak_rss_mb() -> float | None:
     """Process high-water Resident Set Size in MB, or ``None`` where the OS will not say.
 
     This is the CPU counterpart of ``torch.cuda.max_memory_allocated``: with no GPU available,
-    the practical peak memory a run reaches is the process's own resident set, read from
-    ``resource.getrusage``. It is a *process* high-water mark, not a per-measurement isolation,
-    so it is reported as the peak the run reached rather than as the cost of one forward pass.
-    That is the quantity a resource-stability check wants -- a peak that keeps climbing across
-    repeats is the signal -- and a per-call figure would hide exactly that. ``ru_maxrss`` is in
-    kilobytes on Linux and bytes on macOS, and the module is absent on Windows.
+    the practical peak memory a run reaches is the process's own resident set. It is a *process*
+    high-water mark, not a per-measurement isolation, so it is reported as the peak the run
+    reached rather than as the cost of one forward pass. That is the quantity a
+    resource-stability check wants -- a peak that keeps climbing across repeats is the signal --
+    and a per-call figure would hide exactly that.
+
+    ``VmHWM`` from ``/proc/self/status`` is preferred where it exists because it is
+    **per-address-space**: it describes the process that actually ran. ``ru_maxrss`` is only the
+    fallback, because it lives in the task struct and survives ``execve``, so a child forked from
+    a large parent starts its high-water mark at the parent's. Measured directly: a light child
+    that loads this module by path reports ~12 MB from a small parent and ~411 MB from one
+    holding 400 MB -- so without this preference a profile taken in a worker process would report
+    the *parent's* footprint under the worker's name. (``tests/test_deploy.py`` pins the same
+    distinction for the deployment envelope; ``tests/test_efficiency.py`` pins it here.)
+    ``ru_maxrss`` is in kilobytes on Linux and bytes on macOS, and the module is absent on
+    Windows.
     """
+    try:
+        with open("/proc/self/status") as handle:
+            for line in handle:
+                if line.startswith("VmHWM:"):
+                    return round(float(line.split()[1]) / 1024.0, 2)  # kB -> MB
+    except OSError:
+        pass
     try:
         import resource
     except ImportError:  # pragma: no cover - stdlib on POSIX, absent on Windows
