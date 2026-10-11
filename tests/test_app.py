@@ -186,3 +186,45 @@ def test_an_uploaded_chip_runs_end_to_end_and_shows_the_pipeline_result(monkeypa
         for row, want in zip(rows, expected.as_rows(), strict=True):
             assert int(row["class"]) == want["class"]
             assert float(row["confidence"]) == pytest.approx(want["confidence"], abs=1e-6)
+
+
+# ------------------------------------------------------------- scope and failure paths (ungated)
+def test_the_recovery_note_names_the_checkpoint_a_checkout_contains(monkeypatch, tmp_path):
+    """The recovery text must name the committed default, not deny that one exists.
+
+    This drives the fix for D-13 through the *interface* rather than reading the source: a user who
+    finds the committed checkpoint missing is shown this note, so it has to point at the file to
+    restore instead of telling them (as it once did) that the repository never commits weights.
+    """
+    at = _run(monkeypatch, tmp_path / "definitely_absent.pt")
+    assert not at.exception, [str(e) for e in at.exception]
+    text = _texts(at.info)
+    assert "Recovery" in text
+    assert "weights/sarvo_ssac001.pt" in text, text
+
+
+def test_a_valid_upload_without_a_checkpoint_shows_the_input_and_disables_detection(
+    monkeypatch, tmp_path
+):
+    """A valid image with no model is a real path: show the input, state that detection is off.
+
+    The refusal tests cover *unusable* uploads; this covers the opposite case -- a perfectly good
+    chip when no checkpoint loaded. The app must still display the validated input (proving the
+    decode succeeded) and must say detection is disabled rather than silently offering nothing,
+    because the anti-fabrication rule is that no box appears without weights, not that the page
+    goes blank.
+    """
+    import cv2
+    import numpy as np
+
+    ok, buf = cv2.imencode(".png", np.full((64, 64), 90, np.uint8))
+    assert ok, "the fixture could not encode a PNG"
+    at = _run(monkeypatch, tmp_path / "definitely_absent.pt")
+    at.file_uploader[0].upload("chip.png", buf.tobytes(), "image/png")
+    at.run()
+    assert not at.exception, [str(e) for e in at.exception]
+    assert "Detection is disabled" in _texts(at.info), _texts(at.info)
+    assert len(at.image) >= 1, "the validated input image was not shown"
+    assert not any(b.label == "Run Detection" for b in at.button), (
+        "a detection control appeared without a checkpoint"
+    )

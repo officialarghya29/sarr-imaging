@@ -12,14 +12,14 @@ Every item below was run and observed in this environment.
 
 | What | Command | Observed result |
 | --- | --- | --- |
-| Test suite | `.venv/bin/python -m pytest -q` | **647 passed** |
+| Test suite | `.venv/bin/python -m pytest -q` | **655 passed** |
 | Baseline parity with stock YOLO11 | `pytest tests/test_arch.py -k baseline` | exact published counts (n: 2,624,080; s: 9,458,752 at 80 classes) |
 | All variants build and forward | `pytest tests/test_arch.py -k every_variant` | 110 variants pass |
 | Module identity at init | `pytest tests/test_arch.py -k identity` | `max\|f(x)−x\| = 0.0e+00` for all |
 | Architecture cost benchmark | `python -m saryolo bench --variants v2_full v2_lite_s ...` | see §2 |
 | Efficiency profiling | `pytest tests/test_efficiency.py` | 30 passed |
 | Single-image inference | `python -m saryolo predict --weights … --source <chip> --imgsz 640` | real detections from the SSAC-001 checkpoint; JSON printed and written |
-| Demo application, end to end | `pytest tests/test_app.py` | 6 passed — upload → Run Detection → displayed detections equal a direct pipeline call |
+| Demo application, end to end | `pytest tests/test_app.py` | 8 passed — upload → Run Detection → displayed detections equal a direct pipeline call; the no-checkpoint, invalid-upload and valid-upload-without-a-model paths each state what happened |
 | Deploy contract | `pytest tests/test_deploy.py` | 14 passed — the real entry point boots and serves, the config matches the code's upload limit, the runtime pin satisfies the Python floor, the committed checkpoint matches its published checksum, and a fresh interpreter measures the demo's envelope with a parent-independent primitive (451 MB against a 1024 MB ceiling on the CPU-only wheel here; the CUDA wheel a hosted install resolves to is gated at 3072 MB) |
 | Live-URL verifier | `python scripts/verify_deploy.py --url <url>` | **not yet run against a public URL** — no deployed app exists yet. Its acceptance test runs against a real local instance and both failure paths (`pytest tests/test_deploy.py`: it accepts a live instance, rejects a non-runtime server, reports an unreachable host as one problem, and never reports the in-app inference as checked) |
 | Paper tables generate | `python -m saryolo assets` | 20 files written (10 tables × md/tex); every *benchmark* accuracy cell `TBD`, the real-data pilot table complete |

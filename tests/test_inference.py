@@ -33,6 +33,7 @@ from saryolo.inference import (
     DEFAULT_WEIGHT_CANDIDATES,
     MAX_SIDE,
     MAX_UPLOAD_BYTES,
+    MIN_SIDE,
     CheckpointError,
     InferenceError,
     InferenceResult,
@@ -425,3 +426,134 @@ def test_a_path_and_an_array_reach_the_same_result():
     from_array = predict_image(model, image.array, imgsz=640, conf=0.25, device="cpu")
     from_path = predict_image(model, path, imgsz=640, conf=0.25, device="cpu")
     assert boxes(from_array) == boxes(from_path)
+
+
+# --------------------------------------------------- scope and failure paths (no checkpoint)
+def test_the_validator_accepts_the_minimum_side_and_an_upper_case_suffix():
+    """The documented boundaries must be inclusive, and the suffix list case-insensitive.
+
+    Two off-by-one/casing mistakes would each look like a working guard while refusing inputs a
+    user is told are valid: a ``min(...) < MIN_SIDE`` that was instead ``<=`` would reject an image
+    exactly at the documented minimum, and a suffix check that did not lower-case its input would
+    reject ``CHIP.PNG`` -- which every phone and every scanner produces. Both are asserted here.
+    """
+    import numpy as np  # noqa: F401  (kept for parity with the other validator checks)
+
+    image = validate_and_decode(_png(_gray(MIN_SIDE, value=80)), "CHIP.PNG")
+    assert (image.width, image.height) == (MIN_SIDE, MIN_SIDE)
+    assert image.array.shape == (MIN_SIDE, MIN_SIDE, 3)
+    # One pixel below the minimum is refused, so the boundary is inclusive exactly at MIN_SIDE.
+    with pytest.raises(InvalidImageError, match="minimum"):
+        validate_and_decode(_png(_gray(MIN_SIDE - 1, value=80)), "chip.png")
+
+
+def test_the_default_candidates_resolve_in_their_documented_order(monkeypatch, tmp_path):
+    """When both default locations exist the first wins, and the second is used if it is not there.
+
+    The order is a documented contract (the committed weights are preferred over a local training
+    run), and it is the reason a hosted deploy with no configuration serves the committed file.
+    Only the first-candidate case was pinned; a swapped list or a ``glob`` that returned the
+    training artefact first would serve different weights than the guide describes.
+    """
+    assert len(DEFAULT_WEIGHT_CANDIDATES) >= 2, "the ordering check needs at least two candidates"
+    first, second = DEFAULT_WEIGHT_CANDIDATES[0], DEFAULT_WEIGHT_CANDIDATES[1]
+    monkeypatch.delenv("SARVO_WEIGHTS", raising=False)
+    for candidate in (first, second):
+        target = tmp_path / candidate
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"placeholder checkpoint")
+    monkeypatch.chdir(tmp_path)
+    assert resolve_weights() == first, "the first candidate must win when both are present"
+    (tmp_path / first).unlink()
+    assert resolve_weights() == second, "with the first gone, the second candidate must be used"
+
+
+def test_the_result_serialises_to_a_stable_rounding_contract_without_a_checkpoint():
+    """The display rounds each field to a fixed precision; that contract must be pinned directly.
+
+    ``as_rows``/``as_dict`` are what the CLI prints and the demo's table shows, and the only test
+    of that format was gated behind the trained checkpoint. The rounding is a contract (2 dp boxes,
+    4 dp confidence, 1 dp area, 2 dp latency) that a reader compares across arms, so it is checked
+    against the exact ``round`` expressions rather than against hand-typed literals.
+    """
+    det = Detection(image="", cls=3, xyxy=(10.005, 20.004, 30.006, 40.0), score=0.123456)
+    result = InferenceResult(
+        detections=(det,), latency_ms=12.3456, image_height=64, image_width=64,
+        imgsz=640, conf=0.25, iou=0.7, device="cpu", weights="w.pt",
+    )
+    row = result.as_rows()[0]
+    assert row["class"] == 3
+    assert row["xyxy"] == [round(v, 2) for v in det.xyxy]
+    assert row["confidence"] == round(det.score, 4)
+    assert row["area_px"] == round(det.area, 1)
+
+    payload = result.as_dict()
+    assert payload["latency_ms"] == round(12.3456, 2)
+    assert payload["n_detections"] == result.n_detections == 1
+    assert set(payload) == {
+        "n_detections", "detections", "latency_ms", "image_width", "image_height",
+        "imgsz", "conf", "iou", "device", "weights",
+    }
+    assert json.loads(json.dumps(payload)) == payload, "the result is not JSON-serialisable"
+
+
+def test_the_result_reports_the_detector_size_and_falls_back_to_the_input_size():
+    """The size provenance: the detector's own shape wins, and the input's is the fallback.
+
+    A result whose ``image_width``/``image_height`` were wrong would misplace every box a UI draws
+    and every in-bounds check a caller makes. The pipeline prefers the detector's reported original
+    shape; when the detector omits it (a stub, or a non-Ultralytics backend), it must fall back to
+    the array it was handed rather than report ``0x0``.
+    """
+    import numpy as np
+
+    image = np.zeros((48, 80, 3), "uint8")
+    reported = predict_image(
+        _FakeModel(xyxy=[[1.0, 2.0, 3.0, 4.0]], conf=[0.5], orig_shape=(30, 40)), image, imgsz=64
+    )
+    assert (reported.image_height, reported.image_width) == (30, 40), (
+        "the detector's own original shape must win"
+    )
+
+    class _NoShape:
+        names = {0: "ship"}
+
+        def __init__(self):
+            class _Result:
+                pass
+
+            result = _Result()
+            result.boxes = _FakeBoxes([[1.0, 2.0, 3.0, 4.0]], [0.5])
+            result.orig_shape = None
+            self._results = [result]
+
+        def predict(self, **_kwargs):
+            return self._results
+
+    fallback = predict_image(_NoShape(), image, imgsz=64)
+    assert (fallback.image_height, fallback.image_width) == (48, 80), (
+        "with no detector shape the input's own shape must be reported, not 0x0"
+    )
+
+
+def test_a_detector_that_raises_is_wrapped_as_an_inference_error_with_its_cause():
+    """A failed forward pass is a typed error a UI can show, and the cause survives the wrap.
+
+    If ``predict_image`` let the backend exception escape, a demo would show a traceback or, worse,
+    swallow it; if it wrapped it without the cause, the reader would get "inference failed" and
+    nothing to act on. Both are asserted here -- the type and the retained message.
+    """
+    import numpy as np
+
+    class _Raising:
+        names = {0: "ship"}
+
+        def predict(self, **_kwargs):
+            raise RuntimeError("boom in the forward pass")
+
+    image = np.zeros((40, 40, 3), "uint8")
+    with pytest.raises(InferenceError, match="inference failed") as excinfo:
+        predict_image(_Raising(), image, imgsz=64)
+    assert "boom in the forward pass" in str(excinfo.value), (
+        "the backend cause was dropped from the wrapped error"
+    )

@@ -862,6 +862,9 @@ DOC_COUNT_CLAIMS: tuple[tuple[str, str, str], ...] = (
      r"`tests/test_cfar_frontend\.py` \((\d+) tests\)", "tests/test_cfar_frontend.py"),
     ("docs/claim_evidence_audit.md", r"`tests/test_ssac\.py` \((\d+) tests\)", "tests/test_ssac.py"),
     ("docs/ssac_design.md", r"`tests/test_ssac\.py` \((\d+) tests\)", "tests/test_ssac.py"),
+    # The consolidated status report restates the suite size; it is a live claim like the
+    # others, so a suite that grows must be reflected there rather than left to drift.
+    ("reports/master_directive_status.md", r"\*\*(\d+) tests\*\*", "tests"),
 )
 
 

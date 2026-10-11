@@ -60,7 +60,8 @@ ALLOWED_SUFFIXES = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff")
 MAX_UPLOAD_BYTES = 8 * 1024 * 1024
 #: Images below this side are smaller than the model's stride and cannot carry a detection.
 MIN_SIDE = 32
-#: Refuse absurd dimensions: a 6000 px square already costs ~108 MB as float32 three-channel.
+#: Refuse absurd dimensions: a 6000 px square is ~108 MB as the uint8 three-channel array this
+#: validator builds, and ~432 MB once the model promotes it to float32 internally.
 MAX_SIDE = 6000
 #: Where a deployment looks for a checkpoint when nothing is configured explicitly, in order.
 #: ``weights/`` is the committed-weights location the deployment guide describes; the ``results/``
