@@ -116,7 +116,53 @@ def test_cross_dataset_eval_skips_the_class_guard_when_no_source_config_is_given
     monkeypatch.setattr(metrics_mod, "evaluate_detections", lambda *a, **k: {"mAP50": 0.5})
     result = cross_dataset_eval("w.pt", target, out_dir=tmp_path / "out")
     assert result["compatibility"] is None
-    assert result["domain_shift"] is True
+    # ``domain_shift`` now follows the same convention as ``compatibility``: with no source
+    # config there is nothing to compare, so the pairing is *unestablished* (``None``) rather
+    # than asserted true. The flag is decided from the two resolved data roots when a source is
+    # given, and the roots travel in the payload -- see
+    # ``test_cross_dataset_eval_does_not_label_an_in_domain_evaluation_a_domain_shift`` below,
+    # which is the case that was measured wrong (defect D-33).
+    assert result["domain_shift"] is None
+    assert result["same_dataset_as_source"] is None
+
+
+def test_cross_dataset_eval_does_not_label_an_in_domain_evaluation_a_domain_shift(tmp_path, monkeypatch):
+    """Pointing ``--source`` and ``--target`` at one dataset is not a domain shift.
+
+    Measured before the fix: ``cross-dataset --weights sarvo_ssac001.pt --source
+    configs/datasets/hrsid_real.yaml --target configs/datasets/hrsid_real.yaml`` returned
+    ``domain_shift: true`` and ``compatible: true`` for the dataset the checkpoint was trained
+    on. The flag was the literal ``True`` on every call, so the field said nothing about the two
+    datasets it appeared to compare. Both directions are pinned here -- same dataset, and a
+    genuinely different one -- so the fix cannot be a constant either way.
+    """
+    import yaml
+
+    import saryolo.evaluation.metrics as metrics_mod
+
+    monkeypatch.setattr(metrics_mod, "evaluate_detections", lambda *a, **k: {"mAP50": 0.4})
+
+    def _config(path, names, root):
+        path.write_text(yaml.safe_dump({"names": names, "nc": len(names), "path": str(root)}))
+        return path
+
+    shared = tmp_path / "one"
+    shared.mkdir()
+    same_a = _config(tmp_path / "a.yaml", ["ship"], shared)
+    same_b = _config(tmp_path / "b.yaml", ["ship"], shared)
+    other = tmp_path / "two"
+    other.mkdir()
+    different = _config(tmp_path / "c.yaml", ["ship"], other)
+
+    in_domain = cross_dataset_eval("w.pt", same_b, source_data_yaml=same_a, out_dir=tmp_path / "in")
+    assert in_domain["domain_shift"] is False, "an in-domain evaluation was labelled a domain shift"
+    assert in_domain["same_dataset_as_source"] is True
+    written = json.loads((tmp_path / "in" / "cross_dataset.json").read_text())
+    assert written["domain_shift"] is False, "the written artefact must carry the same verdict"
+
+    shifted = cross_dataset_eval("w.pt", different, source_data_yaml=same_a, out_dir=tmp_path / "out")
+    assert shifted["domain_shift"] is True
+    assert shifted["same_dataset_as_source"] is False
 
 
 def test_domain_gap_table_computes_the_drop_and_carries_missing_measurements_as_none():

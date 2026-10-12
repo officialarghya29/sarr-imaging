@@ -15,7 +15,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from saryolo.evaluation.metrics import load_yolo_predictions
+from saryolo.evaluation.metrics import clear_stale_predictions, load_yolo_predictions
 
 
 def _write_image(path, size=(40, 80)) -> None:
@@ -58,6 +58,67 @@ def test_predictions_use_an_explicit_image_index_when_given(tmp_path):
 
     dets = load_yolo_predictions(labels, tmp_path / "no_such_dir", image_index={"a": image})
     assert len(dets) == 1 and dets[0].image == "a"
+
+
+def test_a_second_run_into_one_output_directory_does_not_inherit_the_first_runs_boxes(
+    tmp_path, monkeypatch
+):
+    """Defect D-32: ``save_txt`` appends, so a re-used ``--out`` double-counted detections.
+
+    Ultralytics' own docstring is explicit -- "existing contents of the file will not be
+    overwritten; new results are appended" -- and ``predict_to_labels`` reuses its output
+    directory with ``exist_ok=True`` while ``load_yolo_predictions`` reads every ``*.txt`` under
+    it. Measured on 4 val chips with the committed checkpoint before the fix: two calls each
+    wrote 3 label files and the detections read back went **11 -> 22**, i.e. the second run's
+    mAP would have been computed over a detection set half of which came from the first run.
+    The fake model below appends exactly as ultralytics does, so the test is faithful to the
+    mechanism rather than to one call site.
+    """
+    from pathlib import Path
+
+    from saryolo.evaluation.metrics import predict_to_labels
+
+    images = tmp_path / "images"
+    _write_image(images / "a.jpg")
+    _write_image(images / "b.jpg")
+    out = tmp_path / "preds"
+
+    class _AppendingPredictor:
+        """Two detections per image, appended to whatever is already there."""
+
+        def predict(self, **kwargs):
+            labels = Path(kwargs["project"]) / "labels"
+            labels.mkdir(parents=True, exist_ok=True)
+            for image in sorted(Path(kwargs["source"]).glob("*.jpg")):
+                with open(labels / f"{image.stem}.txt", "a") as handle:
+                    handle.write("0 0.5 0.5 0.2 0.2 0.9\n0 0.4 0.4 0.1 0.1 0.8\n")
+
+    monkeypatch.setattr("saryolo.training.trainer.load_model", lambda *a, **k: _AppendingPredictor())
+
+    first = load_yolo_predictions(predict_to_labels("w.pt", images, out_dir=out), images)
+    second = load_yolo_predictions(predict_to_labels("w.pt", images, out_dir=out), images)
+    assert len(first) == 4, f"expected 2 images x 2 detections, read {len(first)}"
+    assert len(second) == len(first), (
+        f"the second run read back {len(second)} detections against the first run's {len(first)}: "
+        "stale prediction files from the earlier call were scored as this one's"
+    )
+
+
+def test_the_stale_sweep_leaves_ground_truth_alone(tmp_path):
+    """The sweep must be able to run on a directory that also holds a dataset's own labels.
+
+    A prediction row carries a confidence column and a ground-truth row does not, which is the
+    only difference the sweep needs to be safe: pointing ``--out`` at a dataset directory (an
+    easy mistake, and previously a silent one) cannot delete the ground truth.
+    """
+    labels = tmp_path / "labels"
+    labels.mkdir()
+    (labels / "prediction.txt").write_text("0 0.5 0.5 0.2 0.2 0.9\n")
+    (labels / "ground_truth.txt").write_text("0 0.5 0.5 0.2 0.2\n")
+
+    removed = clear_stale_predictions(tmp_path)
+    assert [p.name for p in removed] == ["prediction.txt"]
+    assert (labels / "ground_truth.txt").exists(), "the sweep deleted a dataset's own label file"
 
 
 def test_a_short_row_is_skipped_not_scored_as_a_box():

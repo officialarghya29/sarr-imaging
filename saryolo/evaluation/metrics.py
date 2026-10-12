@@ -41,6 +41,7 @@ __all__ = [
     "load_yolo_ground_truth",
     "load_yolo_predictions",
     "predict_to_labels",
+    "clear_stale_predictions",
     "compute_ap",
     "evaluate_detections",
     "AREA_RANGES",
@@ -81,17 +82,39 @@ def _image_size(path: Path) -> tuple[int, int]:
     return img.shape[1], img.shape[0]
 
 
-def _resolve_split_dirs(data_yaml: str | Path) -> tuple[Path, Path, list[str]]:
-    """Return ``(images_dir, labels_dir, class_names)`` for the validation split.
+def _resolve_split_dirs(data_yaml: str | Path, split: str = "val") -> tuple[Path, Path, list[str]]:
+    """Return ``(images_dir, labels_dir, class_names)`` for one named split.
 
     Path resolution is delegated to :func:`saryolo.data.yolo.load_data_config` so
     that training and evaluation can never disagree about where a split lives.
+
+    The split is a parameter rather than the hard-coded ``val`` it used to be. That
+    hard-coding was the whole of D-31: the test set is the one the project reserves for final
+    evaluation, and there was no path from any public entry point to it -- ``saryolo eval``
+    scored ``val`` whatever the caller asked for, and the refusal message below named the
+    validation split even when a caller had asked for another one.
     """
     from saryolo.data.yolo import labels_dir_for, load_data_config
 
     root, cfg = load_data_config(data_yaml)
-    split = cfg.get("val") or cfg.get("val_images") or "images/val"
-    images_dir = Path(split) if Path(split).is_absolute() else root / split
+    entry = cfg.get(split) or cfg.get(f"{split}_images")
+    if entry is None:
+        # The config may legitimately rely on the directory convention instead of naming the
+        # split, so that case keeps working. What is refused is the case where neither exists:
+        # scoring a split the dataset does not define would silently return the metrics of
+        # whatever directory ``images/<split>`` happened to be, under the label that was asked
+        # for -- and for a ``test`` request that is the difference between a held-out number and
+        # a validation one.
+        conventional = Path(root) / f"images/{split}"
+        if not conventional.is_dir():
+            declared = sorted(k for k in cfg if k in ("train", "val", "test"))
+            raise ValueError(
+                f"{data_yaml} names no '{split}' split (it declares {declared or 'none'}) and "
+                f"there is no {conventional} directory to fall back to"
+            )
+        images_dir = conventional
+    else:
+        images_dir = Path(entry) if Path(entry).is_absolute() else root / entry
     labels_dir = labels_dir_for(images_dir)
     names = cfg.get("names") or [f"class_{i}" for i in range(int(cfg.get("nc", 1)))]
     if isinstance(names, dict):
@@ -202,6 +225,60 @@ def load_yolo_ground_truth(data_yaml: str | Path, split: str = "val") -> list[De
     return gts
 
 
+#: A prediction row is ``cls cx cy w h conf``; a ground-truth row stops after ``w h``. The stale
+#: sweep below keys on that column so it can never delete a dataset's own labels.
+PREDICTION_LABEL_COLUMNS = 6
+
+
+def _looks_like_predictions(path: Path) -> bool:
+    """Whether a label file carries a confidence column, i.e. was written by ``save_txt``."""
+    try:
+        text = path.read_text()
+    except OSError:
+        return False
+    for line in text.splitlines():
+        if line.strip():
+            return len(line.split()) >= PREDICTION_LABEL_COLUMNS
+    return False
+
+
+def clear_stale_predictions(out_dir: str | Path) -> list[Path]:
+    """Remove prediction label files an earlier call left in ``out_dir``, and say which.
+
+    This exists because ultralytics' ``save_txt`` **appends** -- its own docstring says "existing
+    contents of the file will not be overwritten; new results are appended" -- while
+    ``predict_to_labels`` reuses its output directory with ``exist_ok=True`` and
+    ``load_yolo_predictions`` then reads *every* ``*.txt`` under it. So a second evaluation into
+    the same ``--out`` scores the first run's boxes as part of its own. Measured on 4 val chips
+    with the committed checkpoint: two calls each wrote 3 label files, and the detections read
+    back went **11 -> 22**. Every number in the second run -- and any run after it, including a
+    resolution study that re-uses one output directory, which is exactly how it would have been
+    used -- would have been computed over a detection set that was part of a previous run's.
+
+    Only files that look like prediction output (a row carrying a confidence column) are
+    deleted, so pointing ``out_dir`` at a directory that also holds a dataset's ground truth
+    cannot destroy the ground truth.
+
+    Returns:
+        The paths removed, in sorted order, so a caller can report the sweep rather than perform
+        an invisible mutation.
+    """
+    out_dir = Path(out_dir)
+    # The primary location plus the nested ones the fallback in ``predict_to_labels`` accepts,
+    # de-duplicated: ``out_dir/labels`` will also be found by the walk when it exists.
+    candidates = {out_dir / "labels"}
+    candidates.update(p for p in out_dir.rglob("labels") if p.is_dir())
+    removed: list[Path] = []
+    for labels in sorted(candidates):
+        if not labels.is_dir():
+            continue
+        for path in sorted(labels.glob("*.txt")):
+            if _looks_like_predictions(path):
+                path.unlink()
+                removed.append(path)
+    return removed
+
+
 def predict_to_labels(
     weights: str | Path,
     images_dir: str | Path,
@@ -229,6 +306,9 @@ def predict_to_labels(
     from saryolo.training.trainer import load_model
 
     out_dir = Path(out_dir).resolve()
+    # Before inference, not after: ``save_txt`` appends, so a file left by an earlier call would
+    # otherwise have this run's rows added to it and be read back as one image's detections.
+    clear_stale_predictions(out_dir)
     model = load_model(str(weights))
     kwargs = dict(
         source=str(images_dir),
@@ -488,8 +568,18 @@ def evaluate_detections(
     conf: float = 0.001,
     device: str | None = None,
     out_dir: str | Path = "results/predictions",
+    split: str = "val",
 ) -> dict:
-    """Full evaluation: overall and scale-wise AP for a checkpoint.
+    """Full evaluation: overall and scale-wise AP for a checkpoint on one named split.
+
+    Args:
+        split: Which split to score. ``val`` is the default and the only one model selection
+            is allowed to touch; ``test`` is the split the project reserves for final
+            evaluation, and before this parameter existed there was no way to reach it through
+            any public entry point -- every helper below accepted a ``split`` and the one
+            function that tied them together did not (defect D-31). The split that was actually
+            scored is recorded in the result as ``eval_split``, so a quoted metric cannot lose
+            it.
 
     Returns:
         Dict with ``mAP50``, ``mAP50_95`` and ``AP_small``/``AP_medium``/
@@ -497,8 +587,8 @@ def evaluate_detections(
         in that range — ``None`` is never replaced with 0.0, so an impossible
         measurement is never presented as a real one).
     """
-    images_dir, _, class_names = _resolve_split_dirs(data_yaml)
-    image_index, _, _ = _split_index(data_yaml)
+    images_dir, _, class_names = _resolve_split_dirs(data_yaml, split)
+    image_index, _, _ = _split_index(data_yaml, split=split)
     from saryolo.data.yolo import load_data_config
 
     _data_root, data_config = load_data_config(data_yaml)
@@ -520,14 +610,14 @@ def evaluate_detections(
     # so no boxes were ever read and the caller saw a successful evaluation of an empty
     # dataset. Data that legitimately has no boxes is not something to report AP for, so this
     # refuses instead of reporting.
-    gts = load_yolo_ground_truth(data_yaml)
+    gts = load_yolo_ground_truth(data_yaml, split=split)
     if not gts:
         raise ValueError(
-            f"no ground-truth boxes were found for the validation split of {data_yaml}. "
+            f"no ground-truth boxes were found for the '{split}' split of {data_yaml}. "
             f"Resolved {len(image_index)} image(s) and matched none of them to a non-empty "
             f"label file, so every metric would be None while the run still reported success. "
-            f"Check the 'val' entry: it may point at a .txt list whose images have no sibling "
-            f"labels directory, or at the wrong split."
+            f"Check the '{split}' entry: it may point at a .txt list whose images have no "
+            f"sibling labels directory, or at the wrong split."
         )
 
     labels_dir = predict_to_labels(
@@ -544,6 +634,11 @@ def evaluate_detections(
         "num_gt": len(gts),
         "num_det": len(dets),
         "classes": class_names,
+        # Which split produced these numbers, on the record. A metric quoted without its split
+        # is not comparable with one quoted with a different split, and the two were previously
+        # indistinguishable in this payload: every evaluation was on ``val``, and the documents
+        # did not say so.
+        "eval_split": split,
         # Which protocol produced these numbers, on the record. This evaluator and the
         # training-time Ultralytics validator do not agree exactly on this subset for the
         # same checkpoint (0.2901 vs 0.3012 mAP50:95 on REAL-001), because the two inference

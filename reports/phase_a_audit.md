@@ -215,6 +215,18 @@ Each fold's test chips are scene-disjoint from its training chips, so a number f
 refused by its own guard because four scenes hold only 2–9 chips
 (`P0007 6, P0008 2, P0009 9, P0010 6`).
 
+**How much the contamination is worth, measured.** Defect D-31 had left the reserved test split
+unreachable, so the audit re-ran the committed checkpoint with the flag that fix added
+(`saryolo eval --weights weights/sarvo_ssac001.pt --data configs/datasets/hrsid_real.yaml
+--imgsz 320 --conf 0.001 --split test`). The run is valid — 117 ground-truth boxes read, 2 474
+detections, `eval_split: "test"` in the payload — and it reports **0.4328 mAP50:95 against the
+validation split's 0.2901 for the same checkpoint at the same input size**. That is not a
+result and must not be quoted as one: it is the contamination quantified. The test split scores
+**49 % higher than the split it was measured beside**, and the reason is exactly F-01 — every
+test chip comes from one of the four scenes that training also used, so the held-out split is
+the *easier* one. Any final number must come from the scene-grouped folds above rather than from
+this prefix.
+
 ### F-02 · the published pilot metrics are validation metrics, and the documents do not say so — **Medium** (reporting)
 
 ```console

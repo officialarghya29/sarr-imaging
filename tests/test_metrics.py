@@ -225,6 +225,92 @@ def test_evaluation_refuses_a_split_with_no_ground_truth(tmp_path):
         evaluate_detections("does-not-matter.pt", cfg)
 
 
+def _three_split_dataset(root):
+    """A dataset with three named splits, each holding a different number of boxes.
+
+    The box counts are the point: they are how the test tells *which* split the evaluator
+    actually scored, without needing a checkpoint. ``val`` holds two images and ``test`` one,
+    so a ``test`` evaluation that silently read ``val`` is caught by ``num_gt``.
+    """
+    import cv2
+    import numpy as np
+
+    for split, stems in (("train", ("a", "b", "c")), ("val", ("a", "b")), ("test", ("c",))):
+        (root / "images" / split).mkdir(parents=True, exist_ok=True)
+        (root / "labels" / split).mkdir(parents=True, exist_ok=True)
+        for stem in stems:
+            cv2.imwrite(
+                str(root / "images" / split / f"{stem}.png"), np.zeros((50, 100, 3), dtype=np.uint8)
+            )
+            (root / "labels" / split / f"{stem}.txt").write_text("0 0.5 0.5 0.2 0.2\n")
+    cfg = root / "data.yaml"
+    cfg.write_text(
+        f"path: {root}\nnc: 1\nnames:\n- target\n"
+        "train: images/train\nval: images/val\ntest: images/test\n"
+    )
+    return cfg
+
+
+def test_the_evaluator_scores_the_split_it_was_asked_for(tmp_path, monkeypatch):
+    """The held-out split has to be reachable, and the result has to say which one it scored.
+
+    This is defect D-31: every helper below ``evaluate_detections`` accepted a ``split`` and the
+    function that tied them together did not, so ``test`` -- the split the directive reserves
+    for final evaluation -- could not be scored from any public entry point, and the only
+    reachable split was ``val``. The payloads of the two calls differ in the ``eval_split``
+    field, which is what makes a quoted number unable to lose its split.
+    """
+    from saryolo.evaluation.metrics import evaluate_detections
+
+    cfg = _three_split_dataset(tmp_path / "ds")
+
+    def fake_predict(weights, images_dir, imgsz=640, conf=0.001, iou=0.7, out_dir=None, **kwargs):
+        # No checkpoint: write one prediction per image in the split the evaluator resolved, so
+        # the scored pair is real and the arms are comparable.
+        labels = Path(out_dir) / "labels"
+        labels.mkdir(parents=True, exist_ok=True)
+        for image in sorted(Path(images_dir).glob("*.png")):
+            (labels / f"{image.stem}.txt").write_text("0 0.5 0.5 0.2 0.2 0.9\n")
+        return labels
+
+    monkeypatch.setattr("saryolo.evaluation.metrics.predict_to_labels", fake_predict)
+
+    val = evaluate_detections("w.pt", cfg, split="val", out_dir=tmp_path / "v")
+    test = evaluate_detections("w.pt", cfg, split="test", out_dir=tmp_path / "t")
+
+    assert val["eval_split"] == "val"
+    assert val["num_gt"] == 2, "the val split holds two boxes"
+    assert test["eval_split"] == "test"
+    assert test["num_gt"] == 1, "the test split holds one box; reading val here is the bug"
+    # And the default is unchanged, so every existing caller still scores the validation split.
+    assert evaluate_detections("w.pt", cfg, out_dir=tmp_path / "d")["eval_split"] == "val"
+
+
+def test_a_requested_split_the_dataset_does_not_define_is_refused(tmp_path):
+    """Asking for a split that does not exist must refuse rather than answer with another one.
+
+    The failure mode is the expensive kind: a config with no ``test`` entry used to fall back to
+    the ``images/test`` *directory convention*, and when that directory does not exist either the
+    caller got the metrics of whatever was there -- under the label of the held-out split. Here
+    neither exists, so the refusal names the split.
+    """
+    from saryolo.evaluation.metrics import evaluate_detections
+
+    root = tmp_path / "ds"
+    (root / "images" / "val").mkdir(parents=True)
+    (root / "labels" / "val").mkdir(parents=True)
+    import cv2
+    import numpy as np
+
+    cv2.imwrite(str(root / "images" / "val" / "a.png"), np.zeros((50, 100, 3), dtype=np.uint8))
+    (root / "labels" / "val" / "a.txt").write_text("0 0.5 0.5 0.2 0.2\n")
+    cfg = root / "data.yaml"
+    cfg.write_text(f"path: {root}\nnc: 1\nnames:\n- target\nval: images/val\n")
+
+    with pytest.raises(ValueError, match="names no 'test' split"):
+        evaluate_detections("does-not-matter.pt", cfg, split="test")
+
+
 def test_label_lookup_prefers_an_existing_file(tmp_path):
     """A wrong guess between the two images->labels conventions must not erase ground truth."""
     from saryolo.evaluation.metrics import _label_path_for

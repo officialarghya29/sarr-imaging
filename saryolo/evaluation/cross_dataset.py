@@ -85,8 +85,17 @@ def cross_dataset_eval(
 
     out_dir = Path(out_dir)
     compatibility = None
+    same_dataset = None
     if source_data_yaml is not None:
         compatibility = class_compatibility(source_data_yaml, target_data_yaml)
+        # ``domain_shift`` used to be the literal ``True`` on every call, so pointing ``--source``
+        # and ``--target`` at one config produced an in-domain evaluation carrying a domain-shift
+        # label. Measured on this repository: ``cross-dataset --source
+        # configs/datasets/hrsid_real.yaml --target configs/datasets/hrsid_real.yaml`` reported
+        # ``domain_shift: true`` for the dataset the checkpoint was trained on. The verdict is
+        # now computed from the two resolved data roots, falling back to the config paths when a
+        # root cannot be resolved, so no new key is required of a caller's data config.
+        same_dataset = _same_dataset(source_data_yaml, target_data_yaml)
         if not compatibility["compatible"]:
             raise ValueError(
                 f"No class overlap between {source_data_yaml} and {target_data_yaml}: "
@@ -101,7 +110,10 @@ def cross_dataset_eval(
 
     metrics = evaluate_detections(weights, target_data_yaml, imgsz=imgsz, device=device, out_dir=out_dir)
     metrics["compatibility"] = compatibility
-    metrics["domain_shift"] = True
+    # ``None`` means "no source config was supplied, so this pairing was not checked" -- the same
+    # convention ``compatibility`` uses, rather than claiming a shift nobody established.
+    metrics["domain_shift"] = None if same_dataset is None else not same_dataset
+    metrics["same_dataset_as_source"] = same_dataset
     # Create the directory here rather than inherit it from the evaluator. In the current path
     # ``evaluate_detections`` happens to create it (Ultralytics' ``project=`` does), so this was
     # never reached; but every other writer in this repository creates its own output directory,
@@ -110,6 +122,36 @@ def cross_dataset_eval(
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "cross_dataset.json").write_text(json.dumps(metrics, indent=2, default=float))
     return metrics
+
+
+def _data_root(data_yaml) -> Path | None:
+    """The dataset directory a config names, or ``None`` when it cannot be established.
+
+    A config that does not resolve is not an error here -- this only decides whether two configs
+    describe one dataset, and refusing to answer is the honest outcome when one of them cannot
+    be resolved.
+    """
+    from saryolo.data.yolo import load_data_config
+
+    try:
+        root, _ = load_data_config(data_yaml)
+    except (OSError, KeyError, TypeError, ValueError):
+        return None
+    return Path(root).resolve()
+
+
+def _same_dataset(source_data_yaml, target_data_yaml) -> bool:
+    """Whether two data configs describe the same dataset.
+
+    Compares resolved data roots, which is what makes two differently-named configs for one
+    directory compare equal; falls back to the two config paths when either root is unavailable,
+    which can only be wrong in the conservative direction (reporting a shift that may not be
+    there, never hiding one).
+    """
+    source_root, target_root = _data_root(source_data_yaml), _data_root(target_data_yaml)
+    if source_root is not None and target_root is not None:
+        return source_root == target_root
+    return Path(source_data_yaml).resolve() == Path(target_data_yaml).resolve()
 
 
 def domain_gap_table(in_domain: dict, cross_domain: dict) -> list[dict]:

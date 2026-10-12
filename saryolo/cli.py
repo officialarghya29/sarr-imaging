@@ -509,7 +509,8 @@ def _cmd_eval(args) -> int:
     from saryolo.evaluation.metrics import evaluate_detections, write_metrics
 
     metrics = evaluate_detections(
-        args.weights, args.data, imgsz=args.imgsz, conf=args.conf, device=args.device, out_dir=args.out
+        args.weights, args.data, imgsz=args.imgsz, conf=args.conf, device=args.device,
+        out_dir=args.out, split=args.split,
     )
     print(json.dumps(metrics, indent=2, default=float))
     write_metrics(metrics, Path(args.out) / "metrics.json")
@@ -1175,6 +1176,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--data", required=True)
     p.add_argument("--imgsz", type=int, default=640)
     p.add_argument("--conf", type=float, default=0.001)
+    p.add_argument("--split", default="val", choices=["train", "val", "test"],
+                   help="split to score (default: val). 'test' is the held-out split: it is the "
+                        "one a final number is reported from, and until this flag existed there "
+                        "was no way to reach it, so every published number here is a validation "
+                        "number whether or not it said so")
     p.add_argument("--device", default=None)
     p.add_argument("--out", default="results/eval")
     p.set_defaults(func=_cmd_eval)
