@@ -49,7 +49,7 @@ the registry:
 | --- | --- | --- |
 | Architecture variants wired | 110 | `saryolo.nn.arch.VARIANTS` (`tests/test_repo.py`) |
 | Experiment configs | 134 | `saryolo.training.config.list_experiments` |
-| Tests | **977 tests** | `pytest --collect-only -q` (`tests/test_repo.py`) |
+| Tests | **979 tests** | `pytest --collect-only -q` (`tests/test_repo.py`) |
 | Datasets on disk | HRSID subset, 200 / 60 / 60, one class (`ship`) | `docs/assets/facts.json` → `real_subset` |
 
 **The architecture ladder.** Every module is an **exact identity at initialisation** and is
@@ -82,7 +82,7 @@ one class:
 **Engineering posture.** Every "ran" claim is tied to a command or a test; unmeasured cells
 render as `TBD`; the ledger is append-only; the demo never shows a prediction it did not
 compute; defects are recorded with the regression test that pins them (`defect_log.md`,
-D-01…D-29). Four deepscans of the previously untested surfaces (environment capture, the
+D-01…D-30). Four deepscans of the previously untested surfaces (environment capture, the
 qualitative panels, the corruption sweep, the gain diagnostic, the shared module primitives,
 the YAML generator, the dataset validator, checkpoint registration, and — in the third pass —
 the paper table/figure builders, the runner and statistics writers, the LoRA layer, the
@@ -113,7 +113,7 @@ pointed the reader at a measurement script that does not exist, now a guard over
 `scripts/*.py` named anywhere in the tree; and — found by the CLI test that commands are written
 to prove — D-29 `saryolo arch` writing its `--nc` flag **into the shared variant registry** rather
 than into a copy, so one `--nc 2` invocation left all 28 specs at two classes for the rest of the
-process and made the committed-YAML byte-identity guard report a clean tree as hand-edited. The suite runs on the development host with **no GPU and no dataset download**
+process and made the committed-YAML byte-identity guard report a clean tree as hand-edited. A sixth pass was a read-only Phase A audit of the whole repository against the master context (its own report: [`phase_a_audit.md`](phase_a_audit.md)), which found the same class one door further on — D-30, the identical registry-mutating line surviving in `python -m saryolo.nn.arch`, the entry point no test drove — and, more consequentially, three findings about the *evidence* rather than the code: the pilot's split is scene-contaminated (10 scenes, 62 % of val and 100 % of test chips drawn from a scene also in training, because the subset is the first N chips in filename order), the published pilot metrics are validation metrics that the documents do not label as such, and the manuscript's Method describes the v1/v2 ladder — which has no real-data run at all — while never naming SSAC or the CFAR front end, which is where every measured artefact lives. Those are recorded with their measurements in `phase_a_audit.md` and carry the prioritized sequence; they are findings about scope and labelling, not defects with a regression test, so they are not rows in the table above. The suite runs on the development host with **no GPU and no dataset download**
 (the dataset-gated and GPU-gated checks skip with a *named* reason).
 
 ---
@@ -234,5 +234,5 @@ as an explicit gap rather than omitted.
 | Deployment | `docs/DEPLOYMENT.md`; `tests/test_deploy.py` |
 | Counts (variants / experiments / tests) | `tests/test_repo.py` guards; `docs/assets/facts.json` |
 
-This report adds no number of its own; the one count it states — **977 tests** — is the
+This report adds no number of its own; the one count it states — **979 tests** — is the
 same one the suite's own count guards check.

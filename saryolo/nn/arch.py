@@ -963,8 +963,13 @@ def _main() -> None:
     for name in names:
         if name not in VARIANTS:
             raise SystemExit(f"Unknown variant {name!r}. Available: {', '.join(sorted(VARIANTS))}")
-        spec = VARIANTS[name]
-        spec.nc = args.nc
+        # ``--nc`` is a request for *this file*, not an edit to the registry. Writing the flag
+        # into the shared entry (``spec = VARIANTS[name]; spec.nc = args.nc``) left every later
+        # consumer in the same process reading the requested count as though it were the spec's
+        # own -- the same defect class as D-29, which was fixed in the CLI handler while this
+        # module-level entry point kept the mutating line. A copy costs nothing and is the whole
+        # fix.
+        spec = replace(VARIANTS[name], nc=args.nc)
         path = out / variant_filename(spec)
         path.write_text(build_yaml_text(spec))
         print(f"wrote {path}")

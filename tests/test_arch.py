@@ -1149,6 +1149,36 @@ def test_every_variant_that_declares_a_sar_loss_block_gets_the_sar_loss():
     assert declaring > 60, f"only {declaring} variants declare a sar_loss block; the check is weak"
 
 
+def test_the_module_entry_point_does_not_edit_the_registry_it_writes_from(tmp_path, monkeypatch):
+    """``python -m saryolo.nn.arch`` must write the requested ``--nc``, not install it.
+
+    This is D-29's defect reached through the second door. The CLI handler was fixed to build
+    from a copy, and the module-level ``_main`` kept ``spec = VARIANTS[name]; spec.nc = args.nc``
+    -- so one ``--variant all --nc 2`` call from *this* entry point left all 110 registry specs
+    at ``nc = 2`` for the rest of the process, and every later consumer (the byte-identity guard
+    for the committed YAMLs, a bench profile, a table build) then read the requested count as
+    though it were the spec's own. ``tests/test_cli.py`` covers the CLI path; nothing covered
+    this one, which is why the line survived the fix.
+    """
+    from saryolo.nn import arch
+
+    registry_nc = {name: spec.nc for name, spec in VARIANTS.items()}
+    out = tmp_path / "models"
+    monkeypatch.setattr(
+        sys, "argv",
+        ["arch", "--variant", "all", "--nc", "2", "--out", str(out)],
+    )
+    arch._main()
+    written = sorted(p.name for p in out.glob("*.yaml"))
+    assert len(written) == len(VARIANTS), f"wrote {len(written)} YAMLs for {len(VARIANTS)} variants"
+    assert "nc: 2" in (out / written[0]).read_text(), (
+        "the requested class count did not reach the YAML it was written to"
+    )
+    assert {name: spec.nc for name, spec in VARIANTS.items()} == registry_nc, (
+        "`python -m saryolo.nn.arch --nc` mutated the shared variant registry"
+    )
+
+
 def test_input_adapter_sits_at_the_image_not_at_a_feature():
     """The adapter row must be the first layer and consume ``ch`` (the image width).
 

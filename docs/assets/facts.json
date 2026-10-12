@@ -1305,10 +1305,10 @@
     }
   },
   "tests": {
-    "total": 977,
+    "total": 979,
     "by_file": {
       "tests/test_app.py": 8,
-      "tests/test_arch.py": 64,
+      "tests/test_arch.py": 65,
       "tests/test_audit_docs.py": 37,
       "tests/test_augmentation.py": 15,
       "tests/test_cfar_frontend.py": 16,
@@ -1325,7 +1325,7 @@
       "tests/test_data_helpers.py": 39,
       "tests/test_dataset_validation.py": 11,
       "tests/test_deploy.py": 14,
-      "tests/test_docs.py": 30,
+      "tests/test_docs.py": 31,
       "tests/test_efficiency.py": 30,
       "tests/test_efficiency_frontier.py": 16,
       "tests/test_efficiency_real.py": 11,
