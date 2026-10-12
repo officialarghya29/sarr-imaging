@@ -405,3 +405,27 @@ def test_the_reported_protocol_field_says_how_the_number_was_measured():
     )
     assert metrics["eval_protocol"] == "coco"
     assert metrics["eval_max_det"] == 100
+
+
+# ------------------------------------------------------------------- metrics persistence
+def test_write_metrics_round_trips_makes_its_directory_and_serialises_numpy(tmp_path):
+    """A metrics file is the record of a run, so it must reload to exactly the numbers written.
+
+    It is also the only writer on this path, and the evaluator hands it numpy scalars and
+    ``None`` for a not-measurable range -- both must survive, or a run's record would fail to
+    persist at the last step.
+    """
+    import json
+
+    import numpy as np
+
+    from saryolo.evaluation.metrics import write_metrics
+
+    metrics = {"mAP50": 0.5626, "mAP50_95": 0.3089, "AP_large": None, "n_gt_large": 0}
+    out = write_metrics(metrics, tmp_path / "nested" / "metrics.json")
+    assert out.exists() and out.parent.name == "nested", "the parent directory was not created"
+    assert json.loads(out.read_text()) == metrics
+
+    # A numpy scalar must serialise rather than raise: the evaluator returns numpy numbers.
+    out2 = write_metrics({"AP": np.float32(0.25)}, tmp_path / "m2.json")
+    assert json.loads(out2.read_text())["AP"] == pytest.approx(0.25)

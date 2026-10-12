@@ -275,6 +275,36 @@ def test_project_root_is_detected():
     assert (project_root(__file__) / "pyproject.toml").exists()
 
 
+def test_resolve_data_yaml_refuses_a_missing_config_and_a_config_without_a_path(tmp_path):
+    """A config the trainer cannot resolve must fail here, by name, not deep in ultralytics."""
+    with pytest.raises(FileNotFoundError, match="Data config not found"):
+        resolve_data_yaml(tmp_path / "nope.yaml")
+    bad = tmp_path / "bad.yaml"
+    bad.write_text("nc: 1\nnames: [x]\n")  # no 'path' key at all
+    with pytest.raises(ValueError, match="missing the required 'path' key"):
+        resolve_data_yaml(bad)
+
+
+def test_write_data_yaml_emits_the_keys_ultralytics_and_the_pipeline_read(tmp_path):
+    """The generated config must round-trip through the resolver the rest of the code uses."""
+    import yaml
+
+    from saryolo.data.yolo import write_data_yaml
+
+    out = write_data_yaml(
+        tmp_path / "nested" / "data.yaml", tmp_path / "ds", ["ship", "boat"], test="test"
+    )
+    payload = yaml.safe_load(out.read_text())
+    assert payload["path"] == str((tmp_path / "ds").resolve())
+    assert payload["nc"] == 2 and payload["names"] == ["ship", "boat"]
+    assert payload["train"] == "images/train" and payload["val"] == "images/val"
+    assert payload["test"] == "images/test"
+
+    # The absolute path means the resolver returns it untouched, naming the same root.
+    root, _ = load_data_config(out)
+    assert root == (tmp_path / "ds").resolve()
+
+
 def test_relative_path_resolves_without_touching_ultralytics_settings(tmp_path):
     """A relative `path` must resolve against the YAML, not ultralytics' datasets_dir."""
     dataset = tmp_path / "processed" / "demo"

@@ -1305,7 +1305,11 @@ def chart_tests(facts: dict) -> None:
     labels = [Path(k).name for k in by_file]
     vals = list(by_file.values())
     colors = [CYAN, MAGENTA, AMBER, GREEN, VIOLET][: len(vals)]
-    fig, ax = plt.subplots(figsize=(14.5, 7.4))
+    # Height scales with the number of modules: a fixed height cannot hold an
+    # arbitrary number of file-name labels, and the suite grows over time, so one
+    # label stops fitting against the next and `check_chart_layout.py` starts
+    # reporting collisions. ~0.30 in per row plus room for the title and caption.
+    fig, ax = plt.subplots(figsize=(14.5, max(7.4, 0.30 * len(vals) + 2.0)))
     bars = ax.barh(labels, vals, color=colors, alpha=0.9)
     for bar, v in zip(bars, vals, strict=True):
         ax.text(v + 0.15, bar.get_y() + bar.get_height() / 2, str(v),

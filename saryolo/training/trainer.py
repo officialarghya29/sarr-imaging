@@ -606,7 +606,20 @@ def resolve_model_class(model_path: str, prefer_custom: bool = False):
 
 
 def load_model(model_path: str, verbose: bool = False, prefer_custom: bool = False):
-    """Load a stock or SAR-YOLO model, selecting its facade from the model path."""
+    """Load a stock or SAR-YOLO model, selecting its facade from the model path.
+
+    When restricted checkpoint loading is switched on (``ULTRALYTICS_SAFE_LOAD``), the classes in
+    the graph are allowlisted first. Without this the documented opt-in was unreachable: a user
+    who set the variable had no path that called ``allowlist_safe_load()``, and the very
+    checkpoint this repository ships was refused by ``torch.load``'s unpickler. The allowlist is
+    cached, so an ordinary run -- where the variable is unset -- pays nothing and never calls it.
+    """
+    from pathlib import Path
+
+    from saryolo.nn.register import allowlist_safe_load, safe_load_enabled
+
+    if Path(model_path).suffix == ".pt" and safe_load_enabled():
+        allowlist_safe_load()
     return resolve_model_class(model_path, prefer_custom=prefer_custom)(model_path, verbose=verbose)
 
 
