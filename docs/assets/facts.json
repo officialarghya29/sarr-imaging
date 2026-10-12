@@ -1289,7 +1289,7 @@
     }
   },
   "tests": {
-    "total": 762,
+    "total": 949,
     "by_file": {
       "tests/test_app.py": 8,
       "tests/test_arch.py": 64,
@@ -1300,10 +1300,13 @@
       "tests/test_cli.py": 33,
       "tests/test_common_blocks.py": 7,
       "tests/test_conditioning.py": 9,
+      "tests/test_conditioning_attach.py": 14,
       "tests/test_conditioning_smoke.py": 6,
       "tests/test_config_generation.py": 19,
+      "tests/test_convert_helpers.py": 6,
       "tests/test_cross_dataset.py": 5,
       "tests/test_data.py": 26,
+      "tests/test_data_helpers.py": 39,
       "tests/test_dataset_validation.py": 11,
       "tests/test_deploy.py": 14,
       "tests/test_docs.py": 30,
@@ -1311,6 +1314,7 @@
       "tests/test_efficiency_frontier.py": 16,
       "tests/test_efficiency_real.py": 11,
       "tests/test_efficiency_scope.py": 10,
+      "tests/test_error_analysis_io.py": 9,
       "tests/test_field_mask.py": 9,
       "tests/test_gain_diagnostic.py": 7,
       "tests/test_groups.py": 36,
@@ -1318,8 +1322,14 @@
       "tests/test_inference.py": 23,
       "tests/test_init.py": 9,
       "tests/test_ledger.py": 5,
+      "tests/test_lora_layer.py": 14,
       "tests/test_losses.py": 25,
       "tests/test_metrics.py": 19,
+      "tests/test_metrics_predictions.py": 4,
+      "tests/test_misc_surfaces.py": 16,
+      "tests/test_module_helpers.py": 24,
+      "tests/test_paper_builders.py": 18,
+      "tests/test_paper_figures.py": 11,
       "tests/test_peft.py": 32,
       "tests/test_probes.py": 23,
       "tests/test_registration.py": 19,
@@ -1327,12 +1337,15 @@
       "tests/test_repo.py": 44,
       "tests/test_robustness_sweep.py": 5,
       "tests/test_rtdetr_arm.py": 6,
+      "tests/test_runner_helpers.py": 12,
       "tests/test_splits.py": 8,
       "tests/test_ssac.py": 46,
+      "tests/test_statistics_io.py": 6,
       "tests/test_tables.py": 14,
       "tests/test_tracking_env.py": 6,
       "tests/test_visualization.py": 8,
-      "tests/test_visualization_panels.py": 7
+      "tests/test_visualization_panels.py": 7,
+      "tests/test_viz_and_eval_misc.py": 14
     }
   }
 }

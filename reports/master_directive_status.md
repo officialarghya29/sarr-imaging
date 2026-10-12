@@ -49,7 +49,7 @@ the registry:
 | --- | --- | --- |
 | Architecture variants wired | 110 | `saryolo.nn.arch.VARIANTS` (`tests/test_repo.py`) |
 | Experiment configs | 134 | `saryolo.training.config.list_experiments` |
-| Tests | **762 tests** | `pytest --collect-only -q` (`tests/test_repo.py`) |
+| Tests | **949 tests** | `pytest --collect-only -q` (`tests/test_repo.py`) |
 | Datasets on disk | HRSID subset, 200 / 60 / 60, one class (`ship`) | `docs/assets/facts.json` → `real_subset` |
 
 **The architecture ladder.** Every module is an **exact identity at initialisation** and is
@@ -82,13 +82,17 @@ one class:
 **Engineering posture.** Every "ran" claim is tied to a command or a test; unmeasured cells
 render as `TBD`; the ledger is append-only; the demo never shows a prediction it did not
 compute; defects are recorded with the regression test that pins them (`defect_log.md`,
-D-01…D-22). Two deepscans of the previously untested surfaces (environment capture, the
+D-01…D-23). Three deepscans of the previously untested surfaces (environment capture, the
 qualitative panels, the corruption sweep, the gain diagnostic, the shared module primitives,
-the YAML generator, the dataset validator, checkpoint registration) and of the efficiency/scope
-corners exposed and fixed four defects (D-19 a mislabelled FP16 provenance field on a CUDA-less
-host; D-20 a silently-degraded gain input; D-21 an omitted routing report; D-22 a checkpoint
-safe-load allowlist that was insufficient and unreachable, making the shipped checkpoint
-unloadable under `ULTRALYTICS_SAFE_LOAD`). The suite runs on the development host with **no GPU and no dataset download**
+the YAML generator, the dataset validator, checkpoint registration, and — in the third pass —
+the paper table/figure builders, the runner and statistics writers, the LoRA layer, the
+conditioning data join, the failure-analysis writers and the metadata/registry/split helpers)
+and of the efficiency/scope corners exposed and fixed five defects (D-19 a mislabelled FP16
+provenance field on a CUDA-less host; D-20 a silently-degraded gain input; D-21 an omitted
+routing report; D-22 a checkpoint safe-load allowlist that was insufficient and unreachable,
+making the shipped checkpoint unloadable under `ULTRALYTICS_SAFE_LOAD`; D-23 a contrast-map
+reader that resolved a list-split's relative entries against the process cwd, so the map
+failed or emptied and the clutter proxy silently stopped working). The suite runs on the development host with **no GPU and no dataset download**
 (the dataset-gated and GPU-gated checks skip with a *named* reason).
 
 ---
@@ -205,5 +209,5 @@ as an explicit gap rather than omitted.
 | Deployment | `docs/DEPLOYMENT.md`; `tests/test_deploy.py` |
 | Counts (variants / experiments / tests) | `tests/test_repo.py` guards; `docs/assets/facts.json` |
 
-This report adds no number of its own; the one count it states — **762 tests** — is the
+This report adds no number of its own; the one count it states — **949 tests** — is the
 same one the suite's own count guards check.

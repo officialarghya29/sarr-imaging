@@ -220,7 +220,15 @@ def image_contrast_map(
     # a directory. `rglob` on a file returns nothing, so without this the caller would get an
     # empty contrast map and no error -- and the clutter proxy would quietly stop working.
     if resolved.is_file() and resolved.suffix.lower() in (".txt", ".lst"):
-        images = [Path(line) for line in resolved.read_text().splitlines() if line.strip()]
+        # List entries are resolved against the config's ``path`` when relative, exactly as
+        # ``saryolo.evaluation.metrics._split_index`` resolves them. A list written relative to
+        # the dataset root is the normal form, and reading it relative to the *process* cwd
+        # either raised for every entry or, worse, matched nothing and quietly emptied the map.
+        images = [
+            (Path(line) if Path(line).is_absolute() else (root / line).resolve())
+            for line in resolved.read_text().splitlines()
+            if line.strip()
+        ]
     else:
         images_dir = resolved
         images = sorted(
