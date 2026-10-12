@@ -316,7 +316,9 @@ Latest additions (this session):
    expensive path is skipped. That is why the efficiency question is answered with a wall-clock
    measurement and not a FLOP ratio.
 
-   **The wall-clock answer is no.** One checkpoint, identical weights, timed both ways at 320 px,
+   **The wall-clock answer is no.** (The numbers in this item were re-taken with both sides timed in
+   one process — see item 18 — which raised the overheads and left the conclusion unchanged.)
+   One checkpoint, identical weights, timed both ways at 320 px,
    batch 4, median of 5 blocks: dense 51.251 ms; sparse 63.890 ms at `keep = 1.0` (**+29.5 %**, the
    routing's own overhead), 50.731 at 0.5, 49.165 at 0.25, 48.547 at 0.1 — where 83 % of the P3
    expensive path is skipped and the latency has returned to the dense level and stopped. The
@@ -375,6 +377,34 @@ Latest additions (this session):
    evaluation-time knobs on an arm *trained* at 320 px, so no accuracy number exists at the scale
    the efficiency number is quoted from. The chart `docs/assets/ssac_execution.svg` now carries
    both scales, and the committed `facts.json` snapshot keeps each profile next to its protocol.
+   **Superseded by item 18**: the numbers in this table pair rows timed in different processes.
+
+18. ~~The dense/sparse sweep, re-measured with both sides in one process~~ — **the direction held,
+   the magnitude did not** (2026-10-12). Item 17's numbers came from two invocations: a standalone
+   dense profile and a separate sparse sweep. That pairing assumed the host is stable between
+   processes, and it is not — two consecutive processes timed the **same** checkpoint at **179.7 ms**
+   and **203.5 ms** at 640 px (batch 4, real chips, identical protocol), a drift wider than the
+   effect being measured. `saryolo efficiency --cycles N` now measures the dense baseline and every
+   budget **in one process**, round-robin over N cycles, and merges the cycles (median of the
+   per-cycle medians, with the span across all of them), so a drift that slows the second half of
+   the run lands on every row rather than only on the late ones. Re-measured with three cycles of
+   three timed blocks:
+
+   | Input | dense ms | `keep = 1.0` | 0.5 | 0.25 | 0.1 | tightest-budget saving |
+   | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+   | 320 px | 48.243 | 72.975 (+51 %) | 63.431 | 50.680 | 52.647 | none — every budget is at or above dense |
+   | 640 px | 196.216 | 245.342 (+25 %) | 199.352 (+1.6 %) | 183.594 | 179.628 | **−8.5 %** (range 177.1–184.2 ms, under dense's 191.7–211.5 ms) |
+
+   Three things changed. The 640 px saving is **8.5 %, not 13.5 %** — about half, and still
+   separable (the tightest budget's whole range sits below the dense minimum). The `keep = 1.0`
+   overhead is **+51 % / +25 %, not +29.5 % / +10.1 %**, which the halo explains: a 2-pixel halo on
+   a 16-pixel tile makes the gather recompute 1.5625× the expensive path, and the executed-fraction
+   column is capped at 1.00, so that surplus shows up in the latency and not in that column. And at
+   320 px the picture is cleaner than "returns to the dense level": **no** budget reaches dense,
+   the closest being +5 % at `keep = 0.25`. The conclusion the mechanism rests on — a wall-clock
+   saving exists at 640 px and does not at 320 px, because the ceiling is the input scale — is
+   unchanged, and is now pinned as *separation* (ranges, not just medians) by both the README guard
+   and the design document.
 
 What remains on the critical path needs a GPU: run `docs/RUNBOOK_SSDD.md` end to end. Every
 CPU-side prerequisite is now in place.

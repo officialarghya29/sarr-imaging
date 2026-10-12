@@ -15,7 +15,7 @@ on a subset is never presented as the benchmark result.
 
 | # | Claim | Label | Evidence (artifact / test) |
 | --- | --- | --- | --- |
-| 1 | The test suite passes and needs neither a GPU nor a download | **final** | `pytest -q` → 961 passed; `reports/reproduction_status.md` |
+| 1 | The test suite passes and needs neither a GPU nor a download | **final** | `pytest -q` → 977 passed; `reports/reproduction_status.md` |
 | 2 | The architecture vocabulary is wired and self-consistent | **final** | 110 variants; `tests/test_arch.py` (64 tests) |
 | 3 | Every custom module is an **exact** identity at initialisation | **final** | `docs/assets/facts.json` → `identity`, all `max|f(x)−x| = 0.0e+00`; `tests/test_arch.py` |
 | 4 | No module is frozen at init (identity comes from the gate, not a dead branch) | **final** | `tests/test_arch.py::test_no_module_is_frozen_at_init` |
@@ -34,7 +34,7 @@ on a subset is never presented as the benchmark result.
 | 16 | Any number for the full-release ladder, LOSO folds, tuned LoRA sweep | **blocked / `TBD`** | unmeasured; the ledger renders `TBD` |
 | 17 | The adaptive SSAC allocation beats a parameter-identical fixed-computation control | **withdrawn — not supported at this scale** | `SSAC-001` vs `SSAC-002` at three seeds: +0.0063 / +0.0645 / −0.0050 mAP50:95, mean +0.0220 ± 0.0373, smaller than the proposal's own spread; `paper/RESULTS.md` §8.7 |
 | 18 | The multi-scale SAR statistic is a better assessment signal than the raw feature | **withdrawn — not resolvable at this scale** | `SSAC-003`'s 0.0226 gap sits inside the proposal's 0.0290 seed spread and was not re-run; `paper/RESULTS.md` §8.8 |
-| 19 | Sparse execution turns the allocation into a wall-clock saving | **preliminary — measured positive at 640 px, still scale-bound** | CLI routing sweep: at 640 px the sparse range clears the dense range at `keep ≤ 0.5` (**−8.7 / −12.2 / −13.5 %** at 0.5 / 0.25 / 0.1; `keep = 1.0` costs **+10.1 %**). At 320 px the ~5 % gap at `keep = 0.1` sits inside the dense run's own spread, so **no saving is claimed there**. One checkpoint, CPU, batch 4; `paper/RESULTS.md` §8.5 |
+| 19 | Sparse execution turns the allocation into a wall-clock saving | **preliminary — measured positive at 640 px, still scale-bound** | CLI routing sweep with the dense baseline and every budget timed **in one process** (3 cycles x 3 blocks): at 640 px the sparse range lands below the dense range at `keep ≤ 0.25` (**−6.4 / −8.5 %** at 0.25 / 0.1; the tightest budget spans 177.1–184.2 ms under a dense 191.7–211.5 ms) and `keep = 1.0` costs **+25 %**. At 320 px **every** budget is at or above dense (closest: +5 %), so **no saving is claimed there**. One checkpoint, CPU, batch 4. The 13.5 % an earlier split-process pairing reported is superseded; `paper/RESULTS.md` §8.5 |
 | 20 | The sparsity penalty pushes the allocation sparse (the premise sparse execution needs) | **preliminary** | `SSAC-006` allocation diagnostic: P4 mean gate 0.670 → 0.236; its accuracy difference is explicitly **not** claimed as a gain |
 | 21 | The SSAC block is an exact identity at init and its sparse execution matches dense at `keep = 1.0` | **final** | `tests/test_ssac.py` (46 tests); bit-for-bit equality at `keep = 1.0`, no extra parameters |
 

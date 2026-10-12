@@ -1,8 +1,29 @@
-"""Attach sourced, per-image acquisition metadata to Ultralytics detection batches.
+"""Acquisition metadata for conditioned training: source listing, vocabularies, guards.
 
-Metadata is joined after geometric transforms using the image's stable stem. Image-mixing
-augmentations are incompatible with a single acquisition descriptor, so the conditioned
-training path refuses them rather than assigning one source's metadata to a composite.
+Metadata is joined to a dataset *after* geometric transforms, keyed by the image's stable
+stem, and that join is implemented **once**, in :mod:`saryolo.training.trainer`
+(``_attach_metadata`` with ``_metadata_descriptor``), which is what the training and
+validation paths call. This module holds the pieces around the join that are not
+``DetectionTrainer``-specific: enumerating a training source into image paths, fitting the
+training-only vocabularies, preparing the model config from them, and the guard below.
+
+Why the mixing guard is here and where it is called
+--------------------------------------------------
+A per-image descriptor describes exactly one image. An image-mixing transform -- mosaic,
+MixUp, CutMix, CopyPaste -- builds one training input out of several, so it would hand a
+composite the acquisition label of a single source, which is not a degradation the model can
+learn around but a wrong label. ``validate_metadata_augmentations`` refuses such a request, and
+it is called from both places that can see one: the runner, before a run starts (so a config
+that asks for mixing on conditioned data fails with the reason instead of quietly training a
+different pipeline than the one it states), and the trainer, before it builds its datasets.
+
+One join, not two
+-----------------
+This module used to carry a second, parallel implementation of the join -- its own
+``YOLODataset`` subclass and an ``attach_metadata_table`` attachment function -- which nothing
+outside its tests called. It could not express the metadata field mask the live join supports
+(so the missing-metadata study could not have run through it), and two joins that can drift
+apart are worse than one that cannot, so it was removed.
 """
 
 from __future__ import annotations
@@ -10,45 +31,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import torch
-from ultralytics.data.dataset import YOLODataset
-
-from saryolo.data.metadata import CATEGORICAL_FIELDS, MetadataTable, Vocabulary, encode_metadata
+from saryolo.data.metadata import CATEGORICAL_FIELDS, MetadataTable, Vocabulary
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 CATEGORICAL_ORDER = CATEGORICAL_FIELDS
-
-
-class AcquisitionMetadataYOLODataset(YOLODataset):
-    """YOLO detection dataset that adds one encoded metadata record per image."""
-
-    _metadata_by_stem: dict[str, tuple[list[float], list[int], list[float]]]
-
-    def __getitem__(self, index: int) -> dict[str, Any]:
-        sample = super().__getitem__(index)
-        stem = Path(self.im_files[index]).stem
-        descriptor = self._metadata_by_stem.get(stem)
-        if descriptor is None:
-            raise KeyError(f"acquisition metadata has no row for image stem {stem!r}")
-        continuous, categorical, availability = descriptor
-        sample["metadata"] = {
-            "continuous": torch.tensor(continuous, dtype=torch.float32),
-            "categorical": torch.tensor(categorical, dtype=torch.long),
-            "availability": torch.tensor(availability, dtype=torch.float32),
-        }
-        return sample
-
-    @staticmethod
-    def collate_fn(batch: list[dict[str, Any]]) -> dict[str, Any]:
-        """Use Ultralytics collation, then stack per-image acquisition vectors."""
-        result = YOLODataset.collate_fn(batch)
-        records = result.get("metadata")
-        if records is not None:
-            result["metadata"] = {
-                field: torch.stack([record[field] for record in records], dim=0)
-                for field in ("continuous", "categorical", "availability")
-            }
-        return result
 
 
 def _listed_images(value: str | Path | list[str]) -> list[Path]:
@@ -131,36 +117,13 @@ def prepare_conditioned_config(cfg: Any, vocabularies: dict[str, Vocabulary]) ->
     return config
 
 
-def attach_metadata_table(
-    dataset: YOLODataset,
-    table: MetadataTable,
-    vocabularies: dict[str, Vocabulary],
-) -> None:
-    """Join table fields to the constructed dataset using frozen training vocabularies."""
-    if not isinstance(dataset, YOLODataset):
-        raise TypeError(f"metadata conditioning supports YOLO detection datasets, got {type(dataset).__name__}")
-    stems = [Path(path).stem for path in dataset.im_files]
-    if len(stems) != len(set(stems)):
-        raise ValueError("image stems are not unique in this split; metadata joins must be unambiguous")
-    missing = sorted(set(stems) - set(table.entries))
-    if missing:
-        raise ValueError(
-            f"acquisition metadata has no row for {len(missing)} dataset image(s) "
-            f"(e.g. {missing[:3]}); rebuild the table for this exact split"
-        )
-    encoded = {stem: encode_metadata(table.get(stem), vocabularies) for stem in stems}
-    try:
-        dataset.__class__ = AcquisitionMetadataYOLODataset
-    except TypeError as exc:
-        raise TypeError(
-            f"cannot attach acquisition metadata to {type(dataset).__name__}; "
-            "the dataset class must support the metadata-aware YOLO subclass"
-        ) from exc
-    dataset._metadata_by_stem = encoded
-
-
 def validate_metadata_augmentations(args: Any) -> None:
-    """Reject image-mixing augmentation for a per-image conditioned model."""
+    """Reject image-mixing augmentation for a per-image conditioned model.
+
+    ``args`` is anything carrying the four mixing keys as attributes -- the trainer's resolved
+    argument namespace, or a namespace built from a run's overrides. The refusal names only the
+    transforms that are switched on, so the message is the whole diagnosis.
+    """
     active = {
         key: getattr(args, key, 0.0)
         for key in ("mosaic", "mixup", "cutmix", "copy_paste")

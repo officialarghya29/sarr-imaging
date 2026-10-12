@@ -369,6 +369,59 @@ def test_readme_generated_charts_exist():
     assert (REPO_ROOT / "docs" / "assets" / "facts.json").exists()
 
 
+#: Where a repository script may be *named* in prose or in a docstring. Installed packages are
+#: excluded on purpose: a third-party library's own ``scripts/`` tree has nothing to do with this
+#: repository, and scanning it would make this check depend on what the environment happens to
+#: hold.
+SCRIPT_MENTION_DIRS = ("saryolo", "tests", "scripts", "docs", "paper", "reports", "configs")
+
+#: A path to a script in this repository, as it would be written in backticks or in a command.
+SCRIPT_MENTION = re.compile(r"scripts/[A-Za-z0-9_./-]+\.py")
+
+
+def _named_scripts() -> dict[str, str]:
+    """Every ``scripts/<name>.py`` named in the tree, mapped to where it was named."""
+    named: dict[str, str] = {}
+    roots = [REPO_ROOT / directory for directory in SCRIPT_MENTION_DIRS]
+    roots.append(REPO_ROOT)
+    for root in roots:
+        for path in sorted(root.glob("*.md") if root == REPO_ROOT else root.rglob("*")):
+            if not path.is_file() or path.suffix not in (".py", ".md", ".yaml", ".yml"):
+                continue
+            for name in SCRIPT_MENTION.findall(path.read_text(errors="ignore")):
+                named.setdefault(name, str(path.relative_to(REPO_ROOT)))
+    return named
+
+
+def test_every_script_named_in_the_tree_exists():
+    """A helper the prose points at must be a helper that is actually there.
+
+    The defect this closes: two docstrings in the core-mechanism module told the reader that the
+    module's latency claim "is measured by a script named ``ssac_efficiency.py`` under ``scripts/``
+    and only there". No such file has ever been in this tree — the measurement is a CLI entry
+    point, ``python -m saryolo efficiency`` — so the one pointer a reader would follow to check the
+    claim led nowhere. (The guard below caught this very sentence when it was first written with
+    the path spelled out, which is the behaviour wanted from it.) It
+    survived every audit for the same reason a broken anchor does: a path inside a docstring is
+    not a markdown link, so the repository's link guard (``tests/test_docs.py``) never sees it and
+    nothing else reads docstrings for paths.
+
+    A guard rather than a one-off fix, because the failure mode is generic: renaming or removing a
+    script while some document still names it is invisible until someone tries to run it.
+    """
+    named = _named_scripts()
+    assert named, (
+        "no script path is named anywhere in the tree, so this guard has nothing to check — if "
+        "the tree really stopped naming its scripts, the guard's scope needs revisiting"
+    )
+    missing = sorted(name for name in named if not (REPO_ROOT / name).is_file())
+    assert not missing, (
+        "these scripts are named in the tree but do not exist: "
+        + ", ".join(f"{name} (named in {named[name]})" for name in missing)
+        + ". Point the prose at the entry point that exists, or add the script."
+    )
+
+
 def test_every_chart_has_a_png_companion():
     """Each chart needs a raster twin, and it must be committed alongside the SVG.
 
@@ -738,25 +791,47 @@ def test_readme_dense_vs_sparse_table_matches_the_measured_sweep():
                 )
         # The conclusion, as an inequality over the measured rows, is *scale-dependent* and the
         # table must keep showing that: routing always costs more than dense when nothing is
-        # skipped, and a budget that beats dense by more than a rounding margin is a wall-clock
-        # saving — which the record says happens only at the larger scale.
-        dense_ms = data["dense"]["latency_ms"]
+        # skipped, and a budget that beats dense is a wall-clock saving — which the record says
+        # happens only at the larger scale.
+        #
+        # What is pinned is the *separation*, not a magnitude. The magnitude is a property of the
+        # host (this CPU's timing spread between two processes is of the same order as the effect,
+        # which is why the sweep now times every row in one process), so a threshold on the median
+        # alone would fail on a re-measurement that changed nothing but the weather. Instead: at
+        # 320 px no budget's median reaches the dense median *and* the tightest budget's range
+        # still overlaps the dense range; at 640 px the tightest budget beats dense by more than a
+        # 5 % floor *and* its whole range sits below the dense minimum. A difference that is
+        # inside the dense row's own spread is not a saving, whatever the medians say.
+        dense = data["dense"]
+        dense_ms = dense["latency_ms"]
         worst = max(r["ms"] for r in rows[1:])
-        best = min(r["ms"] for r in rows[1:])
         assert worst > dense_ms, (
             f"at {scale} px the routing overhead is no longer visible ({worst} ms vs dense "
             f"{dense_ms} ms), so the table no longer shows what the section says it shows"
         )
-        saving = 1.0 - best / dense_ms
+        tightest = min(data["sparse"], key=lambda r: r["latency_ms"])
+        saving = 1.0 - tightest["latency_ms"] / dense_ms
         if scale <= 320:
-            assert saving < 0.10, (
+            assert saving <= 0.0, (
                 f"a sparse budget at {scale} px now beats dense by {saving * 100:.1f}%, so the "
                 f"'no wall-clock saving at 320 px' conclusion must be rewritten"
             )
+            assert tightest["latency_ms_min"] < dense["latency_ms_max"], (
+                f"at {scale} px the tightest budget's range no longer overlaps the dense range, "
+                f"so the two are separable now and the conclusion must be rewritten"
+            )
         else:
-            assert saving > 0.10, (
+            assert saving > 0.05, (
                 f"no sparse budget at {scale} px beats dense by more than {saving * 100:.1f}%, "
-                f"so the 'the saving appears at 640 px' conclusion must be rewritten"
+                f"under the 5 % floor this conclusion rests on, so the 'the saving appears at "
+                f"640 px' claim must be withdrawn or the sweep re-measured"
+            )
+            tight_span = f"{tightest['latency_ms_min']}-{tightest['latency_ms_max']} ms"
+            dense_span = f"{dense['latency_ms_min']}-{dense['latency_ms_max']} ms"
+            assert tightest["latency_ms_max"] < dense["latency_ms_min"], (
+                f"at {scale} px the tightest budget ({tight_span}) is not entirely below the "
+                f"dense range ({dense_span}), so the difference is inside the dense "
+                f"measurement's own spread and is not a saving"
             )
 
 

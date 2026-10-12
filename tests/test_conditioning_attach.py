@@ -1,14 +1,21 @@
-"""Attaching acquisition metadata to a detection dataset, and the guard around it.
+"""The acquisition-metadata join the training path actually performs, and the guard around it.
 
-The attachment is where a per-image descriptor meets the dataset that will emit it. Two
-failures are quiet here and both are pinned:
+The join is where a per-image descriptor meets the dataset that will emit it. Two failures are
+quiet here and both are pinned:
 
-* a split whose images are only *partially* covered by the table would attach metadata to
-  some images and silently leave others to the model's unknown path -- so a partial table
-  is refused rather than absorbed;
-* an image-mixing augmentation would assign one acquisition label to a composite of two
-  images, so the conditioned path refuses mosaic/mixup/cutmix/copy-paste instead of
-  training on a label that is simply wrong.
+* a split whose images are only *partially* covered by the table would attach metadata to some
+  images and silently leave others to the model's unknown path -- so a partial table is refused
+  rather than absorbed;
+* an image-mixing augmentation would assign one acquisition label to a composite of two images,
+  so the conditioned path refuses mosaic/mixup/cutmix/copy-paste instead of training on a label
+  that is simply wrong.
+
+These tests drive the join in :mod:`saryolo.training.trainer` -- the one the trainer and the
+validator call -- rather than the copy that used to live in the data layer with no caller. That
+copy could not express the metadata field mask, so the missing-metadata study could not have run
+through it, and a second implementation of a join is a second thing that can drift; the tests
+below therefore cover the live join *including* the mask, which is the capability that decided
+which implementation stayed.
 """
 
 from __future__ import annotations
@@ -19,13 +26,10 @@ from types import SimpleNamespace
 import pytest
 from ultralytics.data.dataset import YOLODataset
 
-from saryolo.data.conditioning import (
-    AcquisitionMetadataYOLODataset,
-    _listed_images,
-    attach_metadata_table,
-    validate_metadata_augmentations,
-)
+from saryolo.data.conditioning import _listed_images, validate_metadata_augmentations
+from saryolo.data.field_mask import metadata_field_mask
 from saryolo.data.metadata import AcquisitionMetadata, MetadataTable, Vocabulary
+from saryolo.training.trainer import _attach_metadata
 
 
 def _dataset(im_files: list[str]) -> YOLODataset:
@@ -37,7 +41,7 @@ def _dataset(im_files: list[str]) -> YOLODataset:
 
 # ------------------------------------------------------------------ the join
 
-def test_attach_metadata_table_encodes_every_image_and_switches_the_class():
+def test_attach_metadata_encodes_every_image_and_switches_the_class():
     table = MetadataTable(entries={
         "a": AcquisitionMetadata(sensor="sentinel1"),
         "b": AcquisitionMetadata(sensor="terrasarx"),
@@ -45,44 +49,70 @@ def test_attach_metadata_table_encodes_every_image_and_switches_the_class():
     vocabs = table.build_vocabularies()
     ds = _dataset(["a.jpg", "b.jpg"])
 
-    attach_metadata_table(ds, table, vocabs)
+    _attach_metadata(ds, table, vocabs)
 
-    assert isinstance(ds, AcquisitionMetadataYOLODataset), "the dataset class was not switched"
-    assert set(ds._metadata_by_stem) == {"a", "b"}
-    continuous, categorical, availability = ds._metadata_by_stem["a"]
-    assert availability[-3] == 1.0, "a recorded sensor must be flagged available"
+    from saryolo.training.trainer import AcquisitionMetadataDetectionDataset
+
+    assert isinstance(ds, AcquisitionMetadataDetectionDataset), "the dataset class was not switched"
+    assert set(ds._acquisition_rows) == {"a", "b"}
+    availability = ds._acquisition_rows["a"]["availability"]
+    assert float(availability[-3]) == 1.0, "a recorded sensor must be flagged available"
 
 
-def test_attach_metadata_table_uses_the_frozen_vocabulary_for_ids():
+def test_attach_metadata_uses_the_frozen_vocabulary_for_ids():
     table = MetadataTable(entries={
         "a": AcquisitionMetadata(sensor="sentinel1"),
         "b": AcquisitionMetadata(sensor="terrasarx"),
     })
     vocabs = table.build_vocabularies()
     ds = _dataset(["a.jpg", "b.jpg"])
-    attach_metadata_table(ds, table, vocabs)
-    # CATEGORICAL_FIELDS order is (sensor, polarization, mode); index 1 is the first entry.
-    assert ds._metadata_by_stem["a"][1][0] == vocabs["sensor"].index("sentinel1")
+    _attach_metadata(ds, table, vocabs)
+    # CATEGORICAL_FIELDS order is (sensor, polarization, mode); entry 0 is the sensor.
+    categorical = ds._acquisition_rows["a"]["categorical"]
+    assert int(categorical[0]) == vocabs["sensor"].index("sentinel1")
 
 
-def test_attach_metadata_table_refuses_a_non_yolo_dataset():
+def test_attach_metadata_honours_a_field_mask_the_dead_copy_could_not():
+    """The missing-metadata study withholds fields at the data level, not the graph level.
+
+    That is the capability that decided which of the two joins stayed: the live one can encode a
+    record as though a field had never been recorded -- value zeroed *and* availability cleared,
+    so it is indistinguishable from an absent field -- and the removed copy could not.
+    """
+    table = MetadataTable(entries={"a": AcquisitionMetadata(sensor="sentinel1", resolution_m=5.0)})
+    vocabs = table.build_vocabularies()
+
+    kept = _dataset(["a.jpg"])
+    _attach_metadata(kept, table, vocabs)
+    assert float(kept._acquisition_rows["a"]["availability"][0]) == 1.0
+    assert float(kept._acquisition_rows["a"]["continuous"][0]) > 0.0
+
+    masked = _dataset(["a.jpg"])
+    _attach_metadata(masked, table, vocabs, field_mask=metadata_field_mask(("sensor",)))
+    row = masked._acquisition_rows["a"]
+    assert float(row["availability"][0]) == 0.0, "a withheld resolution must read as absent"
+    assert float(row["continuous"][0]) == 0.0
+    assert float(row["availability"][-3]) == 1.0, "the delivered sensor survives the mask"
+
+
+def test_attach_metadata_refuses_a_non_yolo_dataset():
     with pytest.raises(TypeError, match="YOLO detection datasets"):
-        attach_metadata_table(object(), MetadataTable(), {})
+        _attach_metadata(object(), MetadataTable(), {})
 
 
-def test_attach_metadata_table_refuses_a_partially_covered_split():
+def test_attach_metadata_refuses_a_partially_covered_split():
     """A missing row would leave that image on the unknown path without saying so."""
     table = MetadataTable(entries={"a": AcquisitionMetadata(sensor="sentinel1")})
     vocabs = table.build_vocabularies()
     with pytest.raises(ValueError, match="no row for"):
-        attach_metadata_table(_dataset(["a.jpg", "b.jpg"]), table, vocabs)
+        _attach_metadata(_dataset(["a.jpg", "b.jpg"]), table, vocabs)
 
 
-def test_attach_metadata_table_refuses_duplicate_stems():
+def test_attach_metadata_refuses_duplicate_stems():
     table = MetadataTable(entries={"a": AcquisitionMetadata(sensor="sentinel1")})
     vocabs = table.build_vocabularies()
     with pytest.raises(ValueError, match="stems are not unique"):
-        attach_metadata_table(_dataset(["a.jpg", "a.png"]), table, vocabs)
+        _attach_metadata(_dataset(["a.jpg", "a.png"]), table, vocabs)
 
 
 def test_vocabularies_are_a_frozen_interface():

@@ -518,9 +518,14 @@ def _ssac_execution_facts() -> dict:
             levels = (profile.get("ssac_routing") or {}).get("levels", [])
             executed = [lv["executed_rich_fraction"] for lv in levels]
             tiles = [lv["selected_tile_fraction"] for lv in levels]
+            execution = profile.get("ssac_execution", "dense")
             return {
-                "execution": profile.get("ssac_execution", "dense"),
-                "keep": profile.get("ssac_keep") if levels else None,
+                "execution": execution,
+                # A dense execution has no budget whatever the block's loaded ``keep`` says: the
+                # profile records the attribute it found, and publishing that as the dense row's
+                # budget would read as though the row had been routed at 0.25.
+                "keep": (profile.get("ssac_keep") if levels else None)
+                if execution != "dense" else None,
                 "latency_ms": round(float(profile["latency_ms"]), 3),
                 "fps": round(float(profile["fps"]), 2),
                 "latency_ms_min": profile.get("latency_ms_min"),

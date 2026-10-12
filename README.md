@@ -6,7 +6,7 @@
 <h4 align="center">SAR Acquisition-Robust Visual Optimization — a SAR-native object detector</h4>
 
 <p align="center">
-  <img alt="tests" src="https://img.shields.io/badge/tests-961_passing-22c55e">
+  <img alt="tests" src="https://img.shields.io/badge/tests-977_passing-22c55e">
   <img alt="fabricated results" src="https://img.shields.io/badge/fabricated_results-0-black">
   <img alt="architectures" src="https://img.shields.io/badge/architectures-110_wired-3b82f6">
   <img alt="experiments" src="https://img.shields.io/badge/experiments-134_configured-8b5cf6">
@@ -53,7 +53,7 @@ results.
 | **What this is** | A complete, reproducible research pipeline: dataset audit → baseline → components → ablations → removal tests → robustness → efficiency → cross-dataset → paper. |
 | **Architectures** | 110 variants wired; every one builds and runs a forward pass |
 | **Experiments** | 134 configured; each reproducible from a committed YAML |
-| **Tests** | 961 passing — no dataset download and no GPU needed |
+| **Tests** | 977 passing — no dataset download and no GPU needed |
 | **Proven** | The instrument: the baseline reproduces stock YOLO11 **exactly**, every custom module is an *exact* identity at initialisation and demonstrably not frozen, and the pipeline trains and evaluates on **real** SAR imagery. |
 | **Not yet proven** | Every accuracy number is a **pilot** on a subset. The ablation ladder, cross-sensor generalisation and the full-release benchmark are `TBD`; they need a GPU and the full datasets. |
 
@@ -123,11 +123,13 @@ resolution and seed, so a row differs from its neighbours only in **what is trai
   (mean **+0.0220 ± 0.0373**), so the seed-0 gain is not reproduced and the claim is **withdrawn
   as unsupported at this scale**. What the pilot does support is negative and precise: the
   allocation is real and spatial, sparse execution is a faithful implementation, and it does
-  **not** convert into a wall-clock saving at the pilot's 320 px training scale (**+29.5 %** at
-  `keep = 1.0`, and only back to the dense latency at `keep = 0.1`). Timed again at **640 px**,
-  where every governed level becomes routable, the same checkpoint finally *does* save wall-clock:
-  **−13.5 %** at `keep = 0.1`, and −8.7 / −12.2 % at `keep = 0.5 / 0.25`, every timed budget below
-  the whole dense range. The saving is scale-bound, one checkpoint, CPU only. See below.
+  **not** convert into a wall-clock saving at the pilot's 320 px training scale (the gather's halo
+  makes `keep = 1.0` cost **+51 %**, and no budget reaches the dense latency). Timed again at
+  **640 px**, where every governed level becomes routable, the same checkpoint finally *does* save
+  wall-clock: **−8.5 %** at `keep = 0.1` and **−6.4 %** at `keep = 0.25`, both ranges entirely below
+  the dense one. The saving is scale-bound, one checkpoint, CPU only — and measured with every row
+  timed in one process, because this host's between-process drift is of the same order as the
+  effect. See below.
 - **Negative results are kept, not buried.** Two synthetic acquisition-shift axes (global
   radiometric gain, along-track resolution loss) do **not** separate the arms. Reported as nulls.
 
@@ -189,38 +191,50 @@ graph, the same **3,396,329** parameters, the same trained weights, with the exp
 only on the selected 16-pixel tiles, each gathered with a 2-pixel halo so a selected tile sees
 exactly the context it saw in the dense pass (at `keep = 1.0` the two modes agree bit-for-bit,
 which is what makes the sparse mode trustworthy enough to time). One checkpoint, both ways, timed
-at **two scales**. At the pilot's 320 px training scale the answer stops at the dense level:
+at **two scales** — and, because the two rows *are* the comparison, timed **in one process**: the
+dense baseline is measured by the same command that sweeps the budgets, round-robin over three
+cycles of three timed blocks each (nine timed blocks per row), so drift from the early to the late
+part of the run lands on every row instead of only on the late ones. That mattered: two
+consecutive processes on this host timed the same checkpoint at 179.7 ms and 203.5 ms at 640 px, a
+spread wider than the effect under test, which is why an earlier version of this table — dense
+from one process, sparse from another — is superseded below rather than quoted. At the pilot's
+320 px training scale the answer stops at the dense level:
 
 | 320 px | `keep` | Expensive path executed (P3 / P4 / P5) | tiles/level | ms / batch of 4 | FPS |
 | --- | ---: | --- | --- | ---: | ---: |
-| dense | — | 1.00 / 1.00 / 1.00 | 9 / 4 / 1 | 51.251 | 78.05 |
-| sparse | 1.0 | 1.00 / 1.00 / 1.00 | 9 / 4 / 1 | 63.890 | 62.61 |
-| sparse | 0.5 | 0.87 / 0.78 / 1.00 | 9 / 4 / 1 | 50.731 | 78.85 |
-| sparse | 0.25 | 0.52 / 0.39 / 1.00 | 9 / 4 / 1 | 49.165 | 81.36 |
-| sparse | 0.1 | 0.17 / 0.39 / 1.00 | 9 / 4 / 1 | 48.547 | 82.39 |
+| dense | — | 1.00 / 1.00 / 1.00 | 9 / 4 / 1 | 48.243 | 82.91 |
+| sparse | 1.0 | 1.00 / 1.00 / 1.00 | 9 / 4 / 1 | 72.975 | 54.81 |
+| sparse | 0.5 | 0.87 / 0.78 / 1.00 | 9 / 4 / 1 | 63.431 | 63.06 |
+| sparse | 0.25 | 0.52 / 0.39 / 1.00 | 9 / 4 / 1 | 50.680 | 78.93 |
+| sparse | 0.1 | 0.17 / 0.39 / 1.00 | 9 / 4 / 1 | 52.647 | 75.98 |
 
 At **640 px**, where the deepest governed level is four tiles instead of one, the same checkpoint
 finally clears the dense range:
 
 | 640 px | `keep` | Expensive path executed (P3 / P4 / P5) | tiles/level | ms / batch of 4 | FPS | vs dense |
 | --- | ---: | --- | --- | ---: | ---: | ---: |
-| dense | — | 1.00 / 1.00 / 1.00 | 25 / 9 / 4 | 266.395 | 15.02 | — |
-| sparse | 1.0 | 1.00 / 1.00 / 1.00 | 25 / 9 / 4 | 293.302 | 13.64 | +10.10 % |
-| sparse | 0.5 | 0.81 / 0.87 / 0.78 | 25 / 9 / 4 | 243.348 | 16.44 | **−8.65 %** |
-| sparse | 0.25 | 0.44 / 0.52 / 0.39 | 25 / 9 / 4 | 233.790 | 17.11 | **−12.24 %** |
-| sparse | 0.1 | 0.19 / 0.17 / 0.39 | 25 / 9 / 4 | 230.459 | 17.36 | **−13.49 %** |
+| dense | — | 1.00 / 1.00 / 1.00 | 25 / 9 / 4 | 196.216 | 20.39 | — |
+| sparse | 1.0 | 1.00 / 1.00 / 1.00 | 25 / 9 / 4 | 245.342 | 16.30 | +25.04 % |
+| sparse | 0.5 | 0.81 / 0.87 / 0.78 | 25 / 9 / 4 | 199.352 | 20.07 | +1.60 % |
+| sparse | 0.25 | 0.44 / 0.52 / 0.39 | 25 / 9 / 4 | 183.594 | 21.79 | **−6.43 %** |
+| sparse | 0.1 | 0.19 / 0.17 / 0.39 | 25 / 9 / 4 | 179.628 | 22.27 | **−8.45 %** |
 
-Routing always has a real overhead — at `keep = 1.0` every tile is still gathered, **+29.5 %** at
-320 px and **+10.1 %** at 640 px for nothing. At 320 px the skipping buys that overhead back and
-then stops: at `keep = 0.1`, with **83 % of the P3 expensive path skipped**, the latency returns
-to the dense level and goes no lower, and the leftover ~5 % gap is inside the dense run's own
-block-to-block spread — so **no saving is claimed there**. The per-level column shows the ceiling:
-at 320 px the P5 map is 10×10, a **single** tile, so no budget can skip anything there. At 640 px
-the same map is 20×20 — **four** tiles — every governed level can be routed, and the latency drops
-cleanly below the whole dense range, by **8.7 / 12.2 / 13.5 %** at `keep = 0.5 / 0.25 / 0.1` with
-the sparse runs themselves far tighter (0.8–1.9 % spread against the dense run's 12.7 %). That is
-the test `docs/ssac_design.md` §4 pre-registered: the ceiling is a property of the input scale,
-and when the scale lifts, the saving it predicted appears.
+Routing always has a real overhead, and at `keep = 1.0` it is the whole story: every tile is still
+gathered, and a 2-pixel halo on a 16-pixel tile makes the gather recompute **1.5625×** the
+expensive path — which is why the `keep = 1.0` row is the slowest in both tables (**+51 %** at
+320 px, **+25 %** at 640 px), and why its executed column reads 1.00: the column is capped at the
+whole path, and the surplus is the halo, visible in the latency rather than in that column. At
+320 px the skipping buys that overhead back and then stops: at `keep = 0.1`, with **83 % of the P3
+expensive path skipped**, latency is still 52.6 ms against the dense 48.2 ms, and *every* budget is
+at or above dense (the closest is 50.7 ms at `keep = 0.25`) — so **no saving is claimed there**.
+The per-level column shows the ceiling: at 320 px the P5 map is 10×10, a **single** tile, so no
+budget can skip anything there. At 640 px the same map is 20×20 — **four** tiles — every governed
+level can be routed, and two budgets land below the whole dense range: **6.4 / 8.5 %** at
+`keep = 0.25 / 0.1`, whose sparse range (177.1–184.2 ms) sits entirely under the dense one
+(191.7–211.5 ms) even though the dense row's own cycle-to-cycle spread is wider (10.1 % against
+3.9 %). That is the test `docs/ssac_design.md` §4 pre-registered: the ceiling is a property of the
+input scale, and when the scale lifts, the saving it predicted appears — at **about 8.5 %**, not
+the 13.5 % an earlier cross-process pairing reported.
 
 Two further measured caveats, because they decide how the number may be read. The FLOP counters
 **cannot see the sparsity**: they trace dense kernels regardless of which ones execute, so the
@@ -232,9 +246,11 @@ below by the routing itself: at these map sizes the router is never free.
 
 **What this does not claim.** One checkpoint for the timing, three builds for the accuracy, 60 test
 images, one CPU — and, for the 640 px saving, evaluation-time budgets on an arm trained at 320 px;
-no arm was trained at 640 px. The efficiency positive is therefore **preliminary**: measured,
-reproducible and predicted, but one checkpoint on CPU and worth about +2.3 FPS at the tightest
-budget. The accuracy claim is **withdrawn**: the withdrawal conditions (no gain over the control;
+no arm was trained at 640 px. The efficiency positive is therefore **preliminary, and reported as
+a direction rather than a magnitude**: measured, reproducible in design, predicted — but one
+checkpoint on CPU, worth about **+1.9 FPS** at the tightest budget, and measured on a host whose
+between-process timing spread is of the same order as the saving itself. The accuracy claim is
+**withdrawn**: the withdrawal conditions (no gain over the control;
 the raw-feature alternative matching the proposal; a small-object drop), written in
 `docs/ssac_design.md` §3.2 **before** the runs, did their job — condition 1 fires at seed 2, where
 the proposal no longer beats the parameter-identical control on mAP50:95. The small-object
@@ -381,7 +397,7 @@ Each row is an executable check, not a claim. The full list lives in `tests/`.
 git clone https://github.com/officialarghya29/sarr-imaging.git && cd sarr-imaging
 python -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt
 
-pytest tests/ -q                                          # 961 tests
+pytest tests/ -q                                          # 977 tests
 ```
 
 Run the detector on one image, and in a browser:
@@ -461,7 +477,7 @@ docs/            physics-to-architecture proposals · method drafts · claim-to-
 paper/           manuscript skeleton + generated tables + results draft
 app.py           Streamlit demo — draws the pipeline's detections, computes nothing itself
 weights/         the one committed checkpoint the demo serves, with its provenance and checksum
-tests/           961 checks; the instrument is tested as hard as the model
+tests/           977 checks; the instrument is tested as hard as the model
 ```
 
 ---

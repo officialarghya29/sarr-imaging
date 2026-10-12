@@ -349,44 +349,54 @@ timing experiment: the sparse build is **parameter-identical** to the dense one 
 parameters either way, so the difference is arithmetic and not capacity), and at `keep = 1.0`
 sparse execution reproduces dense execution **bit-for-bit** in eval mode, which is what proves
 the halo and the gather are right. One trained checkpoint (`SSAC-001`), identical weights,
-timed both ways on real val images at two input scales, batch 4, median of 5 blocks per row.
+timed both ways on real val images at two input scales, batch 4.
+
+Both sides of every comparison are timed **in one process**. The dense baseline is measured by the
+same command that sweeps the budgets, round-robin over three cycles of three timed blocks each —
+nine blocks per row — because between-process drift on this host is larger than the effect under
+test: two consecutive processes timed the same checkpoint at 179.7 ms and 203.5 ms (640 px, batch 4
+of real chips, identical protocol). A dense row from one process against sparse rows from another
+would therefore have measured the machine's state rather than the arithmetic; the numbers below
+supersede an earlier pairing of exactly that kind, which reported a 13.5 % saving.
 
 **The pilot's training scale, 320 px — no saving is claimed:**
 
 | Execution | `keep` | Expensive path executed (P3 / P4 / P5) | tiles/level | ms / batch of 4 | FPS |
 | --- | ---: | --- | --- | ---: | ---: |
-| dense | — | 1.00 / 1.00 / 1.00 | 9 / 4 / 1 | 51.251 | 78.05 |
-| sparse | 1.0 | 1.00 / 1.00 / 1.00 | 9 / 4 / 1 | 63.890 | 62.61 |
-| sparse | 0.5 | 0.87 / 0.78 / 1.00 | 9 / 4 / 1 | 50.731 | 78.85 |
-| sparse | 0.25 | 0.52 / 0.39 / 1.00 | 9 / 4 / 1 | 49.165 | 81.36 |
-| sparse | 0.1 | 0.17 / 0.39 / 1.00 | 9 / 4 / 1 | 48.547 | 82.39 |
+| dense | — | 1.00 / 1.00 / 1.00 | 9 / 4 / 1 | 48.243 | 82.91 |
+| sparse | 1.0 | 1.00 / 1.00 / 1.00 | 9 / 4 / 1 | 72.975 | 54.81 |
+| sparse | 0.5 | 0.87 / 0.78 / 1.00 | 9 / 4 / 1 | 63.431 | 63.06 |
+| sparse | 0.25 | 0.52 / 0.39 / 1.00 | 9 / 4 / 1 | 50.680 | 78.93 |
+| sparse | 0.1 | 0.17 / 0.39 / 1.00 | 9 / 4 / 1 | 52.647 | 75.98 |
 
 **The scale the pre-registered design named as the test, 640 px — the saving appears:**
 
 | Execution | `keep` | Expensive path executed (P3 / P4 / P5) | tiles/level | ms / batch of 4 | FPS | vs dense |
 | --- | ---: | --- | --- | ---: | ---: | ---: |
-| dense | — | 1.00 / 1.00 / 1.00 | 25 / 9 / 4 | 266.395 | 15.02 | — |
-| sparse | 1.0 | 1.00 / 1.00 / 1.00 | 25 / 9 / 4 | 293.302 | 13.64 | **+10.10 %** |
-| sparse | 0.5 | 0.81 / 0.87 / 0.78 | 25 / 9 / 4 | 243.348 | 16.44 | **−8.65 %** |
-| sparse | 0.25 | 0.44 / 0.52 / 0.39 | 25 / 9 / 4 | 233.790 | 17.11 | **−12.24 %** |
-| sparse | 0.1 | 0.19 / 0.17 / 0.39 | 25 / 9 / 4 | 230.459 | 17.36 | **−13.49 %** |
+| dense | — | 1.00 / 1.00 / 1.00 | 25 / 9 / 4 | 196.216 | 20.39 | — |
+| sparse | 1.0 | 1.00 / 1.00 / 1.00 | 25 / 9 / 4 | 245.342 | 16.30 | **+25.04 %** |
+| sparse | 0.5 | 0.81 / 0.87 / 0.78 | 25 / 9 / 4 | 199.352 | 20.07 | +1.60 % |
+| sparse | 0.25 | 0.44 / 0.52 / 0.39 | 25 / 9 / 4 | 183.594 | 21.79 | **−6.43 %** |
+| sparse | 0.1 | 0.19 / 0.17 / 0.39 | 25 / 9 / 4 | 179.628 | 22.27 | **−8.45 %** |
 
 Findings, in the order they matter.
 
-1. **Routing has a real overhead, and it shrinks as the timing batch grows.** At `keep = 1.0`
-   every tile is still gathered and scattered, so the mechanism does strictly more work than
-   the dense form: **+29.5 %** latency at 320 px and **+10.1 %** at 640 px for no saving at all.
-   Any claim that the routing is free is false at this tile size.
-2. **The saving appears exactly where the pre-registered design said it would.** At 320 px the
-   skipping buys the overhead back and stops: at `keep = 0.1`, 83 % of the P3 expensive path is
-   skipped and the result is 48.5 ms against the dense 51.3 ms — a ~5 % difference whose
-   magnitude is inside the dense measurement's own block-to-block spread (50.6–61.1 ms), so **no
-   wall-clock saving is claimed at that scale**. At 640 px the same checkpoint at `keep ≤ 0.5`
-   lands *below* the entire dense range (dense 259.9–293.9 ms; sparse at `keep = 0.1`,
-   229.6–231.4 ms) and the saving grows monotonically as the budget tightens — **8.7 / 12.2 /
-   13.5 %** at `keep = 0.5 / 0.25 / 0.1` — while the sparse runs are themselves tight (spread
-   0.8–1.9 % against the dense run's 12.7 %). The margin now exceeds the measurement's own
-   noise, which is the property `docs/ssac_design.md` §4 named as the test.
+1. **Routing has a real overhead, and at `keep = 1.0` it is pure loss.** Every tile is still
+   gathered, and a 2-pixel halo on a 16-pixel tile means the gather recomputes **1.5625×** the
+   expensive path. The executed-fraction column is capped at the whole path, so that surplus does
+   not appear there; it appears in the latency — **+51 %** at 320 px and **+25 %** at 640 px for no
+   saving at all. Any claim that the routing is free is false at this tile size.
+2. **The saving appears exactly where the pre-registered design said it would — and it is about
+   half the size an earlier cross-process pairing suggested.** At 320 px the skipping buys the
+   overhead back and stops: at `keep = 0.1`, 83 % of the P3 expensive path is skipped and the
+   result is 52.6 ms against the dense 48.2 ms, *every* budget at or above dense (the closest is
+   50.7 ms at `keep = 0.25`) — so **no wall-clock saving is claimed at that scale**. At 640 px the
+   same checkpoint at `keep ≤ 0.25` lands below the dense range: the dense row spans 191.7–211.5 ms
+   across its cycles, the tightest budget spans 177.1–184.2 ms, and the two ranges are disjoint —
+   **6.4 / 8.5 %** at `keep = 0.25 / 0.1`. The saving is therefore separable from the measurement's
+   own spread, which is the property `docs/ssac_design.md` §4 named as the test. Its *magnitude*,
+   8.5 % (about +1.9 FPS), is a property of this host and is reported as such rather than
+   generalised.
 3. **The ceiling is the input scale, not the budget.** At 320 px the P5 feature map is 10×10,
    which is a *single* tile of 16: no budget can skip anything there, and P4 has four tiles, so
    the executed fraction is pinned at 1.00 for P5 at every budget. At 640 px every governed
@@ -410,9 +420,10 @@ general.
 
 What the 640 px saving does **not** establish, and is therefore not claimed: one checkpoint, one
 host, CPU only, batch 4; the budgets are *evaluation-time* knobs, so no arm was trained for a
-target budget; and the absolute saving is modest — about 36 ms per batch of four, or +2.3 FPS, at
-the tightest budget. It is a measured, reproducible property of this mechanism at this scale and
-nothing more.
+target budget; and the absolute saving is modest — about 17 ms per batch of four, or +1.9 FPS, at
+the tightest budget, on a host whose between-process timing spread is of the same order as the
+effect. It is a measured property of this mechanism at this scale, and the claim is the direction
+(the saving exists at the larger scale and not at the smaller), not the third digit.
 
 ### 8.6 The cost ablation: how much of the +31 % parameter price is load-bearing
 
@@ -509,7 +520,7 @@ this pilot cannot resolve. It stays in the table, labelled as what it is.
 | The mechanism does not harm small-object performance | **preliminary** | AP_small 0.0737 vs 0.0647 at seed 0; not seed-checked |
 | How much of the +31 % parameter price the accuracy needs | **controlled** (seed 0) | `SSAC-005` (`expand=1`) loses the whole benefit: 0.2871, below the stock baseline |
 | A sparsity penalty can push the allocation sparse at no measurable accuracy cost | **preliminary** (seed 0) | `SSAC-006`: mean `g` 0.670 → 0.236 at P4, fraction > 0.5 → 0.000 at P3/P4, accuracy 0.3126 vs 0.3089 — a difference this pilot cannot resolve, so it is not claimed as a gain (§8.6) |
-| SSAC is computationally efficient | **preliminary — measured positive at 640 px, scale-bound** | sparse execution (same weights, parameter-identical) clears the whole dense range at `keep ≤ 0.5` at 640 px (−8.7 / −12.2 / −13.5 %) but not at 320 px; `keep = 1.0` costs +10.1 % (routing); FLOP counters cannot see the sparsity (§8.5) |
+| SSAC is computationally efficient | **preliminary — measured positive at 640 px, scale-bound** | sparse execution (same weights, parameter-identical) lands below the whole dense range at `keep ≤ 0.25` at 640 px (−6.4 / −8.5 %) but not at 320 px, where every budget is at or above dense; `keep = 1.0` costs +25 % at 640 px and +51 % at 320 px (the halo recomputes 1.5625× the expensive path); dense and sparse timed in one process, so the comparison is not a cross-process artefact; FLOP counters cannot see the sparsity (§8.5) |
 | Sparse execution is a faithful implementation of the dense mechanism | **controlled** | keep=1.0 sparse == dense bit-for-bit in eval; halo derived from the expensive path; asserted in `tests/test_ssac.py` |
 | SSAC is a novel mechanism | **not claimed** | the principle is SACT/SplatNet/region-selection; see `docs/ssac_assessment.md` |
 

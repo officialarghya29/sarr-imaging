@@ -26,6 +26,7 @@ __all__ = [
     "load_image_batch",
     "measure_flops",
     "measure_latency",
+    "merge_repeated_profiles",
     "model_size_mb",
     "override_ssac_execution",
     "peak_rss_mb",
@@ -201,8 +202,22 @@ def ssac_routing(model, inputs) -> dict:
 
     def make_hook(block, level):
         def hook(_module, args):
-            if args and isinstance(args[0], torch.Tensor):
-                captured.append({"level": level, "c1": block.c1, **block.routing_stats(args[0])})
+            if not args or not isinstance(args[0], torch.Tensor):
+                return
+            row = {"level": level, "c1": block.c1, **block.routing_stats(args[0])}
+            if block.execution == "dense":
+                # ``routing_stats`` answers "what would a sparse build skip here?", which is the
+                # right question for a hypothetical and the wrong one for this report: the
+                # column means *what this pass executed*, and a dense pass runs the expensive
+                # path everywhere -- no tiles, no halo, no selection. Reporting the sparse
+                # what-if under a dense timing would print a fraction like 0.44 next to a
+                # latency that paid for 1.00, which is how a saving gets read off a run that
+                # never took it. The tile count stays as measured, because it is the map's
+                # geometry and the reason the same budget bites differently at other scales.
+                row["selected_tiles"] = row["tiles"]
+                row["selected_tile_fraction"] = 1.0
+                row["executed_rich_fraction"] = 1.0
+            captured.append(row)
         return hook
 
     handles = [b.register_forward_pre_hook(make_hook(b, i)) for i, b in enumerate(blocks)]
@@ -396,6 +411,76 @@ def model_size_mb(weights: str | Path) -> float | None:
     """On-disk size of a checkpoint in megabytes."""
     path = Path(weights)
     return round(path.stat().st_size / 1024**2, 2) if path.is_file() else None
+
+
+def merge_repeated_profiles(profiles: list[dict]) -> dict:
+    """Collapse repeated timings of the *same* plan into one row, with the spread kept visible.
+
+    Between-process drift on a shared CPU is larger than the effect an execution-mode sweep is
+    trying to measure, so a dense row measured in one process and a sparse row measured in
+    another do not form a comparison at all -- whatever difference they show is dominated by
+    the machine's state, not by the arithmetic. (Measured on this host: the same checkpoint,
+    same batch of real images, same protocol returned 179.7 ms and 203.5 ms at 640 px in two
+    consecutive processes, while the blocks *within* each process agreed to a few percent.)
+    The only sound way to compare two execution modes is therefore to time both in one process,
+    round-robin, and merge the cycles here: a drift that slows the second half of the
+    measurement slows every plan in it, instead of only the plans that ran late.
+
+    Args:
+        profiles: Two or more profiles of the same plan, in measurement order.
+
+    Returns:
+        One profile whose ``latency_ms`` is the median of the per-cycle medians -- a median
+        rather than a mean because one slow cycle must not move the reported number -- with
+        ``latency_ms_min``/``latency_ms_max`` spanning all cycles, ``latency_runs`` the total
+        number of timed blocks, and the spread and FPS recomputed from those. Every other key
+        (model, input batch, routing, FLOPs) is taken from the first cycle: the cycles measured
+        the same model on the same images, so those cannot differ, and the routing is asserted
+        to be identical rather than assumed.
+    """
+    if not profiles:
+        raise ValueError("merge_repeated_profiles needs at least one profile")
+    if len(profiles) == 1:
+        return profiles[0]
+    import statistics
+
+    first, keys = profiles[0], (
+        "latency_imgsz",
+        "latency_batch",
+        "latency_source",
+        "latency_device",
+        "ssac_routing",
+        "ssac_execution",
+        "ssac_keep",
+    )
+    for cycle in profiles[1:]:
+        for key in keys:
+            if first.get(key) != cycle.get(key):
+                raise ValueError(
+                    f"the merged profiles are not the same plan: {key} differs "
+                    f"({first.get(key)!r} vs {cycle.get(key)!r}); a median across different "
+                    "plans would report a number no run produced"
+                )
+    medians = [float(p["latency_ms"]) for p in profiles]
+    per_batch_ms = statistics.median(medians)
+    batch = int(first.get("latency_batch") or 1)
+    lows = [float(p.get("latency_ms_min", p["latency_ms"])) for p in profiles]
+    highs = [float(p.get("latency_ms_max", p["latency_ms"])) for p in profiles]
+    merged = dict(first)
+    merged["latency_ms"] = round(per_batch_ms, 3)
+    merged["latency_per_image_ms"] = round(per_batch_ms / batch, 3)
+    merged["fps"] = round(1000.0 * batch / per_batch_ms, 2)
+    merged["latency_runs"] = sum(int(p.get("latency_runs", 1)) for p in profiles)
+    merged["latency_ms_min"] = round(min(lows), 3)
+    merged["latency_ms_max"] = round(max(highs), 3)
+    merged["latency_ms_spread_pct"] = round(
+        (max(highs) - min(lows)) / max(per_batch_ms, 1e-9) * 100.0, 1
+    )
+    resident = [p.get("latency_peak_rss_mb") for p in profiles]
+    if any(value is not None for value in resident):
+        merged["latency_peak_rss_mb"] = max(v for v in resident if v is not None)
+    merged["latency_cycles"] = len(profiles)
+    return merged
 
 
 def profile_model(

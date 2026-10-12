@@ -29,6 +29,7 @@ and the *scope* of the mechanism's saving, mean what the table says:
 from __future__ import annotations
 
 import dataclasses
+import json
 from pathlib import Path
 
 import pytest
@@ -37,9 +38,11 @@ import torch
 import saryolo  # noqa: F401  (registers custom layers with ultralytics)
 from saryolo.evaluation.efficiency import (
     measure_latency,
+    merge_repeated_profiles,
     override_ssac_execution,
     profile_model,
     profile_yaml,
+    ssac_routing,
 )
 from saryolo.nn.arch import VARIANTS, build_yaml_dict, variant_filename
 from saryolo.nn.modules.ssac import ScatterSelectiveRefinement
@@ -325,3 +328,142 @@ def test_profile_yaml_on_an_explicit_device_measures_the_same_architecture():
     on_device = profile_yaml(path, imgsz=128, nc=1, device="cpu")
     assert on_device["params"] == cpu["params"]
     assert on_device["flops_G"] == cpu["flops_G"]
+
+
+# ================== the report describes the pass that ran, not the pass that could have run
+def test_the_routing_report_states_what_the_mode_executed_not_what_it_could_have_skipped():
+    """A dense timing must not be described by a sparse allocation's arithmetic.
+
+    ``routing_stats`` answers the hypothetical -- "what would a sparse build skip here?" -- and
+    that is the right question for a what-if table. It is the wrong answer for the per-level
+    report attached to a *timing*, whose column means "the expensive path this pass executed".
+    Dense execution runs the expensive path everywhere: no tiles, no halo, no selection. The
+    defect this pins is the report carrying the settlement's fraction under a dense latency, so
+    a row that paid for 1.00 printed 0.44 -- the reader then sees a saving the run never took,
+    and the same checkpoint appears to execute less than a dense pass while timing the same.
+    """
+    model = _build("ssac_n")
+    x = torch.rand(1, 3, 320, 320)
+    dense = ssac_routing(model, x)["levels"]
+    assert len(dense) == 3
+    for row in dense:
+        assert row["executed_rich_fraction"] == 1.0, (
+            f"a dense pass reported {row['executed_rich_fraction']} of the expensive path "
+            "executed; dense execution runs all of it"
+        )
+        assert row["selected_tiles"] == row["tiles"], row
+        assert row["selected_tile_fraction"] == 1.0
+
+    # ...and the same report, on the same model and batch, follows the execution switch: a
+    # sparse build reports the budget it actually applied. Both halves are needed, or the fix
+    # could be a constant.
+    override_ssac_execution(model, execution="sparse", keep=0.25, tile=16)
+    sparse = ssac_routing(model, x)["levels"]
+    assert [r["tiles"] for r in sparse] == [r["tiles"] for r in dense], (
+        "switching execution changed the map geometry, which no execution mode can do"
+    )
+    for after in sparse:
+        assert after["selected_tiles"] <= after["tiles"]
+        if after["tiles"] > 1:
+            assert after["executed_rich_fraction"] < 1.0, after
+
+
+# =========================================== one process, all plans: the matched-sweep merge
+def _profile(latency: float, **extra) -> dict:
+    """A minimal profile of the shape ``profile_model`` returns, for the merge contract."""
+    row = {
+        "latency_ms": latency,
+        "latency_batch": 4,
+        "latency_imgsz": 320,
+        "latency_source": "real",
+        "latency_device": "cpu",
+        "ssac_execution": "sparse",
+        "ssac_keep": 0.25,
+        "ssac_routing": {"levels": [{"tiles": 9}]},
+        "fps": round(1000.0 * 4 / latency, 2),
+    }
+    row.update(extra)
+    return row
+
+
+def test_repeated_cycles_merge_to_the_median_with_the_spread_across_all_of_them():
+    """The merged row must report the drift across cycles, not hide it behind one cycle.
+
+    This is the whole reason a matched sweep measures dense and sparse in one process: the
+    between-process drift on this host is bigger than the effect under test, so the number that
+    may be quoted is a median over interleaved cycles with the span kept beside it.
+    """
+    cycles = [
+        _profile(210.0, latency_runs=3, latency_ms_min=208.0, latency_ms_max=212.0,
+                 latency_peak_rss_mb=400.0),
+        _profile(200.0, latency_runs=3, latency_ms_min=199.0, latency_ms_max=203.0,
+                 latency_peak_rss_mb=420.0),
+        _profile(220.0, latency_runs=3, latency_ms_min=218.0, latency_ms_max=221.0,
+                 latency_peak_rss_mb=410.0),
+    ]
+    merged = merge_repeated_profiles(cycles)
+    assert merged["latency_ms"] == 210.0, "the median of the per-cycle medians"
+    assert merged["latency_ms_min"] == 199.0 and merged["latency_ms_max"] == 221.0
+    assert merged["latency_runs"] == 9, "every timed block, not just the reported cycle's"
+    assert merged["latency_cycles"] == 3
+    assert merged["fps"] == pytest.approx(1000.0 * 4 / 210.0, abs=0.01)
+    assert merged["latency_peak_rss_mb"] == 420.0, "the peak across the cycles, not the first"
+    # Every non-timing field comes through unchanged, routing included.
+    assert merged["ssac_routing"] == cycles[0]["ssac_routing"]
+
+
+def test_a_single_cycle_is_returned_untouched_and_a_mismatch_is_refused():
+    """Merging must not invent fields a single measurement never produced.
+
+    A one-cycle sweep is still a matched sweep, so it must pass through unchanged rather than
+    be reshaped into the multi-cycle form (which would report a spread of zero by construction
+    and read as stability). And a merge across *different* plans -- a different budget, or a
+    dense cycle mixed with a sparse one -- would report a number no run produced.
+    """
+    single = _profile(200.0, latency_runs=3)
+    assert merge_repeated_profiles([single]) is single
+    assert "latency_cycles" not in merge_repeated_profiles([single])
+
+    with pytest.raises(ValueError, match="not the same plan"):
+        merge_repeated_profiles([_profile(200.0), _profile(210.0, ssac_keep=0.5)])
+    with pytest.raises(ValueError, match="not the same plan"):
+        merge_repeated_profiles([_profile(200.0, ssac_execution="dense"), _profile(210.0)])
+    with pytest.raises(ValueError, match="at least one profile"):
+        merge_repeated_profiles([])
+
+
+@needs_ssac_weights
+def test_the_cli_sweep_writes_a_dense_baseline_and_the_budgets_from_one_process(tmp_path):
+    """The CLI's sweep must produce a *pair*, both halves timed in the same process.
+
+    The defect this closes is a comparison across processes: the dense baseline used to be a
+    separate invocation, and two invocations of this host disagree by more than the effect the
+    sweep is measuring. So a sweep now writes ``efficiency.json`` (the dense baseline) and
+    ``ssac_execution_sweep.json`` (one row per budget) from one run, both marked with the cycles
+    that were interleaved -- and the sparse rows carry the routing of the pass that was timed.
+    """
+    from saryolo.cli import main
+
+    cfg = _tiny_val_split(tmp_path)
+    out = tmp_path / "sweep"
+    code = main([
+        "efficiency", "--weights", str(SSAC_WEIGHTS), "--imgsz", "32", "--real",
+        "--data", str(cfg), "--batch", "2", "--runs", "1", "--cycles", "2",
+        "--ssac-execution", "sparse", "--ssac-keep", "0.25", "--ssac-tile", "16",
+        "--out", str(out),
+    ])
+    assert code == 0
+
+    dense = json.loads((out / "efficiency.json").read_text())
+    sparse = json.loads((out / "ssac_execution_sweep.json").read_text())
+    assert isinstance(sparse, list) and len(sparse) == 1
+    for row in (dense, sparse[0]):
+        assert row["latency_cycles"] == 2, "the row does not say how many cycles it merges"
+        assert row["latency_runs"] == 2, "the timed blocks of both cycles must be counted"
+        assert row["latency_source"] == "real"
+        assert row["weights"] == str(SSAC_WEIGHTS)
+    # Both halves carry the same provenance, so the pair cannot be two different checkpoints.
+    assert dense["ssac_execution"] == "dense" and sparse[0]["ssac_execution"] == "sparse"
+    assert sparse[0]["ssac_keep"] == 0.25
+    for row in dense["ssac_routing"]["levels"]:
+        assert row["executed_rich_fraction"] == 1.0

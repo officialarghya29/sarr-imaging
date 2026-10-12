@@ -78,7 +78,7 @@ SSAC would be worse, not more novel.
 | **Core principle** | per-region halting → variable depth/resolution | region selection / dynamic routing | adaptive routing for detection efficiency | CFAR-constrained output | per-region allocation of an expensive refinement, from a SAR statistic |
 | **Mathematical formulation** | halting score + cumulative halting threshold | varies by method | early-exit confidence | differentiable CA-CFAR constraint | `g = σ(MLP(statistic(F))/τ)`, `out = F + α(g·F_rich + (1−g)·F_cheap − F)` |
 | **Architecture** | inside a residual stage, per position | varies | backbone exits | output/decision stage | per detection level, immediately pre-head |
-| **Computation** | variable per region; reported as *saved depth* | varies; survey flags wall-clock gap | early exit at confidence | no adaptive compute | **dense and sparse both built** (§5): sparse is parameter-identical and, at 640 px, faster than dense at `keep ≤ 0.5`; at the 320 px training scale it is not |
+| **Computation** | variable per region; reported as *saved depth* | varies; survey flags wall-clock gap | early exit at confidence | no adaptive compute | **dense and sparse both built** (§5): sparse is parameter-identical and, at 640 px, lands below the dense range at `keep ≤ 0.25`; at the 320 px training scale it does not |
 | **SAR relevance** | none (natural images) | none / general vision | none (general detection) | radar/SAR decision statistic | **SAR-native**: log-ratio + local CoV, dimensionless, transfer across brightness |
 | **Results** | ImageNet efficiency | — | embedded detection efficiency | radar detection, radar datasets | **none yet** — pilot is running; no number is claimed here |
 | **Limitations** | needs sparse execution to pay off; halting is unstable to train | broad, not a contribution | detection-specific but general-vision | a constraint, not allocation; no efficiency claim | **accuracy withdrawn at pilot scale**; the wall-clock caveat held at 320 px and lifted at 640 px (one checkpoint, CPU) |
@@ -166,8 +166,10 @@ Three revisions are forced by the review:
   **Both risks have now been tested.** The accuracy claim was withdrawn at pilot scale (the
   seed check, `paper/RESULTS.md` §8.7), and the wall-clock risk was measured at two input
   scales: it held at 320 px — the deepest governed level is a single 16 px tile there — and
-  lifted at 640 px, where sparse execution clears the dense range at `keep ≤ 0.5`
-  (`paper/RESULTS.md` §8.5). What remains unproven is the accuracy, not the efficiency; and the
+  lifted at 640 px, where sparse execution lands below the dense range at `keep ≤ 0.25`
+  (`paper/RESULTS.md` §8.5). The lifting is smaller than a first, cross-process pairing
+  suggested (8.5 % rather than 13.5 %, with every row now timed in one process), which is worth
+  keeping in view when the effect is quoted. What remains unproven is the accuracy, not the efficiency; and the
   efficiency positive is one checkpoint on CPU, not a claim about selective computation at large.
 * **The novelty-narrowness risk.** "SAR statistic drives region selection" is a thin claim.
   It is stated here as thin, and the design document names the controls that would let a

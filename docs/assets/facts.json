@@ -986,34 +986,42 @@
   },
   "ssac_execution": {
     "SSAC-001": {
-      "weights": "results/runs/SSAC-001/weights/best.pt",
+      "weights": "weights/sarvo_ssac001.pt",
       "params": 3396329,
       "flops_G": 1.998,
       "protocol": {
         "imgsz": 320,
         "batch": 4,
-        "runs": 7,
+        "runs": 9,
         "input": "real",
         "device": "cpu"
       },
       "dense": {
         "execution": "dense",
         "keep": null,
-        "latency_ms": 51.251,
-        "fps": 78.05,
-        "latency_ms_min": 50.551,
-        "latency_ms_max": 61.129,
-        "latency_ms_spread_pct": 20.6,
+        "latency_ms": 48.243,
+        "fps": 82.91,
+        "latency_ms_min": 46.022,
+        "latency_ms_max": 51.386,
+        "latency_ms_spread_pct": 11.1,
         "executed_rich_fraction": [
+          1.0,
+          1.0,
           1.0
         ],
         "selected_tile_fraction": [
+          1.0,
+          1.0,
           1.0
         ],
         "tiles": [
+          9,
+          4,
           1
         ],
         "selected_tiles": [
+          9,
+          4,
           1
         ]
       },
@@ -1021,11 +1029,11 @@
         {
           "execution": "sparse",
           "keep": 1.0,
-          "latency_ms": 63.89,
-          "fps": 62.61,
-          "latency_ms_min": 63.763,
-          "latency_ms_max": 64.118,
-          "latency_ms_spread_pct": 0.6,
+          "latency_ms": 72.975,
+          "fps": 54.81,
+          "latency_ms_min": 71.124,
+          "latency_ms_max": 76.541,
+          "latency_ms_spread_pct": 7.4,
           "executed_rich_fraction": [
             1.0,
             1.0,
@@ -1050,11 +1058,11 @@
         {
           "execution": "sparse",
           "keep": 0.5,
-          "latency_ms": 50.731,
-          "fps": 78.85,
-          "latency_ms_min": 50.541,
-          "latency_ms_max": 50.844,
-          "latency_ms_spread_pct": 0.6,
+          "latency_ms": 63.431,
+          "fps": 63.06,
+          "latency_ms_min": 63.032,
+          "latency_ms_max": 65.045,
+          "latency_ms_spread_pct": 3.2,
           "executed_rich_fraction": [
             0.8681,
             0.7812,
@@ -1079,11 +1087,11 @@
         {
           "execution": "sparse",
           "keep": 0.25,
-          "latency_ms": 49.165,
-          "fps": 81.36,
-          "latency_ms_min": 48.708,
-          "latency_ms_max": 49.644,
-          "latency_ms_spread_pct": 1.9,
+          "latency_ms": 50.68,
+          "fps": 78.93,
+          "latency_ms_min": 50.367,
+          "latency_ms_max": 51.538,
+          "latency_ms_spread_pct": 2.3,
           "executed_rich_fraction": [
             0.5208,
             0.3906,
@@ -1108,11 +1116,11 @@
         {
           "execution": "sparse",
           "keep": 0.1,
-          "latency_ms": 48.547,
-          "fps": 82.39,
-          "latency_ms_min": 48.269,
-          "latency_ms_max": 48.798,
-          "latency_ms_spread_pct": 1.1,
+          "latency_ms": 52.647,
+          "fps": 75.98,
+          "latency_ms_min": 49.989,
+          "latency_ms_max": 53.581,
+          "latency_ms_spread_pct": 6.8,
           "executed_rich_fraction": [
             0.1736,
             0.3906,
@@ -1137,46 +1145,54 @@
       ]
     },
     "SSAC-001_640": {
-      "weights": "results/runs/SSAC-001/weights/best.pt",
+      "weights": "weights/sarvo_ssac001.pt",
       "params": 3396329,
       "flops_G": 8.038,
       "protocol": {
         "imgsz": 640,
         "batch": 4,
-        "runs": 5,
+        "runs": 9,
         "input": "real",
         "device": "cpu"
       },
       "dense": {
         "execution": "dense",
         "keep": null,
-        "latency_ms": 266.395,
-        "fps": 15.02,
-        "latency_ms_min": 259.948,
-        "latency_ms_max": 293.898,
-        "latency_ms_spread_pct": 12.7,
+        "latency_ms": 196.216,
+        "fps": 20.39,
+        "latency_ms_min": 191.693,
+        "latency_ms_max": 211.522,
+        "latency_ms_spread_pct": 10.1,
         "executed_rich_fraction": [
+          1.0,
+          1.0,
           1.0
         ],
         "selected_tile_fraction": [
+          1.0,
+          1.0,
           1.0
         ],
         "tiles": [
-          1
+          25,
+          9,
+          4
         ],
         "selected_tiles": [
-          1
+          25,
+          9,
+          4
         ]
       },
       "sparse": [
         {
           "execution": "sparse",
           "keep": 1.0,
-          "latency_ms": 293.302,
-          "fps": 13.64,
-          "latency_ms_min": 291.447,
-          "latency_ms_max": 315.638,
-          "latency_ms_spread_pct": 8.2,
+          "latency_ms": 245.342,
+          "fps": 16.3,
+          "latency_ms_min": 226.119,
+          "latency_ms_max": 261.34,
+          "latency_ms_spread_pct": 14.4,
           "executed_rich_fraction": [
             1.0,
             1.0,
@@ -1201,11 +1217,11 @@
         {
           "execution": "sparse",
           "keep": 0.5,
-          "latency_ms": 243.348,
-          "fps": 16.44,
-          "latency_ms_min": 241.524,
-          "latency_ms_max": 244.256,
-          "latency_ms_spread_pct": 1.1,
+          "latency_ms": 199.352,
+          "fps": 20.07,
+          "latency_ms_min": 196.528,
+          "latency_ms_max": 201.526,
+          "latency_ms_spread_pct": 2.5,
           "executed_rich_fraction": [
             0.8125,
             0.8681,
@@ -1230,11 +1246,11 @@
         {
           "execution": "sparse",
           "keep": 0.25,
-          "latency_ms": 233.79,
-          "fps": 17.11,
-          "latency_ms_min": 231.373,
-          "latency_ms_max": 235.791,
-          "latency_ms_spread_pct": 1.9,
+          "latency_ms": 183.594,
+          "fps": 21.79,
+          "latency_ms_min": 182.819,
+          "latency_ms_max": 195.502,
+          "latency_ms_spread_pct": 6.9,
           "executed_rich_fraction": [
             0.4375,
             0.5208,
@@ -1259,11 +1275,11 @@
         {
           "execution": "sparse",
           "keep": 0.1,
-          "latency_ms": 230.459,
-          "fps": 17.36,
-          "latency_ms_min": 229.574,
-          "latency_ms_max": 231.379,
-          "latency_ms_spread_pct": 0.8,
+          "latency_ms": 179.628,
+          "fps": 22.27,
+          "latency_ms_min": 177.111,
+          "latency_ms_max": 184.169,
+          "latency_ms_spread_pct": 3.9,
           "executed_rich_fraction": [
             0.1875,
             0.1736,
@@ -1289,7 +1305,7 @@
     }
   },
   "tests": {
-    "total": 961,
+    "total": 977,
     "by_file": {
       "tests/test_app.py": 8,
       "tests/test_arch.py": 64,
@@ -1297,10 +1313,10 @@
       "tests/test_augmentation.py": 15,
       "tests/test_cfar_frontend.py": 16,
       "tests/test_cfar_scope.py": 19,
-      "tests/test_cli.py": 33,
+      "tests/test_cli.py": 43,
       "tests/test_common_blocks.py": 7,
       "tests/test_conditioning.py": 9,
-      "tests/test_conditioning_attach.py": 14,
+      "tests/test_conditioning_attach.py": 15,
       "tests/test_conditioning_smoke.py": 6,
       "tests/test_config_generation.py": 19,
       "tests/test_convert_helpers.py": 6,
@@ -1313,7 +1329,7 @@
       "tests/test_efficiency.py": 30,
       "tests/test_efficiency_frontier.py": 16,
       "tests/test_efficiency_real.py": 11,
-      "tests/test_efficiency_scope.py": 10,
+      "tests/test_efficiency_scope.py": 14,
       "tests/test_error_analysis_io.py": 9,
       "tests/test_field_mask.py": 9,
       "tests/test_gain_diagnostic.py": 7,
@@ -1335,7 +1351,7 @@
       "tests/test_probes.py": 23,
       "tests/test_registration.py": 19,
       "tests/test_reliability.py": 5,
-      "tests/test_repo.py": 44,
+      "tests/test_repo.py": 45,
       "tests/test_robustness_sweep.py": 5,
       "tests/test_rtdetr_arm.py": 7,
       "tests/test_runner_helpers.py": 12,

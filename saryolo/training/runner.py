@@ -15,7 +15,7 @@ from saryolo.tracking.ledger import ExperimentLedger, ExperimentRecord
 
 from .config import ExperimentConfig, load_experiment
 from .peft import LoRAConfig
-from .trainer import apply_init, load_model
+from .trainer import apply_init, clone_overrides, load_model
 
 __all__ = [
     "run_experiment",
@@ -75,8 +75,13 @@ def training_overrides(cfg: ExperimentConfig, extra_overrides: dict | None = Non
       command instead of a run.
 
     Kept importable and side-effect free so tests can assert the mapping without training.
+
+    The copy is a *deep* one (``clone_overrides``): Ultralytics mutates the mapping it is given
+    (it sets ``task``/``mode`` and fills defaults in place), and a shallow copy would let a
+    nested value -- a list of per-split fractions, say -- be modified through the copy and be
+    changed in the ``ExperimentConfig``, which is what the ledger row's config hash describes.
     """
-    overrides = dict(cfg.train)
+    overrides = clone_overrides(cfg.train)
     overrides.update(extra_overrides or {})
     if device:
         overrides["device"] = device
@@ -248,7 +253,24 @@ def run_experiment(
         # The detector and conditioning ablations must see identical geometric/photometric
         # pipelines. For an acquisition-conditioned dataset only, mixing transforms are
         # removed because a composite image cannot truthfully carry one acquisition label.
-        overrides.update(metadata_augmentation_overrides(data_yaml))
+        mixing = metadata_augmentation_overrides(data_yaml)
+        if mixing:
+            # ...but a *stated* request for mixing is refused rather than quietly dropped: this
+            # used to zero the user's mosaic/mixup/cutmix/copy_paste and run on, so the run did
+            # not implement the pipeline its own config described and the ledger recorded no
+            # difference between the two. The refusal is the shared rule the trainer also calls,
+            # and it fires only for a config that actually asks for mixing.
+            from types import SimpleNamespace
+
+            from saryolo.data.conditioning import validate_metadata_augmentations
+
+            mixers = (
+                "mosaic", "mixup", "cutmix", "copy_paste",
+            )
+            validate_metadata_augmentations(
+                SimpleNamespace(**{key: overrides.get(key, 0.0) for key in mixers})
+            )
+            overrides.update(mixing)
         # A parameter-efficient arm must use the custom trainer even when its graph is a stock
         # YAML (that is exactly what makes it a fair comparison: same graph as the full
         # fine-tune, different thing optimised), because the adapter is injected there.

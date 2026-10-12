@@ -446,6 +446,8 @@ def _letterbox_batch(x, size: int):
 
 
 def _cmd_arch(args) -> int:
+    import dataclasses
+
     from saryolo.nn import arch
 
     out = Path(args.out)
@@ -454,8 +456,14 @@ def _cmd_arch(args) -> int:
     for name in names:
         if name not in arch.VARIANTS:
             raise SystemExit(f"Unknown variant {name!r}. Available: {', '.join(sorted(arch.VARIANTS))}")
-        spec = arch.VARIANTS[name]
-        spec.nc = args.nc
+        # ``--nc`` is a *request for this file*, not an edit to the registry: the committed
+        # specs carry the class count they are meant to carry, and writing the flag into the
+        # shared ``VARIANTS`` entry leaves every later consumer in the same process reading the
+        # requested count as though it were the spec's own. Measured before this fix: one
+        # ``arch --variant all --nc 2`` call in a test session left the registry at ``nc = 2``,
+        # so the byte-identity guard for the committed YAMLs then reported every file as
+        # hand-edited, and a later profile or bench call would have measured the wrong head.
+        spec = dataclasses.replace(arch.VARIANTS[name], nc=args.nc)
         path = out / arch.variant_filename(spec)
         path.write_text(arch.build_yaml_text(spec))
         print(f"wrote {path}")
@@ -569,7 +577,7 @@ def _cmd_gain(args) -> int:
 
 
 def _cmd_efficiency(args) -> int:
-    from saryolo.evaluation.efficiency import profile_model, write_profile
+    from saryolo.evaluation.efficiency import merge_repeated_profiles, profile_model, write_profile
 
     if args.real and not args.data:
         raise SystemExit("--real requires --data: timing is taken on the dataset's val images")
@@ -581,23 +589,42 @@ def _cmd_efficiency(args) -> int:
             "--ssac-keep/--ssac-tile only mean something for sparse execution; pass "
             "--ssac-execution sparse (a keep with dense execution switches nothing off)"
         )
+    cycles = max(1, int(getattr(args, "cycles", 1) or 1))
     # A sweep is the point of the objective-mechanism cost comparison: one checkpoint, several
-    # routing budgets, one timing protocol. Each level is a separate timed profile written side
-    # by side, so no number has to be quoted from a run whose protocol differed.
-    plans = [(execution, keep) for keep in (keeps or [None])] if keeps else [(execution, None)]
-    profiles = [
-        profile_model(
-            args.weights, imgsz=args.imgsz, device=args.device,
-            data_yaml=args.data if args.real else None, batch=args.batch,
-            runs=getattr(args, "runs", 1),
-            ssac_execution=execution, ssac_keep=keep, ssac_tile=tile,
-        )
-        for execution, keep in plans
-    ]
-    payload = profiles[0] if len(profiles) == 1 else profiles
+    # routing budgets, one timing protocol. It is also the comparison most easily got wrong,
+    # because between-process drift on a shared CPU is larger than the effect being measured
+    # (the same checkpoint at 640 px returned 179.7 ms and 203.5 ms in two consecutive
+    # processes). So when budgets are swept, the dense baseline is measured *here*, in this
+    # process, and the plans are repeated round-robin -- dense, then each budget, then dense
+    # again -- so a drift that slows the second half of the run slows every plan in it instead
+    # of only the ones that happened to run late. Each level is then written side by side, so
+    # no number has to be quoted from a run whose protocol differed.
+    plans: list[tuple[str | None, float | None]] = (
+        [("dense", None), *((execution, keep) for keep in keeps)] if keeps else [(execution, None)]
+    )
+    measured: dict[tuple[str | None, float | None], list[dict]] = {plan: [] for plan in plans}
+    for _ in range(cycles):
+        for plan in plans:
+            ssac_execution, keep = plan
+            measured[plan].append(
+                profile_model(
+                    args.weights, imgsz=args.imgsz, device=args.device,
+                    data_yaml=args.data if args.real else None, batch=args.batch,
+                    runs=getattr(args, "runs", 1),
+                    ssac_execution=ssac_execution, ssac_keep=keep,
+                    ssac_tile=tile if keep is not None else None,
+                )
+            )
+    profiles = [merge_repeated_profiles(measured[plan]) for plan in plans]
+    if keeps and args.out:
+        # Two files from one matched measurement: the dense baseline and the sweep of the same
+        # checkpoint, both timed in this process, so the comparison cannot be an artefact of
+        # when each one ran.
+        write_profile(profiles[0], Path(args.out) / "efficiency.json")
+    payload: object = profiles[1:] if keeps else profiles[0]
+    name = "ssac_execution_sweep.json" if keeps else "efficiency.json"
     print(json.dumps(payload, indent=2, default=float))
     if args.out:
-        name = "efficiency.json" if len(profiles) == 1 else "ssac_execution_sweep.json"
         write_profile(payload, Path(args.out) / name)
     return 0
 
@@ -1196,6 +1223,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--runs", type=int, default=1,
                    help="independent timed blocks; the reported number is their median "
                         "(use >1 when comparing arms on a shared CPU)")
+    p.add_argument("--cycles", type=int, default=1,
+                   help="repeat every plan this many times, round-robin, and report the median "
+                        "of the per-cycle medians; use >1 to make a dense-vs-sparse sweep "
+                        "immune to the drift between a process's early and late timings")
     p.add_argument("--ssac-execution", choices=("dense", "sparse"), default=None,
                    help="switch the checkpoint's SARVO core-mechanism blocks before timing; "
                         "dense and sparse builds are parameter-identical, so this is how the "

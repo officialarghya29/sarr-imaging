@@ -49,7 +49,7 @@ the registry:
 | --- | --- | --- |
 | Architecture variants wired | 110 | `saryolo.nn.arch.VARIANTS` (`tests/test_repo.py`) |
 | Experiment configs | 134 | `saryolo.training.config.list_experiments` |
-| Tests | **961 tests** | `pytest --collect-only -q` (`tests/test_repo.py`) |
+| Tests | **977 tests** | `pytest --collect-only -q` (`tests/test_repo.py`) |
 | Datasets on disk | HRSID subset, 200 / 60 / 60, one class (`ship`) | `docs/assets/facts.json` → `real_subset` |
 
 **The architecture ladder.** Every module is an **exact identity at initialisation** and is
@@ -82,7 +82,7 @@ one class:
 **Engineering posture.** Every "ran" claim is tied to a command or a test; unmeasured cells
 render as `TBD`; the ledger is append-only; the demo never shows a prediction it did not
 compute; defects are recorded with the regression test that pins them (`defect_log.md`,
-D-01…D-25). Four deepscans of the previously untested surfaces (environment capture, the
+D-01…D-29). Four deepscans of the previously untested surfaces (environment capture, the
 qualitative panels, the corruption sweep, the gain diagnostic, the shared module primitives,
 the YAML generator, the dataset validator, checkpoint registration, and — in the third pass —
 the paper table/figure builders, the runner and statistics writers, the LoRA layer, the
@@ -99,7 +99,21 @@ substring in a path rather than the `images` path component, so any dataset whos
 contains the word resolved its labels into a directory that does not exist and every metric
 came back `None` over an empty ground truth on a run that reported success; and D-25 an
 RT-DETR criterion fallback that supplied the v8 argument namespace to a criterion that reads
-`nc`, so a bare model still failed — the error its docstring said it prevented). The suite runs on the development host with **no GPU and no dataset download**
+`nc`, so a bare model still failed — the error its docstring said it prevented). A fifth pass
+closed the *documented-helper* gap and re-took the efficiency measurement: D-26 the per-level
+routing report attached to a timing, which described a *dense* pass with the sparse allocation's
+fractions (a run that executed 1.00 printed 0.44, i.e. a saving it never took, and the guard that
+pins the dense row to 1.00 would have caught it only after the fact); D-27 the cost sweep itself,
+whose dense baseline was timed in a *different process* from its sparse rows on a host whose
+between-process drift (179.7 ms vs 203.5 ms for the same checkpoint at 640 px) exceeds the effect —
+re-measured with every row in one process, the 640 px saving is **8.5 %** and not the 13.5 % the
+split-process pairing reported, while the direction (a saving at 640 px, none at 320 px, the
+tightest budget's range entirely below the dense one) is unchanged; and D-28 two docstrings that
+pointed the reader at a measurement script that does not exist, now a guard over every
+`scripts/*.py` named anywhere in the tree; and — found by the CLI test that commands are written
+to prove — D-29 `saryolo arch` writing its `--nc` flag **into the shared variant registry** rather
+than into a copy, so one `--nc 2` invocation left all 28 specs at two classes for the rest of the
+process and made the committed-YAML byte-identity guard report a clean tree as hand-edited. The suite runs on the development host with **no GPU and no dataset download**
 (the dataset-gated and GPU-gated checks skip with a *named* reason).
 
 ---
@@ -121,12 +135,16 @@ The compute finding that shapes the paper is not the host, however — it is the
 
 * At **320 px** (the training scale) the deepest governed level of the mechanism is a
   **single 16 px tile** (tiles/level `[9, 4, 1]`), so no routing budget can spare it.
-  Sparse execution is **+29.5 %** latency at `keep = 1.0` (routing overhead) and returns only
-  to the dense latency at `keep = 0.1`, inside the dense run's own spread — **no saving is
-  claimed at 320 px**.
-* At **640 px** the same level splits into four tiles (`[25, 9, 4]`), routing overhead falls
-  to **+10.1 %** at `keep = 1.0`, and sparse execution clears the dense range at
-  `keep ≤ 0.5`: **−8.7 / −12.2 / −13.5 %** at 0.5 / 0.25 / 0.1 (paper/RESULTS.md §8.5).
+  Sparse execution is **+51 %** latency at `keep = 1.0` (the gather's halo recompute) and no
+  budget reaches the dense latency — the closest is +5 % — so **no saving is claimed at
+  320 px**.
+* At **640 px** the same level splits into four tiles (`[25, 9, 4]`), the overhead at
+  `keep = 1.0` falls to **+25 %**, and sparse execution lands below the dense range at
+  `keep ≤ 0.25`: **−6.4 / −8.5 %** at 0.25 / 0.1, its range (177.1–184.2 ms) entirely below
+  the dense row's (191.7–211.5 ms) (paper/RESULTS.md §8.5).
+* Every row of that sweep is timed **in one process** (dense baseline and budgets round-robin,
+  three cycles of three blocks), because this host's between-process drift is larger than the
+  effect: an earlier pairing of separately-timed runs reported 13.5 % instead of 8.5 %.
 * The FLOP counters **cannot see the sparsity** — a sparse build reports *more* GFLOPs
   (2.293 vs 1.998 G) because they trace kernels regardless of which execute. The efficiency
   claim therefore rests on measured wall-clock, never on a FLOP ratio.
@@ -216,5 +234,5 @@ as an explicit gap rather than omitted.
 | Deployment | `docs/DEPLOYMENT.md`; `tests/test_deploy.py` |
 | Counts (variants / experiments / tests) | `tests/test_repo.py` guards; `docs/assets/facts.json` |
 
-This report adds no number of its own; the one count it states — **961 tests** — is the
+This report adds no number of its own; the one count it states — **977 tests** — is the
 same one the suite's own count guards check.

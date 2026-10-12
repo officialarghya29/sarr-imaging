@@ -36,7 +36,7 @@ Labels follow the repository's vocabulary: **final**, **preliminary**, **control
 | ---: | --- | --- | --- |
 | C1 | **SSAC**: a per-region allocation of expensive feature processing driven by a *SAR-native* analytic statistic (multi-scale CFAR log-ratio + local coefficient of variation), with a **matched fixed-computation control** of exactly equal parameter count | mechanism: **final**; its *accuracy* effect: **withdrawn at pilot scale** | `SSAC-001` vs `SSAC-002` at three seeds (§8.7) |
 | C2 | A **sparse execution** of the same mechanism (tile gather/scatter, kernel-derived halo) that is parameter-identical to the dense form and reproduces it **bit-for-bit at `keep = 1.0`** in eval | **controlled** | `keep = 1.0` equality; `tests/test_ssac.py` |
-| C3 | A **wall-clock measurement** of selective computation that shows where the saving appears and why the pilot's input scale is what decides it | **preliminary at 640 px** (measured positive, −13.5 % at `keep = 0.1`), **not separable at 320 px**; the ceiling is **measured** as input-scale-bound | CLI routing sweep at two scales (§8.5) |
+| C3 | A **wall-clock measurement** of selective computation that shows where the saving appears and why the pilot's input scale is what decides it | **preliminary at 640 px** (measured positive, −8.5 % at `keep = 0.1`, both ranges disjoint), **not separable at 320 px**; the ceiling is **measured** as input-scale-bound, and both sides are timed in one process so the comparison is not a cross-process artefact | CLI routing sweep at two scales (§8.5) |
 | C4 | A **cost ablation** isolating how much of the mechanism's parameter price the accuracy needs (`expand = 2 → 1` loses the whole benefit) | **controlled** (seed 0) | `SSAC-005` (§8.6) |
 | C5 | The **sparsity premise**: a penalty can push the learned allocation sparse at no measurable accuracy cost, so a sparse build has something to skip | **preliminary** (seed 0) | `SSAC-006` allocation diagnostic (§8.6) |
 
@@ -98,11 +98,13 @@ and its measurement protocol*, not a headline accuracy gain — and the abstract
   mechanism from a per-image difficulty scalar.
 - **5.4 The sparsity premise.** `SSAC-006` allocation diagnostic (§8.6).
 - **5.5 Efficiency on real inputs.** Dense vs sparse on one checkpoint, real val images, at
-  **two named scales** (§8.5, `docs/assets/ssac_execution.svg`). At 320 px: routing overhead
-  at `keep = 1.0` (**+29.5 %**) and no saving outside the dense run's spread. At 640 px:
-  routing overhead falls to **+10.1 %**, and sparse execution clears the dense range at
-  `keep ≤ 0.5` (**−8.7 / −12.2 / −13.5 %**). The **scale ceiling** is the finding — P5 is a
-  single 16 px tile at 320 px and four tiles at 640 px.
+  **two named scales**, every row timed **in one process** (§8.5, `docs/assets/ssac_execution.svg`).
+  At 320 px: the gather's halo costs **+51 %** at `keep = 1.0` and no budget reaches the dense
+  latency. At 640 px: that overhead falls to **+25 %** and sparse execution lands below the dense
+  range at `keep ≤ 0.25` (**−6.4 / −8.5 %**), the tightest budget's whole range under the dense
+  minimum. The **scale ceiling** is the finding — P5 is a single 16 px tile at 320 px and four
+  tiles at 640 px — and the *magnitude* is host-bound, which is why the matched in-process
+  protocol (and not a cross-process pairing) is the one quoted.
 - **5.6 Cost ablation.** `expand = 2 → 1` (§8.6).
 
 ### 6. Failure analysis

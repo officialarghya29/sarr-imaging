@@ -542,15 +542,16 @@ class SARYOLOTrainer(DetectionTrainer):
                 raise ValueError("conditioned model requires acquisition_metadata in the dataset YAML")
             return dataset
 
-        from saryolo.data.conditioning import training_metadata_vocabularies
+        from saryolo.data.conditioning import training_metadata_vocabularies, validate_metadata_augmentations
 
         if mode == "train":
-            if any(float(getattr(self.args, key, 0.0) or 0.0) > 0.0
-                   for key in ("mosaic", "mixup", "cutmix", "copy_paste")):
-                raise ValueError(
-                    "acquisition metadata cannot be paired with image-mixing augmentations; "
-                    "the trainer should have disabled them before saving run arguments"
-                )
+            # One implementation of the rule, shared with the run front end
+            # (``runner.run_experiment``, which refuses a config that asks for mixing before a
+            # run starts). This check used to be a second copy of that rule inline, and neither
+            # copy was ever reached: the trainer zeroes the mixers in ``__init__`` from the data
+            # config, so the only way to get here with one switched on is for something to turn
+            # it on afterwards -- which is exactly what this refusal is for.
+            validate_metadata_augmentations(self.args)
             if self._metadata_vocabularies is None:
                 prepared = training_metadata_vocabularies(self.data)
                 if prepared is None:

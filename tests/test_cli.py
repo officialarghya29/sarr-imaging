@@ -725,3 +725,168 @@ def test_predict_prints_the_same_detections_the_pipeline_computes(tmp_path, caps
 def test_arch_rejects_an_unknown_variant(tmp_path):
     with pytest.raises(SystemExit):
         main(["arch", "--variant", "not_a_variant", "--out", str(tmp_path)])
+
+
+# --------------------------------------------------- the surfaces a reader runs first
+# `datasets`, `arch`, `ledger`, `stats` and `synth-data` are the commands a reader runs before
+# anything has been trained, and they were the least-covered handlers in the CLI: nothing in the
+# suite drove them, so a wrong flag, a missing output directory or a silent empty result would
+# have reached a user first. Each test below drives the real parser and checks the artefact.
+
+def test_datasets_lists_every_registered_dataset(capsys):
+    """The registry is the menu of what this pipeline can be pointed at; it must be complete."""
+    from saryolo.data.registry import list_datasets
+
+    code = main(["datasets"])
+    out = capsys.readouterr().out
+    assert code == 0
+    for spec in list_datasets():
+        assert spec.name in out, f"{spec.name} is registered but not listed"
+        assert spec.title in out and spec.source in out, f"{spec.name} is listed without provenance"
+
+
+def test_arch_writes_every_variant_the_registry_declares(tmp_path, capsys):
+    """`arch --variant all` is how the model YAMLs are produced; a variant it skips is a
+    variant nobody can train, and the count is a claim the README makes.
+
+    It is also the surface that must not *edit what it writes from*. ``--nc`` is a request for the
+    files being produced; writing it into the shared ``VARIANTS`` entry instead of a copy leaves
+    every later consumer in the same process reading the requested count as the spec's own —
+    measured before the fix: one ``arch --variant all --nc 2`` call left the registry at ``nc = 2``
+    and the committed-YAML byte-identity guard then reported every model file as hand-edited.
+    """
+    from saryolo.nn.arch import VARIANTS, variant_filename
+
+    registry_nc = {name: spec.nc for name, spec in VARIANTS.items()}
+    out = tmp_path / "models"
+    code = main(["arch", "--variant", "all", "--nc", "2", "--out", str(out)])
+    assert code == 0, capsys.readouterr().out
+    written = sorted(p.name for p in out.glob("*.yaml"))
+    assert len(written) == len(VARIANTS), f"wrote {len(written)} YAMLs for {len(VARIANTS)} variants"
+    assert written == sorted(variant_filename(spec) for spec in VARIANTS.values())
+    assert "nc: 2" in (out / written[0]).read_text(), (
+        "the requested class count did not reach the YAML it was written to"
+    )
+    assert {name: spec.nc for name, spec in VARIANTS.items()} == registry_nc, (
+        "`arch --nc` mutated the shared variant registry instead of the file it wrote"
+    )
+
+
+def test_ledger_reports_an_empty_ledger_and_then_its_rows(tmp_path, capsys):
+    """`ledger` is the audit surface: an unmeasured metric must print as TBD, never as a number."""
+    from saryolo.tracking.ledger import ExperimentLedger, ExperimentRecord
+
+    root = tmp_path / "results"
+    assert main(["ledger", "--ledger", str(root)]) == 0
+    assert "ledger is empty" in capsys.readouterr().out
+
+    ledger = ExperimentLedger(root)
+    ledger.append(ExperimentRecord(
+        experiment_id="EXP-T", model="baseline_n.yaml", dataset="hrsid_real.yaml",
+        status="completed", train_seed=3, metrics={"mAP50": 0.5},
+    ))
+    assert main(["ledger", "--ledger", str(root)]) == 0
+    out = capsys.readouterr().out
+    row = next(line for line in out.splitlines() if line.startswith("EXP-T"))
+    assert "0.5000" in row, "a measured mAP50 was not printed"
+    assert "TBD" in row, "an unmeasured mAP50:95 must print as TBD rather than as a number"
+    assert row.rstrip().endswith("3"), "the training seed is part of the audit trail"
+
+
+def test_synth_data_writes_a_dataset_and_says_it_is_for_pipeline_testing_only(tmp_path, capsys):
+    """The synthetic generator is a pipeline fixture, and its own output says so -- so a figure
+    made from synthetic data cannot be pasted into a draft without the warning travelling with it."""
+    import yaml
+
+    out = tmp_path / "synthetic"
+    code = main(["synth-data", "--out", str(out), "--train", "4", "--val", "2", "--test", "2",
+                 "--imgsz", "64", "--classes", "target"])
+    printed = capsys.readouterr().out
+    assert code == 0, printed
+    assert "must never be reported as a result" in printed, "the test-only warning was lost"
+    config = yaml.safe_load((out / "data.yaml").read_text())
+    assert config["nc"] == 1 and config["names"] == ["target"]
+    counts = {split: len(list((out / "images" / split).glob("*")))
+              for split in ("train", "val", "test")}
+    assert counts == {"train": 4, "val": 2, "test": 2}, counts
+    assert list((out / "labels" / "train").glob("*.txt")), "no labels were written"
+
+
+def test_stats_writes_the_statistics_json_and_its_figures(tmp_path, capsys):
+    """`stats` feeds the evidence-driven architecture decisions, so the artefacts it claims to
+    write must all be there: the JSON a later step reads and the figures a reader looks at."""
+    dataset = _tiny_dataset(tmp_path / "ds")
+    out = tmp_path / "statistics"
+    code = main(["stats", "--dataset", str(dataset), "--classes", "ship", "--name", "tiny",
+                 "--out", str(out)])
+    assert code == 0, capsys.readouterr().out
+    payload = json.loads((out / "tiny_train.json").read_text())
+    assert payload["num_images"] == 1 and payload["num_boxes"] == 1
+    assert payload["boxes_per_class"] == {"ship": 1}
+    figures = sorted(p.name for p in out.glob("*.png"))
+    assert "class_distribution.png" in figures, figures
+
+
+# ------------------------------------------------------------------- argument refusals
+def test_efficiency_refuses_real_timing_without_a_dataset():
+    """Timing on random noise while calling the input real is the mislabelling guard's whole point."""
+    with pytest.raises(SystemExit, match="requires --data"):
+        main(["efficiency", "--weights", "whatever.pt", "--real"])
+
+
+def test_efficiency_refuses_a_budget_that_dense_execution_would_ignore():
+    """A `--ssac-keep` under dense execution switches nothing off, so it must not be accepted
+    silently: the profile would look like a sparse one and be a dense one."""
+    with pytest.raises(SystemExit, match="only mean something for sparse execution"):
+        main(["efficiency", "--weights", "whatever.pt", "--ssac-keep", "0.5"])
+
+
+def test_mine_hard_refuses_a_dataset_that_does_not_exist(tmp_path):
+    with pytest.raises(SystemExit, match="does not exist"):
+        main(["mine-hard", "--weights", "whatever.pt", "--data", str(tmp_path / "absent.yaml")])
+
+
+def _tiny_dataset_config(root: Path) -> Path:
+    """The ``data.yaml`` that points at ``_tiny_dataset``'s tree, for the surfaces that need one."""
+    config = root / "data.yaml"
+    config.write_text(f"path: {root}\nnc: 1\nnames:\n- ship\ntrain: images/train\nval: images/val\n")
+    return config
+
+
+def test_augment_refuses_a_severity_spec_it_cannot_parse(tmp_path):
+    """`--severity` without `=`, and with a non-numeric value, are user errors: named, not a traceback."""
+    dataset = _tiny_dataset(tmp_path / "ds")
+    config = _tiny_dataset_config(dataset)
+    with pytest.raises(SystemExit, match="KIND=v1,v2"):
+        main(["augment", "--data", str(config), "--severity", "speckle",
+              "--out", str(tmp_path / "aug")])
+    with pytest.raises(SystemExit, match="non-numeric"):
+        main(["augment", "--data", str(config), "--severity", "speckle=heavy",
+              "--out", str(tmp_path / "aug")])
+
+
+def test_augment_emits_degraded_views_that_carry_their_ground_truth(tmp_path, capsys):
+    """The augmentation surface end to end: images that differ from the source, and labels that
+    still match them. A view emitted without its label is a training image with no objects."""
+    dataset = _tiny_dataset(tmp_path / "ds")
+    config = _tiny_dataset_config(dataset)
+    source = dataset / "images" / "train" / "a.png"
+    out = tmp_path / "aug"
+
+    code = main(["augment", "--data", str(config), "--kinds", "speckle",
+                 "--views", "2", "--out", str(out)])
+    assert code == 0, capsys.readouterr().out
+    manifest = json.loads((out / "manifest.json").read_text())
+    assert manifest["n_emitted"] == 3, manifest  # two augmented views plus the clean copy
+    assert manifest["skipped"] == []
+
+    original = cv2.imread(str(source), cv2.IMREAD_GRAYSCALE)
+    emitted = sorted((out / "images" / "train").glob("*.png"))
+    assert len(emitted) == 3
+    for path in emitted:
+        label = out / "labels" / "train" / f"{path.stem}.txt"
+        assert label.exists(), f"{path.name} was emitted without ground truth"
+        assert label.read_text().strip() == "0 0.500000 0.500000 0.250000 0.250000"
+    assert any(
+        not np.array_equal(cv2.imread(str(path), cv2.IMREAD_GRAYSCALE), original) for path in emitted
+    ), "no emitted view differs from the source: the augmentation did nothing"

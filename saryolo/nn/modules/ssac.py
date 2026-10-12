@@ -57,9 +57,10 @@ Neither mode is claimed to be faster than the other a priori. Sparse execution
 removes arithmetic, but it also adds a gather/scatter and a Python-level routing
 step, and on this CPU-only host the honest question is whether the removed
 arithmetic is larger than the added bookkeeping. That is *measured* —
-``scripts/ssac_efficiency.py`` times the same checkpoint in both modes at several
-``keep`` levels — and reported whatever it says, including when it says the sparse
-mode is slower. The accuracy question (Experiment 1 of the master workflow) is
+``python -m saryolo efficiency --ssac-execution sparse --ssac-keep ...`` times the same
+checkpoint in both modes at several ``keep`` levels, in one process so the two are
+comparable — and reported whatever it says, including when it says the sparse mode is
+slower. The accuracy question (Experiment 1 of the master workflow) is
 answerable in the dense form alone; the efficiency question needs the sparse form
 and a wall-clock number, not a FLOP ratio.
 
@@ -370,9 +371,19 @@ class ScatterSelectiveRefinement(nn.Module):
         """Routing diagnostics: what a sparse build *would* skip, and at what halo cost.
 
         ``executed_rich_fraction`` is the share of the expensive path's arithmetic that
-        sparse execution performs, halo included: ``k/nTiles * ((tile + 2*halo)/tile)^2``.
-        It is arithmetic, not time — the module's latency claim is measured by
-        ``scripts/ssac_efficiency.py`` and only there.
+        *sparse* execution would perform, halo included:
+        ``k/nTiles * ((tile + 2*halo)/tile)^2``, capped at 1. One consequence is worth
+        knowing before the number is read: at ``keep = 1.0`` the halo makes that product
+        ``1.5625`` at the default tile, and the cap reports it as ``1.0`` — so a `keep = 1.0`
+        row reads as "the same arithmetic as dense" while the gather really recomputes 56 %
+        of it. That is the mechanism's own bookkeeping, visible as the extra latency of a
+        `keep = 1.0` timing rather than in this column.
+
+        The value is a property of the *budget*, not of the pass that ran: in dense execution
+        nothing is skipped, and the per-level report attached to a timing says so (see
+        :func:`saryolo.evaluation.efficiency.ssac_routing`, which is where a timing's routing
+        is read from). It is arithmetic, not time — the latency claim is measured by
+        ``python -m saryolo efficiency`` and only there.
         """
         with torch.no_grad():
             g = self.gain_map(x)
