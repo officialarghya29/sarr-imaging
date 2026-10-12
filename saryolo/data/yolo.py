@@ -19,6 +19,7 @@ __all__ = [
     "resolve_data_yaml",
     "load_data_config",
     "split_dirs",
+    "labels_dir_for",
     "label_row_kind",
     "DETECTION_FIELDS",
     "OBB_FIELDS",
@@ -175,13 +176,41 @@ def dataset_root(processed_root: str | Path, name: str) -> Path:
     return (Path(processed_root) / name).resolve()
 
 
+def labels_dir_for(images_dir: str | Path) -> Path:
+    """The ``labels`` directory that pairs with an ``images`` directory or image path.
+
+    Ultralytics maps an image to its label by replacing the **last** ``images`` path
+    *component* with ``labels`` (``img2label_paths`` splits on ``os.sep + "images" + os.sep``
+    from the right), and this applies the same rule to a directory. It is shared by every
+    consumer so that training and evaluation cannot disagree about where a split's ground
+    truth lives.
+
+    It is a *component* replacement rather than a substring one because a substring
+    replacement rewrites the first match anywhere in the path. A dataset whose root happens to
+    contain the word -- ``/data/images/hrsid/...``, ``~/my_images/...`` -- then resolves its
+    labels under a directory that does not exist, and the failure is silent: no label file is
+    found, so the split reads as object-free and its metrics come back ``None`` on a run that
+    still reports success. This repository used the substring form in six places; the *label
+    file* helper in :mod:`saryolo.evaluation.metrics` had already noticed and worked around it.
+
+    A path with no ``images`` component at all (a ``.txt`` split list, say) falls back to the
+    substring rule, so nothing that resolved before resolves differently now.
+    """
+    path = Path(images_dir)
+    parts = list(path.parts)
+    for i in range(len(parts) - 1, -1, -1):
+        if parts[i] == "images":
+            parts[i] = "labels"
+            return Path(*parts)
+    return Path(str(path).replace("images", "labels", 1))
+
+
 def split_dirs(data_yaml: str | Path, split: str = "val") -> tuple[Path, Path]:
     """Resolve ``(images_dir, labels_dir)`` for a split of a data config."""
     root, cfg = load_data_config(data_yaml)
     rel = cfg.get(split) or f"images/{split}"
     images_dir = Path(rel) if Path(rel).is_absolute() else root / rel
-    labels_dir = Path(str(images_dir).replace("images", "labels", 1))
-    return images_dir, labels_dir
+    return images_dir, labels_dir_for(images_dir)
 
 
 def write_data_yaml(

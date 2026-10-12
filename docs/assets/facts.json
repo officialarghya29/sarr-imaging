@@ -1289,7 +1289,7 @@
     }
   },
   "tests": {
-    "total": 949,
+    "total": 961,
     "by_file": {
       "tests/test_app.py": 8,
       "tests/test_arch.py": 64,
@@ -1321,6 +1321,7 @@
       "tests/test_hard_examples.py": 20,
       "tests/test_inference.py": 23,
       "tests/test_init.py": 9,
+      "tests/test_labels_dir.py": 11,
       "tests/test_ledger.py": 5,
       "tests/test_lora_layer.py": 14,
       "tests/test_losses.py": 25,
@@ -1336,7 +1337,7 @@
       "tests/test_reliability.py": 5,
       "tests/test_repo.py": 44,
       "tests/test_robustness_sweep.py": 5,
-      "tests/test_rtdetr_arm.py": 6,
+      "tests/test_rtdetr_arm.py": 7,
       "tests/test_runner_helpers.py": 12,
       "tests/test_splits.py": 8,
       "tests/test_ssac.py": 46,

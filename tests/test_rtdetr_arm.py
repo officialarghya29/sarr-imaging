@@ -137,6 +137,24 @@ def test_vocabulary_mismatch_is_refused_loudly():
         model(img)
 
 
+def test_a_bare_model_can_build_its_criterion_without_a_trainer():
+    """The criterion is constructible outside a trainer -- which is what the fallback claims.
+
+    Ultralytics' ``RTDETRDetectionLoss`` reads ``model.nc``, and nothing in the constructor sets
+    it: the trainer attaches it (``DetectTrainer.setup_model`` does ``self.model.nc =
+    self.data["nc"]``). A bare model -- a unit test, a FLOPs profile, a loss check -- therefore
+    raised ``AttributeError: ... has no attribute 'nc'``, and the fallback that existed to prevent
+    exactly that supplied the *v8* argument namespace, which this criterion never reads. Pinned
+    here because it is the difference between the feasibility arm being checkable and not.
+    """
+    model = _prepared_model(_vocabs())
+    assert not hasattr(model, "args"), "the fixture must exercise the no-trainer path"
+
+    criterion = model.init_criterion()
+    assert type(criterion).__name__ == "RTDETRDetectionLoss"
+    assert model.nc == 1, "nc is read from the detection head, as the trainer's would be"
+
+
 def test_gate_closed_keeps_the_baseline_bit_exact():
     """At init (gate = 0) the conditioned RT-DETR graph must equal the stock graph
     numerically — the identity contract every other module in this repo obeys."""

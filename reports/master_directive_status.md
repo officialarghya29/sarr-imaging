@@ -49,7 +49,7 @@ the registry:
 | --- | --- | --- |
 | Architecture variants wired | 110 | `saryolo.nn.arch.VARIANTS` (`tests/test_repo.py`) |
 | Experiment configs | 134 | `saryolo.training.config.list_experiments` |
-| Tests | **949 tests** | `pytest --collect-only -q` (`tests/test_repo.py`) |
+| Tests | **961 tests** | `pytest --collect-only -q` (`tests/test_repo.py`) |
 | Datasets on disk | HRSID subset, 200 / 60 / 60, one class (`ship`) | `docs/assets/facts.json` → `real_subset` |
 
 **The architecture ladder.** Every module is an **exact identity at initialisation** and is
@@ -82,7 +82,7 @@ one class:
 **Engineering posture.** Every "ran" claim is tied to a command or a test; unmeasured cells
 render as `TBD`; the ledger is append-only; the demo never shows a prediction it did not
 compute; defects are recorded with the regression test that pins them (`defect_log.md`,
-D-01…D-23). Three deepscans of the previously untested surfaces (environment capture, the
+D-01…D-25). Four deepscans of the previously untested surfaces (environment capture, the
 qualitative panels, the corruption sweep, the gain diagnostic, the shared module primitives,
 the YAML generator, the dataset validator, checkpoint registration, and — in the third pass —
 the paper table/figure builders, the runner and statistics writers, the LoRA layer, the
@@ -92,7 +92,14 @@ provenance field on a CUDA-less host; D-20 a silently-degraded gain input; D-21 
 routing report; D-22 a checkpoint safe-load allowlist that was insufficient and unreachable,
 making the shipped checkpoint unloadable under `ULTRALYTICS_SAFE_LOAD`; D-23 a contrast-map
 reader that resolved a list-split's relative entries against the process cwd, so the map
-failed or emptied and the clutter proxy silently stopped working). The suite runs on the development host with **no GPU and no dataset download**
+failed or emptied and the clutter proxy silently stopped working; and — in the fourth pass,
+which re-ran the public-API inventory and a full-suite coverage map before reading anything —
+D-24 the labels-directory rule used by six consumers, which replaced the *first* `images`
+substring in a path rather than the `images` path component, so any dataset whose root
+contains the word resolved its labels into a directory that does not exist and every metric
+came back `None` over an empty ground truth on a run that reported success; and D-25 an
+RT-DETR criterion fallback that supplied the v8 argument namespace to a criterion that reads
+`nc`, so a bare model still failed — the error its docstring said it prevented). The suite runs on the development host with **no GPU and no dataset download**
 (the dataset-gated and GPU-gated checks skip with a *named* reason).
 
 ---
@@ -209,5 +216,5 @@ as an explicit gap rather than omitted.
 | Deployment | `docs/DEPLOYMENT.md`; `tests/test_deploy.py` |
 | Counts (variants / experiments / tests) | `tests/test_repo.py` guards; `docs/assets/facts.json` |
 
-This report adds no number of its own; the one count it states — **949 tests** — is the
+This report adds no number of its own; the one count it states — **961 tests** — is the
 same one the suite's own count guards check.

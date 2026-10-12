@@ -90,11 +90,26 @@ class SARYOLORTDetectionModel(RTDETRDetectionModel):
         self.n_conditioned_adapters = attach_metadata_context(self)
 
     def init_criterion(self):
-        """RT-DETR's own loss. The SAR-aware criterion is a v8-head construct."""
+        """RT-DETR's own loss. The SAR-aware criterion is a v8-head construct.
+
+        Two attributes have to be in place for a *bare* model -- one built for a unit test, a
+        FLOPs profile or an export check rather than by a trainer. Ultralytics' own
+        ``RTDETRDetectionModel.init_criterion`` reads ``self.nc`` (the v8 criterion reads
+        ``self.args``), and neither constructor sets ``self.nc``: the trainer attaches it
+        (``DetectTrainer.setup_model`` does ``self.model.nc = self.data["nc"]``).
+
+        The fallback used to supply only the v8 argument namespace, which is why it did not do
+        the job it claimed: the call still raised, with ``AttributeError: ... has no attribute
+        'nc'``. Both are supplied here, so criterion construction works outside a trainer -- the
+        prerequisite for any feasibility check that calls the model's loss directly. ``nc`` is
+        read from the detection head, which is the same number the trainer attaches.
+        """
         if getattr(self, "args", None) is None:
             from types import SimpleNamespace
 
-            self.args = SimpleNamespace(box=5.0, cls=1.0)
+            self.args = SimpleNamespace(box=7.5, cls=0.5, dfl=1.5)
+        if not hasattr(self, "nc"):
+            self.nc = int(self.model[-1].nc)
         return super().init_criterion()
 
 

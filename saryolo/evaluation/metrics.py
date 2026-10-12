@@ -87,12 +87,12 @@ def _resolve_split_dirs(data_yaml: str | Path) -> tuple[Path, Path, list[str]]:
     Path resolution is delegated to :func:`saryolo.data.yolo.load_data_config` so
     that training and evaluation can never disagree about where a split lives.
     """
-    from saryolo.data.yolo import load_data_config
+    from saryolo.data.yolo import labels_dir_for, load_data_config
 
     root, cfg = load_data_config(data_yaml)
     split = cfg.get("val") or cfg.get("val_images") or "images/val"
     images_dir = Path(split) if Path(split).is_absolute() else root / split
-    labels_dir = Path(str(images_dir).replace("images", "labels", 1))
+    labels_dir = labels_dir_for(images_dir)
     names = cfg.get("names") or [f"class_{i}" for i in range(int(cfg.get("nc", 1)))]
     if isinstance(names, dict):
         names = [names[k] for k in sorted(names)]
@@ -112,16 +112,13 @@ def _label_path_for(image_path: Path) -> Path:
     a label path that does not exist reads as "this image has no objects". Both are tried, and
     an existing file wins, so the guess cannot quietly erase ground truth.
     """
+    from saryolo.data.yolo import labels_dir_for
+
     candidates: list[Path] = []
     text = str(image_path)
     if "images" in text:
         candidates.append(Path(text.replace("images", "labels", 1)).with_suffix(".txt"))
-        parts = list(image_path.parts)
-        for i in range(len(parts) - 1, -1, -1):
-            if parts[i] == "images":
-                parts[i] = "labels"
-                candidates.append(Path(*parts).with_suffix(".txt"))
-                break
+        candidates.append(labels_dir_for(image_path).with_suffix(".txt"))
     candidates.append(image_path.with_suffix(".txt"))
     for candidate in candidates:
         if candidate.exists():

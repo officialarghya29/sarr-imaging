@@ -130,11 +130,11 @@ def comparison_panel(
 
 def select_examples(data_yaml: str | Path, limit: int = 4, mode: str = "dense") -> list[Path]:
     """Pick illustrative images: densest, sparsest, or smallest-object scenes."""
-    from saryolo.data.yolo import load_data_config
+    from saryolo.data.yolo import labels_dir_for, load_data_config
 
     root, cfg = load_data_config(data_yaml)
     images_dir = root / (cfg.get("val") or "images/val")
-    labels_dir = Path(str(images_dir).replace("images", "labels", 1))
+    labels_dir = labels_dir_for(images_dir)
 
     scored = []
     for label in sorted(labels_dir.glob("*.txt")):

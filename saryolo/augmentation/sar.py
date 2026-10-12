@@ -146,6 +146,7 @@ def build_augmented_train_split(
     """
     import cv2
 
+    from saryolo.data.yolo import labels_dir_for
     from saryolo.evaluation.robustness import apply_corruption
 
     plan = plan or default_plan()
@@ -163,7 +164,7 @@ def build_augmented_train_split(
     if limit:
         images = images[:limit]
 
-    labels_src = Path(labels_dir) if labels_dir else Path(str(images_dir).replace("images", "labels", 1))
+    labels_src = Path(labels_dir) if labels_dir else labels_dir_for(images_dir)
 
     entries: list[dict] = []
     skipped: list[dict] = []

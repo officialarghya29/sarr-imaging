@@ -161,6 +161,8 @@ def build_corrupted_split(
 
     import cv2
 
+    from saryolo.data.yolo import labels_dir_for
+
     images_dir, out_root = Path(images_dir), Path(out_root)
     dest = out_root / name / str(severity) / "images" / "val"
     dest.mkdir(parents=True, exist_ok=True)
@@ -177,7 +179,7 @@ def build_corrupted_split(
         out = apply_corruption(img, name, severity, rng)
         cv2.imwrite(str(dest / path.name), out)
 
-    labels_src = Path(labels_dir) if labels_dir else Path(str(images_dir).replace("images", "labels", 1))
+    labels_src = Path(labels_dir) if labels_dir else labels_dir_for(images_dir)
     labels_dest = out_root / name / str(severity) / "labels" / "val"
     labels_dest.mkdir(parents=True, exist_ok=True)
     if labels_src.exists():
