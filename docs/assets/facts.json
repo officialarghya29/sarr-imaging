@@ -1289,7 +1289,7 @@
     }
   },
   "tests": {
-    "total": 668,
+    "total": 710,
     "by_file": {
       "tests/test_app.py": 8,
       "tests/test_arch.py": 64,
@@ -1298,6 +1298,7 @@
       "tests/test_cfar_frontend.py": 16,
       "tests/test_cfar_scope.py": 19,
       "tests/test_cli.py": 33,
+      "tests/test_common_blocks.py": 7,
       "tests/test_conditioning.py": 9,
       "tests/test_conditioning_smoke.py": 6,
       "tests/test_cross_dataset.py": 5,
@@ -1307,7 +1308,9 @@
       "tests/test_efficiency.py": 30,
       "tests/test_efficiency_frontier.py": 16,
       "tests/test_efficiency_real.py": 11,
+      "tests/test_efficiency_scope.py": 10,
       "tests/test_field_mask.py": 9,
+      "tests/test_gain_diagnostic.py": 7,
       "tests/test_groups.py": 36,
       "tests/test_hard_examples.py": 20,
       "tests/test_inference.py": 23,
@@ -1319,11 +1322,14 @@
       "tests/test_probes.py": 23,
       "tests/test_reliability.py": 5,
       "tests/test_repo.py": 44,
+      "tests/test_robustness_sweep.py": 5,
       "tests/test_rtdetr_arm.py": 6,
       "tests/test_splits.py": 8,
       "tests/test_ssac.py": 46,
       "tests/test_tables.py": 14,
-      "tests/test_visualization.py": 8
+      "tests/test_tracking_env.py": 6,
+      "tests/test_visualization.py": 8,
+      "tests/test_visualization_panels.py": 7
     }
   }
 }

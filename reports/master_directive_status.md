@@ -49,7 +49,7 @@ the registry:
 | --- | --- | --- |
 | Architecture variants wired | 110 | `saryolo.nn.arch.VARIANTS` (`tests/test_repo.py`) |
 | Experiment configs | 134 | `saryolo.training.config.list_experiments` |
-| Tests | **668 tests** | `pytest --collect-only -q` (`tests/test_repo.py`) |
+| Tests | **710 tests** | `pytest --collect-only -q` (`tests/test_repo.py`) |
 | Datasets on disk | HRSID subset, 200 / 60 / 60, one class (`ship`) | `docs/assets/facts.json` → `real_subset` |
 
 **The architecture ladder.** Every module is an **exact identity at initialisation** and is
@@ -82,7 +82,11 @@ one class:
 **Engineering posture.** Every "ran" claim is tied to a command or a test; unmeasured cells
 render as `TBD`; the ledger is append-only; the demo never shows a prediction it did not
 compute; defects are recorded with the regression test that pins them (`defect_log.md`,
-D-01…D-15). The suite runs on the development host with **no GPU and no dataset download**
+D-01…D-21). A deepscan of the previously untested surfaces (environment capture, the
+qualitative panels, the corruption sweep, the gain diagnostic, the shared module primitives)
+and of the efficiency/scope corners exposed and fixed three defects (D-19 a mislabelled FP16
+provenance field on a CUDA-less host; D-20 a silently-degraded gain input; D-21 an omitted
+routing report). The suite runs on the development host with **no GPU and no dataset download**
 (the dataset-gated and GPU-gated checks skip with a *named* reason).
 
 ---
@@ -199,5 +203,5 @@ as an explicit gap rather than omitted.
 | Deployment | `docs/DEPLOYMENT.md`; `tests/test_deploy.py` |
 | Counts (variants / experiments / tests) | `tests/test_repo.py` guards; `docs/assets/facts.json` |
 
-This report adds no number of its own; the one count it states — **668 tests** — is the
+This report adds no number of its own; the one count it states — **710 tests** — is the
 same one the suite's own count guards check.

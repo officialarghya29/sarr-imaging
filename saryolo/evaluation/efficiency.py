@@ -302,7 +302,9 @@ def measure_latency(
         repeats: Timed passes.
         batch: Batch size for the timing loop (FPS is per *image*); inferred from ``inputs``
             when they are supplied.
-        half: Use FP16 (CUDA only).
+        half: Use FP16. This is a CUDA-only capability: on a CPU host the request is
+            recorded as *not applied* (``latency_half`` is ``False``) rather than reported as
+            half precision that was never used.
         inputs: An explicit input batch to time. Supplying **real** images (rather than the
             default ``torch.randn``) makes the timing representative for a data-dependent
             first layer and is recorded as ``latency_source = "real"``.
@@ -336,7 +338,13 @@ def measure_latency(
         imgsz = int(x.shape[-1])
         source = source or "provided"
     stats = _input_stats(x)
-    if half and device.type == "cuda":
+    # FP16 is a CUDA-only capability. Requesting it on a host without CUDA must not *report*
+    # half precision that was never applied: the provenance field would then describe a
+    # precision the timing never used, and a cost number taken in float32 would be published
+    # under an ``fp16`` label. So the reported flag is what was actually applied, not what
+    # was asked for.
+    applied_half = bool(half) and device.type == "cuda"
+    if applied_half:
         model = model.half()
         x = x.half()
 
@@ -363,7 +371,7 @@ def measure_latency(
         "fps": round(1000.0 * batch / per_batch_ms, 2),
         "latency_batch": batch,
         "latency_imgsz": imgsz,
-        "latency_half": bool(half),
+        "latency_half": applied_half,
         "latency_device": device.type,
         "latency_source": source,
         # The peak the process reached by the end of the timing: on a CPU-only host this is the
@@ -454,10 +462,15 @@ def profile_model(
             out.update(
                 measure_latency(net, imgsz=imgsz, inputs=inputs, source=source, batch=batch, runs=runs)
             )
-            if out.get("ssac_blocks") and inputs is not None:
+            if inputs is not None and ssac_blocks(net):
                 # What the timed pass actually routed, on the same batch it was timed on.
-                # Requires real inputs: routing on noise would report the allocation for a
-                # distribution the model is not deployed on.
+                # Gated on the *checkpoint carrying the mechanism* (not on an execution
+                # override having been applied): whether the model routes is a property of the
+                # weights, so a plain profile of an SSAC checkpoint on real images must report
+                # it too -- previously the key was only produced when an ``--ssac-*`` override
+                # was passed, so the most natural invocation silently omitted the very number
+                # the efficiency story rests on. Requires real inputs: routing on noise would
+                # report the allocation for a distribution the model is not deployed on.
                 out["ssac_routing"] = ssac_routing(net, inputs)
         except Exception as exc:
             out["latency_error"] = str(exc)

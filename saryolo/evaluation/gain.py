@@ -97,7 +97,15 @@ def _read_gray(paths: list[Path], imgsz: int) -> np.ndarray:
         data = np.fromfile(str(path), dtype=np.uint8)
         img = cv2.imdecode(data, cv2.IMREAD_GRAYSCALE)
         if img is None:
-            continue
+            # Refuse rather than leave the preallocated zero row in place: a black image is the
+            # degenerate input the front end's gain statistic is least defined on (``log(x)`` at
+            # ``x = 0`` clamps to ``eps``), and the efficiency loader refuses the identical case
+            # (``load_image_batch``). A silently-skipped file would fold that degenerate row into
+            # the pooled collapse statistics under the name of a real chip.
+            raise ValueError(
+                f"could not decode {path}; a silent zero image would fold a degenerate gain "
+                "reading into the collapse statistics"
+            )
         if img.shape[0] != imgsz or img.shape[1] != imgsz:
             img = cv2.resize(img, (imgsz, imgsz), interpolation=cv2.INTER_AREA)
         out[i, 0] = img.astype(np.float32) / 255.0
